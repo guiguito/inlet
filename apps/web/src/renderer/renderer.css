@@ -1,0 +1,38 @@
+/**
+ * The reference renderer's theme.
+ *
+ * Deliberately its own small variable set rather than the management interface's
+ * tokens: PRD section 20.5 says the renderer ships unbranded and themeable, so a host
+ * application overrides these values and the form matches its own product.
+ */
+.inlet-renderer {
+  --r-radius: 0.5rem;
+  --r-bg: #ffffff;
+  --r-surface: #ffffff;
+  --r-text: #18181b;
+  --r-border: #e4e4e7;
+  --r-hover: #fafafa;
+  --r-selected-bg: #f4f4f5;
+  --r-selected-border: #a1a1aa;
+  --r-accent: #18181b;
+  --r-accent-contrast: #ffffff;
+  --r-danger: #b91c1c;
+
+  background: var(--r-bg);
+  color: var(--r-text);
+}
+
+@media (prefers-color-scheme: dark) {
+  .inlet-renderer {
+    --r-bg: #09090b;
+    --r-surface: #18181b;
+    --r-text: #fafafa;
+    --r-border: #27272a;
+    --r-hover: #232326;
+    --r-selected-bg: #27272a;
+    --r-selected-border: #52525b;
+    --r-accent: #fafafa;
+    --r-accent-contrast: #18181b;
+    --r-danger: #f87171;
+  }
+}

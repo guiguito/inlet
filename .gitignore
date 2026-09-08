@@ -1,0 +1,13 @@
+node_modules/
+dist/
+build/
+*.log
+.env
+.env.local
+.DS_Store
+coverage/
+playwright-report/
+test-results/
+apps/api/openapi.json
+.vite/
+.dev/

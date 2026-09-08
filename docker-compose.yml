@@ -1,0 +1,81 @@
+# The bundled deployment (PRD section 12.6).
+#
+# Data lives in named volumes, so restarts and upgrades preserve it. Pointing at an
+# external PostgreSQL or S3-compatible provider is a configuration change: set the
+# INLET_DATABASE_URL or INLET_S3_* variables and remove the service you no longer need.
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-inlet}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-inlet}
+      POSTGRES_DB: ${POSTGRES_DB:-inlet}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-inlet} -d ${POSTGRES_DB:-inlet}']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${INLET_S3_ACCESS_KEY_ID:-inletminio}
+      MINIO_ROOT_PASSWORD: ${INLET_S3_SECRET_ACCESS_KEY:-inletminiosecret}
+    volumes:
+      - miniodata:/data
+    ports:
+      # The console, for inspecting stored screenshots. Not needed by Inlet itself.
+      - '${MINIO_CONSOLE_PORT:-9001}:9001'
+    healthcheck:
+      test: ['CMD-SHELL', 'mc ready local || exit 1']
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  inlet:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    ports:
+      - '${INLET_PORT:-3000}:3000'
+    environment:
+      INLET_PUBLIC_URL: ${INLET_PUBLIC_URL:-http://localhost:3000}
+      INLET_LOG_LEVEL: ${INLET_LOG_LEVEL:-info}
+
+      INLET_DATABASE_URL: >-
+        postgresql://${POSTGRES_USER:-inlet}:${POSTGRES_PASSWORD:-inlet}@postgres:5432/${POSTGRES_DB:-inlet}
+
+      # Required. Generate with: openssl rand -base64 48
+      INLET_SESSION_SECRET: ${INLET_SESSION_SECRET:?set INLET_SESSION_SECRET in .env}
+
+      # FR-001B: the first Admin account, created at first start.
+      INLET_ADMIN_EMAIL: ${INLET_ADMIN_EMAIL:?set INLET_ADMIN_EMAIL in .env}
+      INLET_ADMIN_PASSWORD: ${INLET_ADMIN_PASSWORD:?set INLET_ADMIN_PASSWORD in .env}
+      INLET_ADMIN_NAME: ${INLET_ADMIN_NAME:-Admin}
+
+      # FR-062C: which reverse proxies may report the client address. Leave as false
+      # when Inlet is exposed directly.
+      INLET_TRUSTED_PROXIES: ${INLET_TRUSTED_PROXIES:-false}
+
+      INLET_S3_ENDPOINT: http://minio:9000
+      INLET_S3_REGION: ${INLET_S3_REGION:-us-east-1}
+      INLET_S3_BUCKET: ${INLET_S3_BUCKET:-inlet}
+      INLET_S3_ACCESS_KEY_ID: ${INLET_S3_ACCESS_KEY_ID:-inletminio}
+      INLET_S3_SECRET_ACCESS_KEY: ${INLET_S3_SECRET_ACCESS_KEY:-inletminiosecret}
+      INLET_S3_FORCE_PATH_STYLE: 'true'
+
+      INLET_INTENT_TTL_MINUTES: ${INLET_INTENT_TTL_MINUTES:-30}
+      INLET_PENDING_UPLOAD_EXPIRY_DAYS: ${INLET_PENDING_UPLOAD_EXPIRY_DAYS:-1}
+
+volumes:
+  pgdata:
+  miniodata:

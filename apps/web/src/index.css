@@ -1,0 +1,133 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+@import '@fontsource-variable/geist/index.css';
+@import '@fontsource-variable/geist-mono/index.css';
+
+@custom-variant dark (&:is(.dark *));
+
+/**
+ * Design tokens (PRD section 20.5).
+ *
+ * Zinc neutrals from shadcn/ui with one warm accent. Feedback tools cluster on
+ * purple and blue; the warm accent stands apart and the mark carries the water
+ * metaphor instead of the colour. The accent is used for primary actions, active
+ * states and the mark, never for body text.
+ *
+ * Radius is the shadcn default 0.5rem: squarer than consumer tools, softer than
+ * terminals.
+ */
+:root {
+  --radius: 0.5rem;
+
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.1408 0.0044 285.82);
+
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.1408 0.0044 285.82);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.1408 0.0044 285.82);
+
+  /* #C2410C */
+  --primary: oklch(0.5534 0.1739 38.4);
+  --primary-foreground: oklch(0.9851 0 0);
+
+  --secondary: oklch(0.967 0.0015 286.38);
+  --secondary-foreground: oklch(0.21 0.0059 285.885);
+  --muted: oklch(0.967 0.0015 286.38);
+  --muted-foreground: oklch(0.552 0.0159 285.938);
+  --accent: oklch(0.967 0.0015 286.38);
+  --accent-foreground: oklch(0.21 0.0059 285.885);
+
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.9851 0 0);
+  --success: oklch(0.548 0.152 148.5);
+  --warning: oklch(0.681 0.162 75.834);
+
+  --border: oklch(0.92 0.004 286.32);
+  --input: oklch(0.92 0.004 286.32);
+  --ring: oklch(0.5534 0.1739 38.4);
+}
+
+/* Dark mode is first-class, not an afterthought: every screen is designed in both. */
+.dark {
+  --background: oklch(0.1408 0.0044 285.82);
+  --foreground: oklch(0.9851 0 0);
+
+  --card: oklch(0.21 0.0059 285.885);
+  --card-foreground: oklch(0.9851 0 0);
+  --popover: oklch(0.21 0.0059 285.885);
+  --popover-foreground: oklch(0.9851 0 0);
+
+  /* #FB923C */
+  --primary: oklch(0.7576 0.159 55.93);
+  --primary-foreground: oklch(0.1408 0.0044 285.82);
+
+  --secondary: oklch(0.274 0.006 286.033);
+  --secondary-foreground: oklch(0.9851 0 0);
+  --muted: oklch(0.274 0.006 286.033);
+  --muted-foreground: oklch(0.705 0.015 286.067);
+  --accent: oklch(0.274 0.006 286.033);
+  --accent-foreground: oklch(0.9851 0 0);
+
+  --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: oklch(0.1408 0.0044 285.82);
+  --success: oklch(0.696 0.17 148.5);
+  --warning: oklch(0.769 0.188 70.08);
+
+  --border: oklch(1 0 0 / 12%);
+  --input: oklch(1 0 0 / 16%);
+  --ring: oklch(0.7576 0.159 55.93);
+}
+
+@theme inline {
+  --font-sans: 'Geist Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'Geist Mono Variable', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/40;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-feature-settings: 'cv11', 'ss01';
+  }
+
+  /* Section 12.5: focus must always be visible for keyboard navigation. */
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-ring;
+  }
+
+  /* Tabular figures keep counts and dates from shifting between rows. */
+  .numeric {
+    font-variant-numeric: tabular-nums;
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "name": "inlet",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Inlet \u2014 the self-hosted feedback collector",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run build:shared && npm-run-all --parallel dev:api dev:web",
+    "dev:api": "npm run dev -w @inlet/api",
+    "dev:web": "npm run dev -w @inlet/web",
+    "build": "npm run build -w @inlet/shared && npm run build -w @inlet/api && npm run build -w @inlet/web",
+    "typecheck": "npm run build:shared && npm run typecheck -w @inlet/api && npm run typecheck -w @inlet/web",
+    "test": "npm run build:shared && npm run test -w @inlet/api",
+    "test:unit": "npm run build:shared && npm run test:unit -w @inlet/api",
+    "test:integration": "npm run build:shared && npm run test:integration -w @inlet/api",
+    "test:e2e": "playwright test",
+    "test:all": "npm run test:unit && npm run test:integration && npm run test:e2e",
+    "db:generate": "npm run db:generate -w @inlet/api",
+    "db:migrate": "npm run db:migrate -w @inlet/api",
+    "openapi": "npm run openapi -w @inlet/api",
+    "services:up": "node scripts/services-up.mjs",
+    "services:down": "node scripts/services-down.mjs",
+    "docker:up": "docker compose up -d --build",
+    "docker:down": "docker compose down",
+    "build:shared": "npm run build -w @inlet/shared"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^22.20.1",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^7.0.2"
+  }
+}

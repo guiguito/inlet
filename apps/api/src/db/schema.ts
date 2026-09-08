@@ -1,0 +1,364 @@
+import { sql } from 'drizzle-orm';
+import {
+  bigint,
+  boolean,
+  index,
+  integer,
+  jsonb,
+  pgEnum,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+  uniqueIndex,
+} from 'drizzle-orm/pg-core';
+import type { FormDefinition, StoredAnswers } from '@inlet/shared';
+
+/**
+ * The Inlet schema (PRD section 10).
+ *
+ * Identifiers are the application's own prefixed IDs rather than bare UUIDs, so an
+ * ID is self-describing in logs, exports and client payloads.
+ *
+ * Cascading deletes implement FR-024 and FR-026 in the database rather than in
+ * application code: deleting a project or feedback database removes everything it
+ * contains in one statement. Rows that must outlive their parent for the retry
+ * contract are called out where they occur.
+ */
+
+export const roleEnum = pgEnum('inlet_role', ['admin', 'creator', 'viewer']);
+export const credentialTypeEnum = pgEnum('inlet_credential_type', ['publishable', 'secret']);
+export const intentStatusEnum = pgEnum('inlet_intent_status', ['active', 'finalized']);
+export const purgeStatusEnum = pgEnum('inlet_purge_status', ['pending', 'failed']);
+
+const createdAt = timestamp('created_at', { withTimezone: true }).notNull().defaultNow();
+const updatedAt = timestamp('updated_at', { withTimezone: true }).notNull().defaultNow();
+
+/** Section 10.1. */
+export const users = pgTable(
+  'users',
+  {
+    id: text('id').primaryKey(),
+    email: text('email').notNull(),
+    /** Argon2id hash. FR-001, section 12.1: never stored in plaintext. */
+    passwordHash: text('password_hash').notNull(),
+    displayName: text('display_name').notNull(),
+    createdAt,
+    updatedAt,
+  },
+  (table) => [uniqueIndex('users_email_lower_idx').on(sql`lower(${table.email})`)],
+);
+
+/** Opaque session tokens for the management interface. Only the SHA-256 is stored. */
+export const sessions = pgTable(
+  'sessions',
+  {
+    tokenHash: text('token_hash').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    createdAt,
+  },
+  (table) => [index('sessions_user_idx').on(table.userId)],
+);
+
+/** Section 10.3. */
+export const projects = pgTable(
+  'projects',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    createdBy: text('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt,
+    updatedAt,
+  },
+  (table) => [index('projects_created_by_idx').on(table.createdBy)],
+);
+
+/** Section 10.4. FR-014 is enforced in the service layer, which can report a reason. */
+export const projectMemberships = pgTable(
+  'project_memberships',
+  {
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    role: roleEnum('role').notNull(),
+    createdAt,
+    updatedAt,
+  },
+  (table) => [
+    primaryKey({ columns: [table.projectId, table.userId] }),
+    index('project_memberships_user_idx').on(table.userId),
+  ],
+);
+
+/** Section 10.5. */
+export const feedbackDatabases = pgTable(
+  'feedback_databases',
+  {
+    id: text('id').primaryKey(),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    /**
+     * FR-042B: at most one active published version. Null means unpublished, which
+     * blocks client retrieval and new intents without deleting history (FR-042F).
+     */
+    activeVersionId: text('active_version_id'),
+    createdBy: text('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt,
+    updatedAt,
+  },
+  (table) => [index('feedback_databases_project_idx').on(table.projectId)],
+);
+
+/** Section 10.6. Not applicable to project Admins (FR-071A). */
+export const feedbackDatabaseMemberships = pgTable(
+  'feedback_database_memberships',
+  {
+    feedbackDatabaseId: text('feedback_database_id')
+      .notNull()
+      .references(() => feedbackDatabases.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    role: roleEnum('role').notNull(),
+    createdAt,
+    updatedAt,
+  },
+  (table) => [
+    primaryKey({ columns: [table.feedbackDatabaseId, table.userId] }),
+    index('feedback_database_memberships_user_idx').on(table.userId),
+  ],
+);
+
+/**
+ * Section 10.7, draft half. Exactly one row per feedback database (FR-042B).
+ * `revision` increments on every autosave (FR-042A) and is the value a publish may
+ * assert against to reject a stale draft (FR-042C).
+ */
+export const formDrafts = pgTable('form_drafts', {
+  feedbackDatabaseId: text('feedback_database_id')
+    .primaryKey()
+    .references(() => feedbackDatabases.id, { onDelete: 'cascade' }),
+  definition: jsonb('definition').$type<FormDefinition>().notNull(),
+  revision: integer('revision').notNull().default(0),
+  updatedBy: text('updated_by').references(() => users.id, { onDelete: 'set null' }),
+  createdAt,
+  updatedAt,
+});
+
+/**
+ * Section 10.7, published half. Rows are immutable once written (FR-042C): a new
+ * publish inserts a new version rather than altering an existing one, so historical
+ * submissions keep their original meaning.
+ */
+export const formVersions = pgTable(
+  'form_versions',
+  {
+    id: text('id').primaryKey(),
+    feedbackDatabaseId: text('feedback_database_id')
+      .notNull()
+      .references(() => feedbackDatabases.id, { onDelete: 'cascade' }),
+    version: integer('version').notNull(),
+    definition: jsonb('definition').$type<FormDefinition>().notNull(),
+    /** The draft revision this version was cut from, for traceability. */
+    sourceRevision: integer('source_revision').notNull(),
+    publishedBy: text('published_by').references(() => users.id, { onDelete: 'set null' }),
+    publishedAt: timestamp('published_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('form_versions_db_version_idx').on(table.feedbackDatabaseId, table.version),
+  ],
+);
+
+/** Section 10.12. */
+export const projectCredentials = pgTable(
+  'project_credentials',
+  {
+    id: text('id').primaryKey(),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    type: credentialTypeEnum('type').notNull(),
+    label: text('label').notNull(),
+    /**
+     * FR-084: a secret server key is stored as a SHA-256 hash and shown once. A
+     * publishable client key is designed to be embedded in public clients, so its
+     * value is stored as-is and remains readable in the management interface.
+     */
+    secretHash: text('secret_hash'),
+    publishableKey: text('publishable_key'),
+    /** Displayed in listings so a key can be recognized without revealing it. */
+    prefix: text('prefix').notNull(),
+    lastFour: text('last_four').notNull(),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+    rotatedAt: timestamp('rotated_at', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    createdBy: text('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt,
+  },
+  (table) => [
+    index('project_credentials_project_idx').on(table.projectId),
+    uniqueIndex('project_credentials_secret_hash_idx').on(table.secretHash),
+    uniqueIndex('project_credentials_publishable_idx').on(table.publishableKey),
+  ],
+);
+
+/**
+ * Section 10.13. The intent is the whole retry contract of section 9.2.
+ *
+ * The row deliberately outlives its submission: `submissionDeletedAt` lets a
+ * re-finalization after deletion answer "submission deleted" without recreating the
+ * submission or revealing its answers (FR-092G). The foreign key is therefore
+ * `set null` on delete rather than `cascade`.
+ */
+export const submissionIntents = pgTable(
+  'submission_intents',
+  {
+    id: text('id').primaryKey(),
+    feedbackDatabaseId: text('feedback_database_id')
+      .notNull()
+      .references(() => feedbackDatabases.id, { onDelete: 'cascade' }),
+    /** FR-092: the version the client rendered, pinned for the intent's whole life. */
+    formVersionId: text('form_version_id')
+      .notNull()
+      .references(() => formVersions.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').notNull(),
+    status: intentStatusEnum('status').notNull().default('active'),
+    /** SHA-256 of the canonical finalization payload, for idempotent comparison. */
+    payloadHash: text('payload_hash'),
+    submissionId: text('submission_id'),
+    submissionDeletedAt: timestamp('submission_deleted_at', { withTimezone: true }),
+    uploadCount: integer('upload_count').notNull().default(0),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    finalizedAt: timestamp('finalized_at', { withTimezone: true }),
+    createdAt,
+  },
+  (table) => [
+    uniqueIndex('submission_intents_token_idx').on(table.tokenHash),
+    index('submission_intents_db_idx').on(table.feedbackDatabaseId),
+  ],
+);
+
+/** Section 10.10. Immutable once written (FR-124, section 11). */
+export const submissions = pgTable(
+  'submissions',
+  {
+    id: text('id').primaryKey(),
+    feedbackDatabaseId: text('feedback_database_id')
+      .notNull()
+      .references(() => feedbackDatabases.id, { onDelete: 'cascade' }),
+    formVersionId: text('form_version_id')
+      .notNull()
+      .references(() => formVersions.id, { onDelete: 'cascade' }),
+    /** Denormalized so an export or list never has to join to show the version. */
+    formVersion: integer('form_version').notNull(),
+    submissionIntentId: text('submission_intent_id').notNull(),
+    answers: jsonb('answers').$type<StoredAnswers>().notNull(),
+    /** FR-062A, FR-062B: preserved exactly as supplied, capped at 16 KiB. */
+    clientContext: jsonb('client_context'),
+    /** FR-062C: observed after applying the trusted-proxy configuration. */
+    observedIp: text('observed_ip'),
+    createdAt,
+  },
+  (table) => [
+    index('submissions_db_created_idx').on(table.feedbackDatabaseId, table.createdAt),
+    index('submissions_version_idx').on(table.formVersionId),
+  ],
+);
+
+/**
+ * Section 10.11. An attachment belongs to one intent and one screenshot question; at
+ * finalization it is bound to the resulting submission (FR-067).
+ *
+ * The storage key is fixed at upload time so the asset URL is stable for the
+ * attachment's whole life (FR-069). Binding changes an object tag, never the key.
+ */
+export const attachments = pgTable(
+  'attachments',
+  {
+    id: text('id').primaryKey(),
+    submissionIntentId: text('submission_intent_id')
+      .notNull()
+      .references(() => submissionIntents.id, { onDelete: 'cascade' }),
+    questionId: text('question_id').notNull(),
+    submissionId: text('submission_id').references(() => submissions.id, { onDelete: 'cascade' }),
+    /** Kept for authorization after the submission is deleted with its intent intact. */
+    feedbackDatabaseId: text('feedback_database_id')
+      .notNull()
+      .references(() => feedbackDatabases.id, { onDelete: 'cascade' }),
+    storageKey: text('storage_key').notNull(),
+    originalFilename: text('original_filename'),
+    originalMediaType: text('original_media_type').notNull(),
+    storedMediaType: text('stored_media_type').notNull(),
+    originalBytes: bigint('original_bytes', { mode: 'number' }).notNull(),
+    storedBytes: bigint('stored_bytes', { mode: 'number' }).notNull(),
+    width: integer('width').notNull(),
+    height: integer('height').notNull(),
+    bound: boolean('bound').notNull().default(false),
+    createdAt,
+  },
+  (table) => [
+    index('attachments_intent_idx').on(table.submissionIntentId),
+    index('attachments_submission_idx').on(table.submissionId),
+  ],
+);
+
+/**
+ * FR-027 and section 12.3: record deletion and object purge are not one transaction.
+ * Deleted storage keys land here and a worker drains them with retries. The rows the
+ * keys belonged to are already gone, so the assets are unretrievable meanwhile.
+ */
+export const storagePurgeQueue = pgTable(
+  'storage_purge_queue',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    storageKey: text('storage_key').notNull(),
+    status: purgeStatusEnum('status').notNull().default('pending'),
+    attempts: integer('attempts').notNull().default(0),
+    lastError: text('last_error'),
+    nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true }).notNull().defaultNow(),
+    createdAt,
+  },
+  (table) => [index('storage_purge_queue_next_idx').on(table.status, table.nextAttemptAt)],
+);
+
+/**
+ * Section 10.2. The table exists in Release 1 so Release 2 adds rows rather than
+ * tables (PRD section 21.1); no Release 1 route writes to it.
+ */
+export const invitations = pgTable(
+  'invitations',
+  {
+    id: text('id').primaryKey(),
+    tokenHash: text('token_hash').notNull(),
+    projectId: text('project_id').references(() => projects.id, { onDelete: 'cascade' }),
+    feedbackDatabaseId: text('feedback_database_id').references(() => feedbackDatabases.id, {
+      onDelete: 'cascade',
+    }),
+    role: roleEnum('role').notNull(),
+    createdBy: text('created_by').references(() => users.id, { onDelete: 'set null' }),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    redeemedBy: text('redeemed_by').references(() => users.id, { onDelete: 'set null' }),
+    redeemedAt: timestamp('redeemed_at', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    createdAt,
+  },
+  (table) => [uniqueIndex('invitations_token_idx').on(table.tokenHash)],
+);
+
+export type UserRow = typeof users.$inferSelect;
+export type ProjectRow = typeof projects.$inferSelect;
+export type FeedbackDatabaseRow = typeof feedbackDatabases.$inferSelect;
+export type FormDraftRow = typeof formDrafts.$inferSelect;
+export type FormVersionRow = typeof formVersions.$inferSelect;
+export type ProjectCredentialRow = typeof projectCredentials.$inferSelect;
+export type SubmissionIntentRow = typeof submissionIntents.$inferSelect;
+export type SubmissionRow = typeof submissions.$inferSelect;
+export type AttachmentRow = typeof attachments.$inferSelect;
