@@ -17,6 +17,23 @@ import {
  */
 
 /**
+ * Schemas registered here become `components/schemas` entries that routes reference
+ * rather than inline.
+ *
+ * This is not cosmetic. The form definition is a deep recursive union, and inlining
+ * it on each of the eight routes that carry one produced an 800 KB document that no
+ * viewer wants to render. Registering it brings that under 60 KB and makes the
+ * document readable, with one canonical definition of each shared shape.
+ */
+function register<T extends z.ZodType>(schema: T, id: string): T {
+  z.globalRegistry.add(schema, { id });
+  return schema;
+}
+
+register(formDefinitionSchema, 'FormDefinition');
+register(answersInputSchema, 'Answers');
+
+/**
  * The acknowledgement body for operations with nothing to return.
  *
  * A JSON body rather than a bare 204: the Zod serializer needs a declared response
@@ -317,3 +334,28 @@ export const deletedSchema = z.object({
   deleted: z.literal(true),
   purgedKeys: z.int().describe('Screenshot objects queued for asynchronous purge (FR-027).'),
 });
+
+/**
+ * Registration happens here, after every schema exists, so each declaration above
+ * stays a plain schema and the mapping from shape to component name is readable in
+ * one place.
+ */
+for (const [id, schema] of Object.entries({
+  ApiError: errorResponseSchema,
+  Project: projectSchema,
+  FeedbackDatabase: feedbackDatabaseSchema,
+  FormDraft: draftSchema,
+  FormVersion: formVersionSchema,
+  Credential: credentialSchema,
+  ClientForm: clientFormSchema,
+  SubmissionIntent: intentSchema,
+  FinalizeResult: finalizeResultSchema,
+  UploadedAttachment: uploadResultSchema,
+  SubmissionSummary: submissionSummarySchema,
+  Attachment: attachmentSchema,
+  SubmissionDetail: submissionDetailSchema,
+  SubmissionList: submissionListSchema,
+  DeletionImpact: deletionImpactSchema,
+})) {
+  register(schema, id);
+}
