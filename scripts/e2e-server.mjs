@@ -55,6 +55,8 @@ const child = spawn('node', ['apps/api/dist/server.js'], {
     INLET_S3_FORCE_PATH_STYLE: 'true',
     INLET_INTENT_TTL_MINUTES: '30',
     INLET_WEB_DIST: path.join(repoRoot, 'apps/web/dist'),
+    // The fake Slack the suite starts. Kept in step with e2e/env.ts by hand.
+    INLET_SLACK_WEBHOOK_ORIGINS: 'https://hooks.slack.com,http://127.0.0.1:3101',
     // The suite makes hundreds of requests in a minute; the limits themselves are
     // covered by the API integration tests.
     INLET_DISABLE_RATE_LIMITS: 'true',

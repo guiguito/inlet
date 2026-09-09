@@ -27,6 +27,8 @@ export type Harness = {
 };
 
 const TABLES = [
+  'notification_deliveries',
+  'slack_notifications',
   'storage_purge_queue',
   'attachments',
   'submissions',

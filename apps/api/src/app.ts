@@ -27,7 +27,11 @@ import type { AppContext } from './context.js';
 import { ApiError } from './lib/errors.js';
 import { authRoutes } from './routes/auth.js';
 import { clientRoutes } from './routes/client.js';
-import { databaseRoutes, hostedFormRoutes } from './routes/databases.js';
+import {
+  databaseRoutes,
+  hostedFormRoutes,
+  slackNotificationRoutes,
+} from './routes/databases.js';
 import { hostedRoutes } from './routes/hosted.js';
 import { memberRoutes } from './routes/members.js';
 import { projectRoutes } from './routes/projects.js';
@@ -97,6 +101,7 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
       await v1.register(submissionRoutes(ctx), { prefix: '/feedback-databases' });
       await v1.register(attachmentRoutes(ctx), { prefix: '/attachments' });
       await v1.register(hostedFormRoutes(ctx), { prefix: '/feedback-databases' });
+      await v1.register(slackNotificationRoutes(ctx), { prefix: '/feedback-databases' });
       await v1.register(hostedRoutes(ctx), { prefix: '/hosted' });
       await v1.register(memberRoutes(ctx));
     },

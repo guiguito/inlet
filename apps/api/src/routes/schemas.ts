@@ -6,12 +6,18 @@ import {
   EMBEDDING_MODES,
   ERROR_STATUS,
   LIMITS,
+  NOTIFICATION_LIMITS,
   ROLES,
+  SLACK_CONTENT_LEVELS,
   TYPEFACES,
   answersInputSchema,
   formDefinitionSchema,
   hexColorSchema,
   originSchema,
+  slackChannelSchema,
+  slackIconEmojiSchema,
+  slackUsernameSchema,
+  slackWebhookUrlSchema,
   slugSchema,
 } from '@inlet/shared';
 
@@ -82,6 +88,7 @@ export const errorResponses = {
   415: errorResponseSchema,
   429: errorResponseSchema,
   500: errorResponseSchema,
+  502: errorResponseSchema,
 } as const;
 
 /** Subsets, so a route only documents the statuses it can actually return. */
@@ -385,6 +392,69 @@ export const updateHostedFormBodySchema = z
   })
   .strict();
 
+/**
+ * Slack notification settings as an operator sees them (FR-162).
+ *
+ * There is deliberately no `webhookUrl`. Responses are serialized through this schema, so
+ * the field being absent here means the URL cannot be emitted even if a future view
+ * mapper includes it by accident. That is a structural guarantee rather than a
+ * convention.
+ */
+export const slackNotificationsSchema = z.object({
+  feedbackDatabaseId: z.string(),
+  enabled: z.boolean(),
+  webhookConfigured: z.boolean().describe('Whether a webhook URL is saved.'),
+  webhookUrlMasked: z
+    .string()
+    .nullable()
+    .describe('Host and last four characters only. The URL itself is never returned.'),
+  contentLevel: z.enum(SLACK_CONTENT_LEVELS),
+  messageTitle: z.string().nullable(),
+  channel: z.string().nullable(),
+  username: z.string().nullable(),
+  iconEmoji: z.string().nullable(),
+  lastDeliveryAt: z.date().nullable(),
+  lastErrorAt: z.date().nullable(),
+  lastError: z.string().nullable().describe('What Slack said about the last failure.'),
+  failedCount: z.int().describe('Notifications that gave up and will not be retried.'),
+  updatedAt: z.date(),
+});
+
+export const updateSlackNotificationsBodySchema = z
+  .object({
+    enabled: z.boolean().optional().describe('Cannot be true without a webhook URL.'),
+    webhookUrl: slackWebhookUrlSchema
+      .nullable()
+      .optional()
+      .describe(
+        'Write-only. Null clears it and switches notifications off. Never returned by any endpoint.',
+      ),
+    contentLevel: z
+      .enum(SLACK_CONTENT_LEVELS)
+      .optional()
+      .describe(
+        'How much of a response the message carries. "link_only" sends no answer content at all; "answers" includes the answers but withholds a collected email address; "answers_with_email" includes it. Slack keeps its own copy of whatever is sent.',
+      ),
+    messageTitle: z
+      .string()
+      .trim()
+      .max(NOTIFICATION_LIMITS.messageTitleMaxLength)
+      .nullable()
+      .optional()
+      .describe('Replaces the default heading. May contain Slack mention syntax.'),
+    channel: slackChannelSchema
+      .nullable()
+      .optional()
+      .describe('Legacy custom integration webhooks only; Slack app webhooks ignore it.'),
+    username: slackUsernameSchema.nullable().optional(),
+    iconEmoji: slackIconEmojiSchema.nullable().optional(),
+  })
+  .strict();
+
+export const slackTestResultSchema = z.object({
+  delivered: z.literal(true),
+});
+
 // --- Client feedback flow ---------------------------------------------------
 
 export const clientFormSchema = z.object({
@@ -538,6 +608,7 @@ for (const [id, schema] of Object.entries({
   InvitationPreview: invitationPreviewSchema,
   HostedForm: hostedFormSchema,
   HostedFormPublic: hostedFormPublicSchema,
+  SlackNotifications: slackNotificationsSchema,
 })) {
   register(schema, id);
 }

@@ -17,6 +17,7 @@ import { AppShell, PageHeader } from '@/components/app-shell';
 import { answerPreview } from '@/components/answer-view';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { CopyField } from '@/components/copy-field';
+import { NotifyPanel } from '@/components/notify-panel';
 import { SharePanel } from '@/components/share-panel';
 import { EmptyState } from '@/components/empty-state';
 import { Badge } from '@/components/ui/badge';
@@ -115,6 +116,7 @@ export function DatabasePage({ user }: { user: CurrentUser }) {
               <TabsTrigger value="responses">Responses</TabsTrigger>
               <TabsTrigger value="integrate">Integrate</TabsTrigger>
               <TabsTrigger value="share">Share</TabsTrigger>
+              <TabsTrigger value="notify">Notify</TabsTrigger>
               <TabsTrigger value="versions">Versions</TabsTrigger>
               <TabsTrigger value="access">Access</TabsTrigger>
               <TabsTrigger value="settings">Settings</TabsTrigger>
@@ -128,6 +130,9 @@ export function DatabasePage({ user }: { user: CurrentUser }) {
             </TabsContent>
             <TabsContent value="share">
               <SharePanel databaseId={databaseId} />
+            </TabsContent>
+            <TabsContent value="notify">
+              <NotifyPanel databaseId={databaseId} />
             </TabsContent>
             <TabsContent value="versions">
               <VersionsTab databaseId={databaseId} />

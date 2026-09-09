@@ -70,6 +70,8 @@ describe('the OpenAPI document', () => {
       '/v1/feedback-databases/{databaseId}/submissions',
       '/v1/feedback-databases/{databaseId}/submissions/export',
       '/v1/feedback-databases/{databaseId}/submissions/{submissionId}',
+      '/v1/feedback-databases/{databaseId}/slack-notifications',
+      '/v1/feedback-databases/{databaseId}/slack-notifications/test',
       '/v1/attachments/{attachmentId}',
     ];
     for (const path of expected) expect(Object.keys(document.paths)).toContain(path);

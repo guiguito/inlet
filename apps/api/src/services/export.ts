@@ -48,6 +48,16 @@ export function attachmentUrl(ctx: AppContext, attachmentId: string): string {
   return `${ctx.env.INLET_PUBLIC_URL.replace(/\/$/, '')}/v1/attachments/${attachmentId}`;
 }
 
+/** Where a notification sends an operator to read the response itself (FR-159). */
+export function submissionUrl(
+  ctx: AppContext,
+  databaseId: string,
+  submissionId: string,
+): string {
+  const base = ctx.env.INLET_PUBLIC_URL.replace(/\/$/, '');
+  return `${base}/databases/${databaseId}/submissions/${submissionId}`;
+}
+
 async function collect(
   ctx: AppContext,
   databaseId: string,
@@ -137,7 +147,14 @@ function questionColumns(
   return columns;
 }
 
-function renderAnswerCell(
+/**
+ * Flattens one stored answer to text.
+ *
+ * Exported because the Slack message builder needs exactly this, including the two rules
+ * with real behaviour in them: an emoji option renders as emoji plus label, and an option
+ * that no longer exists in the definition falls back to its raw ID rather than vanishing.
+ */
+export function renderAnswerCell(
   answer: (StoredAnswer & { attachments?: ExportedAttachment[] }) | undefined,
   definition: FormDefinition | undefined,
 ): string {
@@ -154,7 +171,7 @@ function renderAnswerCell(
 }
 
 /** Rule 3: an option that no longer exists falls back to its raw ID. */
-function optionLabel(definition: FormDefinition | undefined, optionId: string): string {
+export function optionLabel(definition: FormDefinition | undefined, optionId: string): string {
   if (!definition) return optionId;
   for (const question of listQuestions(definition)) {
     if (question.type !== 'choice') continue;

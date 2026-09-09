@@ -5,6 +5,7 @@ import type {
   ErrorDetail,
   FormDefinition,
   Role,
+  SlackContentLevel,
   StoredAnswer,
   Typeface,
 } from '@inlet/shared';
@@ -311,6 +312,35 @@ export type HostedFormPatch = Partial<
   >
 >;
 
+/** Slack notification settings. The webhook URL is write-only and never comes back. */
+export type SlackNotifications = {
+  feedbackDatabaseId: string;
+  enabled: boolean;
+  webhookConfigured: boolean;
+  webhookUrlMasked: string | null;
+  contentLevel: SlackContentLevel;
+  messageTitle: string | null;
+  channel: string | null;
+  username: string | null;
+  iconEmoji: string | null;
+  lastDeliveryAt: string | null;
+  lastErrorAt: string | null;
+  lastError: string | null;
+  failedCount: number;
+  updatedAt: string;
+};
+
+export type SlackNotificationsPatch = {
+  enabled?: boolean;
+  /** Write-only. Null clears it and switches notifications off. */
+  webhookUrl?: string | null;
+  contentLevel?: SlackContentLevel;
+  messageTitle?: string | null;
+  channel?: string | null;
+  username?: string | null;
+  iconEmoji?: string | null;
+};
+
 // --- Management operations ---------------------------------------------------
 
 export const api = {
@@ -411,6 +441,19 @@ export const api = {
     request<HostedForm>(`/v1/feedback-databases/${databaseId}/hosted-form/logo`, {
       method: 'DELETE',
     }),
+
+  getSlackNotifications: (databaseId: string) =>
+    request<SlackNotifications>(`/v1/feedback-databases/${databaseId}/slack-notifications`),
+  updateSlackNotifications: (databaseId: string, patch: SlackNotificationsPatch) =>
+    request<SlackNotifications>(`/v1/feedback-databases/${databaseId}/slack-notifications`, {
+      method: 'PATCH',
+      body: patch,
+    }),
+  sendSlackTestMessage: (databaseId: string) =>
+    request<{ delivered: true }>(
+      `/v1/feedback-databases/${databaseId}/slack-notifications/test`,
+      { method: 'POST' },
+    ),
 
   listCredentials: (projectId: string) =>
     request<Credential[]>(`/v1/projects/${projectId}/credentials`),

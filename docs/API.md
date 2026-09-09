@@ -15,6 +15,7 @@ Everything is under `/v1`. Requests and responses are JSON unless stated otherwi
 - [Reading and exporting feedback](#reading-and-exporting-feedback)
 - [Managing forms](#managing-forms)
 - [Hosted forms](#hosted-forms)
+- [Slack notifications](#slack-notifications)
 - [Access: members and invitations](#access-members-and-invitations)
 - [Errors](#errors)
 - [Limits](#limits)
@@ -595,6 +596,131 @@ It does not establish who a respondent is. Repeat submissions through a public l
 expected, exactly as they are through the client API. If you need identity, collect it
 as a question, or use the client API from an authenticated part of your product.
 
+## Slack notifications
+
+A feedback database can post to Slack when a response arrives, through an **Incoming
+Webhook**. It is the simple webhook mechanism: one URL, no Slack app, no OAuth.
+
+Notifications never affect collection. The submission is stored first, a delivery is
+queued in the same transaction, and a worker sends it afterwards. Slack being down,
+throttling, or deleted changes nothing a respondent sees and nothing that is stored.
+
+### The settings
+
+```
+GET   /v1/feedback-databases/{databaseId}/slack-notifications
+PATCH /v1/feedback-databases/{databaseId}/slack-notifications
+POST  /v1/feedback-databases/{databaseId}/slack-notifications/test
+```
+
+These need a Creator or Admin of the feedback database. A secret server key may read them
+and change everything except the webhook URL, which needs a signed-in person: a key can
+already read and export everything, but a webhook it installed would keep delivering
+after the key was revoked.
+
+```json
+{
+  "feedbackDatabaseId": "fdb_n8b3mj3axdfh",
+  "enabled": true,
+  "webhookConfigured": true,
+  "webhookUrlMasked": "hooks.slack.com/services/…/…/••••wZ6l",
+  "contentLevel": "answers",
+  "messageTitle": null,
+  "channel": null,
+  "username": null,
+  "iconEmoji": null,
+  "lastDeliveryAt": "2026-09-09T14:02:11.000Z",
+  "lastErrorAt": null,
+  "lastError": null,
+  "failedCount": 0,
+  "updatedAt": "2026-09-09T14:00:00.000Z"
+}
+```
+
+**One field is required to start: `webhookUrl`.** It is write-only. No endpoint ever
+returns it, and `webhookUrlMasked` carries the host and last four characters so you can
+tell which webhook is saved. `PATCH { "webhookUrl": null }` clears it and switches
+notifications off in the same call. Switching `enabled` on without a URL is a
+`400 validation_failed` naming `webhookUrl`.
+
+Only Slack origins are accepted, which is what stops a settings form becoming a way to
+make the server request an internal address. A deployment may add an origin with
+`INLET_SLACK_WEBHOOK_ORIGINS` to target a Slack-compatible relay.
+
+### What the message carries
+
+`contentLevel` decides, and it defaults to `answers`.
+
+| Level | The message contains |
+| --- | --- |
+| `link_only` | The heading, the metadata line and a link. No answer content at all. |
+| `answers` | Also the questions and answers. A collected email address is withheld, though its label still shows. |
+| `answers_with_email` | Also the email address. |
+
+Slack keeps its own copy of whatever is sent. Deleting a response in Inlet does not
+remove a message already delivered to a channel.
+
+Answers a respondent typed are always escaped, so an answer containing `<!channel>` or a
+Slack link cannot notify a workspace or render as a chosen piece of anchor text. Screenshots
+appear as a count, never as URLs, because an attachment URL is authenticated and Slack
+cannot render it. The observed IP address and the client context are never sent.
+
+### Personalization
+
+All optional, all with working defaults.
+
+| Field | Effect |
+| --- | --- |
+| `messageTitle` | Replaces the default heading. Slack mention syntax works here, since an operator owns it. |
+| `channel` | `#channel` or `@person`. |
+| `username` | What the message posts as. |
+| `iconEmoji` | `:inbox_tray:`. |
+
+The last three are honoured by a webhook created as a **legacy custom integration** and
+silently ignored by a webhook created from a Slack app, which always posts as that app to
+the channel chosen when the webhook was made. If an override has no effect, that is which
+kind you have.
+
+### Testing a webhook
+
+`POST .../slack-notifications/test` delivers a sample message immediately and reports what
+Slack said, rather than queueing it. The content is placeholder text, never a real
+response, so testing an integration cannot expose a respondent.
+
+A refusal is `502 slack_delivery_failed` with Slack's own error string in the message and
+in `details`, because that string is what says what to fix.
+
+```json
+{
+  "error": {
+    "code": "slack_delivery_failed",
+    "message": "Slack did not accept the message (slack: no_service).",
+    "details": [
+      {
+        "path": "webhookUrl",
+        "code": "slack: no_service",
+        "message": "Slack does not recognise this webhook. It may have been deleted or regenerated."
+      }
+    ]
+  }
+}
+```
+
+### Delivery and retries
+
+A notification is queued only for a newly accepted submission. A replayed finalization
+queues nothing, and switching notifications on does not announce the backlog of responses
+already collected.
+
+Retried: HTTP 429, honouring `Retry-After`, plus any 5xx, a network failure and a timeout.
+Not retried: anything only a person can fix, which is `invalid_payload`,
+`action_prohibited`, `no_service`, `no_active_hooks`, `invalid_token`, `team_disabled`,
+`channel_not_found`, `channel_is_archived` and `user_not_found`. Those stop after one
+attempt and land on `lastError`, where the interface shows them.
+
+Sends are paced at roughly one a second, because that is Slack's limit per channel. A
+burst of responses therefore arrives in Slack over the following minute.
+
 ## Access: members and invitations
 
 These need a secret server key or a signed-in Admin of the scope.
@@ -761,6 +887,7 @@ The codes you are most likely to handle:
 | `invitation_expired` | 410 | Past its seven days. Ask for a new link. |
 | `invitation_already_redeemed` | 409 | The link has been used. |
 | `last_admin_removal` | 409 | A project must keep at least one Admin. |
+| `slack_delivery_failed` | 502 | Slack refused the message. Its own error string is in the message and details. |
 
 ## Limits
 
@@ -778,6 +905,11 @@ The codes you are most likely to handle:
 | Hosted form logo decoded size | 4 megapixels |
 | Hosted form slug | 3 to 64 characters |
 | Embedding origins per hosted form | 20 |
+| Slack message heading | 120 characters |
+| Answer text in a Slack message | 300 characters, then truncated |
+| Answers shown in a Slack message | 10, then a count of the rest |
+| Slack send timeout | 5 seconds |
+| Slack delivery attempts | 5, with exponential backoff |
 
 These are product limits, not deployment settings: they are part of the contract.
 
@@ -810,4 +942,8 @@ carry their own limits, applied per requesting address and per slug. A throttled
 | Invite, change a role, remove access | No | Yes | Admin of the scope |
 | Read or redeem an invitation link | Not applicable | Not applicable | Anyone holding the link |
 | Read or change the hosted form | No | Yes | Creator or Admin |
+| Read the Slack notification settings | No | Yes | Creator or Admin |
+| Change the Slack message and its wording | No | Yes | Creator or Admin |
+| Set the Slack webhook URL | No | No | Creator or Admin |
+| Send a Slack test message | No | Yes | Creator or Admin |
 | Open the hosted form and respond | Not applicable | Not applicable | Anyone holding the link |

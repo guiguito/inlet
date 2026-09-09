@@ -29,6 +29,7 @@ places where the PRD deliberately left the decision to technical design.
 18. [Bugs found by the tests](#18-bugs-found-by-the-tests)
 19. [Release 2: team, MCP and scanning](#19-release-2-team-mcp-and-scanning)
 20. [Release 3: hosted forms](#20-release-3-hosted-forms)
+21. [Release 4: Slack notifications](#21-release-4-slack-notifications)
 
 ---
 
@@ -549,6 +550,17 @@ authorization check would be the compromise.
 
 ---
 
+### 17.1 Slack keeps its own copy
+
+A response deleted in Inlet is gone from the database and its screenshots are purged, but
+a Slack message already delivered stays in the channel and in Slack's search index
+forever. Inlet cannot retract it, and FR-064A's promise of permanent deletion does not
+reach that far.
+
+Naming it is the whole mitigation, so it is said in three places: beside the content
+control in the interface, in the API guide, and here. It is also the reason the content
+level is a setting at all rather than always-on.
+
 ## 18. Bugs found by the tests
 
 Recorded because each one is a case where the implementation looked right and was not.
@@ -904,3 +916,226 @@ frame on the embedding page cannot resize the form by posting the same message.
 | --- | --- |
 | **Uploading a logo discarded unsaved branding edits.** The logo and the enable switch save on their own, and adopting the server's answer replaced the whole editor state. | An operator typing a custom address, then uploading a logo, would silently lose the address and the Save button would go quiet as though there were nothing to save. |
 | **The management preview was blocked by the operator's own embedding choice.** `frame-ancestors 'none'` applied to Inlet's origin too. | Choosing "nowhere" would have left the Share tab showing an empty box with a console error, and an operator with no way to see their own form. |
+
+---
+
+## 21. Release 4: Slack notifications
+
+A feedback database can post to Slack when a response arrives, through an Incoming
+Webhook. It is the first outbound HTTP the product makes: before this, the only egress
+was the S3 client and a raw TCP connection to ClamAV. Most of the design is therefore
+about that egress rather than about Slack.
+
+**The governing rule: Slack being down must never change whether feedback is collected,
+and must never be visible to a respondent.** Nothing on the request path talks to Slack at
+all. Finalization writes one row to a queue and returns; a worker delivers later. Three
+independent things enforce it, which is deliberate: there is no `fetch` reachable from
+`intents.ts`, the worker is started only in `server.ts` so the entire integration suite
+proves Slack is not on the request path, and a test points a webhook at a dead port and
+asserts the submission is still stored and the response byte-identical.
+
+### 21.1 The queue is the purge queue, with three deliberate differences
+
+`storage_purge_queue` was the obvious model, and copying it verbatim would have been a
+bug. It selects due rows with no claim, which is safe only because deleting an object
+twice is a no-op. A Slack message cannot be unsent, so:
+
+- **Rows are claimed, not selected.** One statement updates the rows it selects
+  `for update skip locked`, so two workers cannot take the same delivery.
+- **`attempts` increments on claim, not on failure.** A worker killed mid-send has already
+  spent an attempt and cannot spin. The claim doubles as a sixty-second lease, which
+  removes any need for a `sending` state or a stuck-row sweeper.
+- **A delivered row is marked `sent`, not deleted.** That keeps the unique index on
+  `submission_id` meaningful for the row's whole life and leaves an audit line. The table
+  grows with `submissions` and cascades away with them.
+
+Delivery is **at-least-once**. Incoming webhooks have no idempotency key, so a crash
+between a 200 and the mark-sent commit re-sends. A duplicate message is cosmetic; a lost
+notification is invisible and therefore worse. The likeliest cause of one is not two
+instances but an ordinary deploy, so the worker's stopper returns a promise and is awaited
+before the pool closes — the one place this differs from the purge worker's fire-and-forget
+shutdown.
+
+### 21.2 Enqueue inside the transaction, behind a savepoint
+
+The insert goes after the submission insert, inside the same transaction, which buys three
+things at once. A retried finalization cannot enqueue twice, because the duplicate path
+returns from `replayFinalized` long before that line. A rollback anywhere above discards
+the queue row with the submission, so there is never a notification for a submission that
+does not exist. And it is the single place both the client API and the hosted form pass
+through, which is what stops this from becoming the second code path section 20.1 exists
+to prevent.
+
+**The savepoint is load-bearing, not caution.** Postgres aborts an entire transaction once
+any statement in it errors, so a plain `try`/`catch` around a broken notifications query
+would still lose the submission. A nested Drizzle transaction issues a `SAVEPOINT`, and
+rolling back to it leaves the submission intact. A test adds a failing check constraint to
+the queue table and asserts the submission is still stored.
+
+The enqueue is also **one conditional statement** — `insert … select … where exists (… and
+enabled)` — rather than a read then a branch. That costs no extra round trip and means
+switching notifications on does not fire every historical submission at the channel.
+
+### 21.3 The message is rendered at send time
+
+The queue row holds two identifiers and nothing else. Rendering at delivery rather than at
+enqueue makes three awkward cases correct for free:
+
+- A submission deleted before delivery has nothing to render, and the row cascaded away
+  with it. An operator who deleted a response does not want it echoed into a channel
+  afterwards.
+- Notifications switched off between enqueue and send send nothing. The setting in force
+  at delivery is the one that applies.
+- Lowering the content level applies to deliveries already queued, which is the safe
+  direction.
+
+A snapshot design would have delivered the content of a deleted submission, and stored
+every answer twice.
+
+### 21.4 Answers travel by default, the email address does not
+
+This was the operator's call, taken against the recommendation to default to a link only.
+The argument for it is real: a notification that says only "a response arrived" is not
+worth reading on a phone, and a self-hosted product's owner is entitled to decide what
+leaves their own server.
+
+What the recommendation was protecting is kept in two other ways. The collected email
+address has its own separate level, because it is the one field that identifies a person
+and PRD section 12.2 treats it accordingly. And the consequence is stated where the
+decision is made rather than buried here: Slack keeps its own copy, and deleting a
+response in Inlet does not unsend a message.
+
+**One enum, not two booleans.** `link_only`, `answers`, `answers_with_email` makes "the
+email address but not the answers" unrepresentable rather than merely discouraged.
+
+The observed IP address and the client context are never sent at any level. They are the
+highest-risk and lowest-value fields to put in a channel, and the deep link is one click
+away.
+
+**The fallback `text` is content-free at every level.** That string is what Slack shows on
+a lock screen and in a channel list, which is the least controlled surface it has.
+
+### 21.5 Respondent text is escaped; operator text is not
+
+This is the highest-risk thing in the release, and it is not an operational risk. Slack
+reads `<!channel>`, `<!here>` and `<@U0123>` as notifications, and `<https://x|text>` as a
+link with arbitrary anchor text. Without escaping, anyone who can open a hosted form could
+ping an entire workspace, or deliver a plausible password-reset link into the operator's
+channel attributed to the operator's own feedback tool.
+
+Escaping exactly `&`, `<` and `>` is Slack's documented answer and defeats all of it. Two
+details matter. It is deliberately **not** `escapeHtml`, which also escapes quotes and
+would render them literally as `&quot;` in the channel — a plausible and wrong reuse.
+And respondent text additionally goes in `plain_text` blocks, so even if the escaping were
+ever removed Slack would not parse a mention out of it.
+
+The operator's own heading is left unescaped, because `<!here>` there is a feature. That
+split is why the heading is operator-only and never interpolates respondent data.
+
+**Truncation is by code point.** `slice` cuts by UTF-16 unit and splits a surrogate pair,
+emitting a lone surrogate into the payload. Emoji in feedback are ordinary, not
+theoretical. The final size guard measures bytes, not characters, because three hundred CJK
+characters are nine hundred bytes.
+
+### 21.6 An exact-origin allowlist is the whole SSRF answer
+
+The server POSTs to an operator-supplied URL, and the compose stack has Postgres and MinIO
+on a resolvable network. So the attacks are real: internal services, cloud metadata at
+`169.254.169.254`, decimal and IPv6 address literals, credentials before the host, a
+lookalike domain, a redirect to somewhere private.
+
+`INLET_SLACK_WEBHOOK_ORIGINS` defaults to `https://hooks.slack.com` and every one of those
+fails on it. There is no private-address denylist to get wrong, no IPv6-mapped-IPv4 edge
+case and no DNS-rebinding window, because a host that is not on the list never receives a
+request. Two more bounds on the send itself: `redirect: 'manual'` with any 3xx treated as
+terminal, since Slack never redirects and following one is how a request ends up somewhere
+nobody chose, and `AbortSignal.timeout(5000)`, which is mandatory rather than tidy because
+undici has no total-request timeout and its defaults let a peer hold a connection for
+minutes.
+
+The URL is re-checked immediately before every send. That second check is not decoration:
+it covers a row written before the validator existed or edited directly in the database, and
+a test inserts exactly such a row and asserts nothing is sent.
+
+**Both reviews argued the allowlist should be a test-only override with a hard production
+guard, rather than real configuration.** The operator chose configurability, for
+Slack-compatible relays. The residual risk is therefore named here: every origin in that
+variable is somewhere this server can be made to send a request, so widening it is a
+security decision. The send-time re-check limits the blast radius to origins someone
+deliberately added.
+
+### 21.7 The webhook URL is a credential stored in a column
+
+It is a bearer token the server must replay, so unlike a password or a secret server key it
+cannot be hashed. Encrypting it would put the key in the same environment as
+`INLET_DATABASE_URL`, on the same host, read by the same process, and defend against
+exactly one scenario: a stolen dump without the environment. The database already holds
+every submission, which is the more sensitive asset. So it is stored as it is, and a
+`ponytail:` note names envelope encryption as the upgrade path.
+
+What that buys has to be paid for in never echoing it. The response schema has no
+`webhookUrl` field at all, and responses are serialized through that schema, so the field
+being absent is a structural guarantee rather than a convention. `webhookUrl` and
+`*.webhookUrl` are in the pino redaction list. `lastError` is built from a classifier —
+`timeout`, `network`, `http 500`, `slack: no_service` — never from a forwarded error
+message, because a DNS failure carries the host and `lastError` is rendered in the browser.
+The browser never holds a copy either: the input is write-only and, unlike the hosted-form
+panel, the value is deliberately kept out of the query cache.
+
+A test pins a sentinel URL and asserts it appears in none of the settings response, the
+submissions list, the JSON export, the OpenAPI document, or `lastError` after a forced
+failure.
+
+**Residual risk, stated plainly:** any Creator or Admin, and anyone with a database dump,
+obtains a live credential that can post into the operator's Slack channel. It is post-only
+— it cannot read Slack, list channels or read other messages — and one click in Slack
+revokes it. That narrow capability plus one-click revocation is what makes a column
+acceptable; a read-capable credential would not be.
+
+### 21.8 An API key can configure notifications but cannot install a webhook
+
+The one asymmetry with every other settings route. A leaked secret server key can already
+read and export every submission, so this is not an escalation of access. But a webhook it
+installed keeps delivering to the attacker's channel after the key is revoked, which turns
+read access into persistence. Requiring a signed-in person for that one field removes the
+vector and costs five lines. Reading the settings and changing the harmless fields stay
+open to a key, so MCP is still useful.
+
+### 21.9 What the operator can see when it breaks
+
+A silent dead integration is how a feature like this betrays someone, so the failure is
+recorded in three places with three jobs. The queue row keeps `status`, `attempts` and
+`lastError` as forensics, and a failed row is never deleted. The settings row keeps
+`lastDeliveryAt`, `lastErrorAt` and `lastError`, which is the one query the panel needs and
+renders as either "Last delivered two minutes ago" or "Slack refused the last message:
+no_service". A log line carries the delivery ID and the reason, and never the URL or any
+answer.
+
+Anything only a person can fix stops after one attempt rather than retrying five times
+against a webhook that was deleted. Being throttled is the opposite case: a 429 gives the
+attempt back, because otherwise a busy channel would drive a perfectly good notification
+into `failed`.
+
+### 21.10 A test message, because the alternative is waiting and wondering
+
+`POST .../slack-notifications/test` delivers synchronously rather than through the queue.
+The operator has just pasted a URL and is standing there; a queued test would defeat the
+point. It uses the saved settings so it tests what is configured, and placeholder content
+so testing an integration can never expose a respondent. It carries a route-level rate
+limit, because it is the one endpoint that makes the server issue an outbound request on
+demand.
+
+### 21.11 Fake Slack, not a mocked sender
+
+The suites talk to an `http.createServer` that speaks Slack's real contract: 200 with the
+body `ok`, or a plain-text error code. That follows the fake clamd in `malware.test.ts` for
+the same reason — stubbing our own function would prove nothing about whether the request
+is shaped right, the response read correctly, or the taxonomy applied. The fake is reached
+through the origin allowlist rather than around it, so the allowlist is exercised too.
+
+Two tests are worth naming. One fires two batches concurrently and asserts Slack received
+one message, which fails immediately if anyone rewrites the claim query as the purge
+queue's plain select. The other has the fake never answer, and asserts the batch returns in
+about five seconds rather than minutes.
+
+The user's real webhook is used exactly once, by hand, and never from a suite.

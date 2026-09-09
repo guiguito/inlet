@@ -12,7 +12,7 @@ import {
   timestamp,
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
-import type { FormDefinition, StoredAnswers } from '@inlet/shared';
+import { SLACK_CONTENT_LEVELS, type FormDefinition, type StoredAnswers } from '@inlet/shared';
 
 /**
  * The Inlet schema (PRD section 10).
@@ -35,6 +35,13 @@ export const colorSchemeEnum = pgEnum('inlet_color_scheme', ['light', 'dark', 's
 export const cornerRadiusEnum = pgEnum('inlet_corner_radius', ['sharp', 'soft', 'round']);
 export const typefaceEnum = pgEnum('inlet_typeface', ['sans', 'serif', 'mono']);
 export const embeddingEnum = pgEnum('inlet_embedding', ['anywhere', 'listed', 'nowhere']);
+export const slackContentEnum = pgEnum('inlet_slack_content', SLACK_CONTENT_LEVELS);
+/**
+ * A delivery's own status. Deliberately not `inlet_purge_status`, even though the values
+ * match: a Slack column typed as a purge status is the kind of thing somebody has to
+ * decode at three in the morning.
+ */
+export const deliveryStatusEnum = pgEnum('inlet_delivery_status', ['pending', 'sent', 'failed']);
 
 const createdAt = timestamp('created_at', { withTimezone: true }).notNull().defaultNow();
 const updatedAt = timestamp('updated_at', { withTimezone: true }).notNull().defaultNow();
@@ -433,6 +440,85 @@ export const invitations = pgTable(
   (table) => [uniqueIndex('invitations_token_idx').on(table.tokenHash)],
 );
 
+/**
+ * Section 10.15: Slack notification settings, one row per feedback database.
+ *
+ * The webhook URL is a bearer credential the server has to replay, so unlike a password
+ * or a secret server key it cannot be hashed. It is therefore stored as it is and never
+ * returned by the API again: the settings view carries a mask derived at read time. A
+ * database dump exposes it, and the remedy is Slack's own Regenerate button, which is
+ * why a post-only credential is an acceptable thing to keep in a column and a
+ * read-capable one would not be.
+ *
+ * The delivery outcome columns are written only by the worker. They exist because "is my
+ * integration actually working" is a per-integration question that the queue, which is
+ * per submission, cannot answer once its rows have aged out.
+ */
+export const slackNotifications = pgTable('slack_notifications', {
+  feedbackDatabaseId: text('feedback_database_id')
+    .primaryKey()
+    .references(() => feedbackDatabases.id, { onDelete: 'cascade' }),
+  enabled: boolean('enabled').notNull().default(false),
+  webhookUrl: text('webhook_url'),
+
+  // --- Content (FR-160) ---
+  contentLevel: slackContentEnum('content_level').notNull().default('answers'),
+
+  // --- Personalization (FR-161) ---
+  messageTitle: text('message_title'),
+  channel: text('channel'),
+  username: text('username'),
+  iconEmoji: text('icon_emoji'),
+
+  // --- Delivery outcome, written by the worker (FR-169) ---
+  lastDeliveryAt: timestamp('last_delivery_at', { withTimezone: true }),
+  lastErrorAt: timestamp('last_error_at', { withTimezone: true }),
+  lastError: text('last_error'),
+
+  createdAt,
+  updatedAt,
+});
+
+/**
+ * Section 10.16: the outbound delivery queue.
+ *
+ * The same shape as `storage_purge_queue` with three deliberate differences, each because
+ * a Slack message cannot be unsent while deleting an object twice is a no-op.
+ *
+ * First, `submission_id` is unique, so the database refuses a second delivery for one
+ * submission rather than relying on the finalization control flow to never enqueue twice.
+ * Second, a delivered row is marked `sent` rather than deleted, which keeps that
+ * uniqueness meaningful for the row's whole life and leaves an audit line. Third, the
+ * worker claims rows with `for update skip locked` and increments `attempts` on claim, so
+ * a process killed mid-send has already spent an attempt and cannot spin.
+ *
+ * The row holds identifiers only. The message is rendered at send time from the live
+ * submission, which is what makes a deleted submission silently correct and applies the
+ * privacy setting in force at delivery rather than at enqueue.
+ */
+export const notificationDeliveries = pgTable(
+  'notification_deliveries',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    submissionId: text('submission_id')
+      .notNull()
+      .references(() => submissions.id, { onDelete: 'cascade' }),
+    feedbackDatabaseId: text('feedback_database_id')
+      .notNull()
+      .references(() => feedbackDatabases.id, { onDelete: 'cascade' }),
+    status: deliveryStatusEnum('status').notNull().default('pending'),
+    attempts: integer('attempts').notNull().default(0),
+    lastError: text('last_error'),
+    nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true }).notNull().defaultNow(),
+    sentAt: timestamp('sent_at', { withTimezone: true }),
+    createdAt,
+  },
+  (table) => [
+    index('notification_deliveries_next_idx').on(table.status, table.nextAttemptAt),
+    uniqueIndex('notification_deliveries_submission_idx').on(table.submissionId),
+  ],
+);
+
 export type UserRow = typeof users.$inferSelect;
 export type ProjectRow = typeof projects.$inferSelect;
 export type FeedbackDatabaseRow = typeof feedbackDatabases.$inferSelect;
@@ -446,3 +532,5 @@ export type InvitationRow = typeof invitations.$inferSelect;
 export type ProjectMembershipRow = typeof projectMemberships.$inferSelect;
 export type FeedbackDatabaseMembershipRow = typeof feedbackDatabaseMemberships.$inferSelect;
 export type HostedFormRow = typeof hostedForms.$inferSelect;
+export type SlackNotificationRow = typeof slackNotifications.$inferSelect;
+export type NotificationDeliveryRow = typeof notificationDeliveries.$inferSelect;

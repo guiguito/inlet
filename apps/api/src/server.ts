@@ -9,6 +9,7 @@ import { Storage } from './lib/storage.js';
 import { deleteExpiredSessions } from './lib/session.js';
 import { bootstrapAdmin } from './services/bootstrap.js';
 import { startPurgeWorker } from './services/purge.js';
+import { startNotificationWorker } from './services/notifications.js';
 
 /** Process entry point for the bundled deployment. */
 const env = loadEnv();
@@ -20,6 +21,10 @@ const log = pino({
       'req.headers.authorization',
       'req.headers.cookie',
       'req.headers["x-inlet-intent-token"]',
+    // A Slack webhook URL is a bearer credential; nothing should log it, and if a field
+    // named this way ever reaches a log line, it is censored rather than printed.
+    'webhookUrl',
+    '*.webhookUrl',
       'res.headers["set-cookie"]',
     ],
     censor: '[redacted]',
@@ -58,10 +63,15 @@ await deleteExpiredSessions(db);
 
 const app = await buildApp(ctx);
 const stopPurgeWorker = startPurgeWorker(ctx);
+const stopNotificationWorker = startNotificationWorker(ctx);
 
 const shutdown = async (signal: string): Promise<void> => {
   log.info({ signal }, 'shutting down');
   stopPurgeWorker();
+  // Awaited, unlike the purge worker: a Slack request in flight when the pool closes
+  // cannot record that it succeeded, so its lease would expire and the message would be
+  // delivered a second time. That makes an ordinary deploy the likeliest duplicate.
+  await stopNotificationWorker();
   await app.close();
   storage.destroy();
   await pool.end();

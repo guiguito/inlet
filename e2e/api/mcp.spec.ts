@@ -3,6 +3,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { expect, test, type APIRequestContext } from '@playwright/test';
 import { createServer } from '../../apps/mcp/src/app.js';
 import { E2E } from '../env';
+import { startFakeSlack } from '../slack-fake';
 
 /**
  * MCP access (FR-120 to FR-125), driven by a real MCP client.
@@ -129,6 +130,7 @@ test.describe('the MCP server', () => {
           'get_form_draft',
           'get_hosted_form',
           'get_project',
+          'get_slack_notifications',
           'get_published_form',
           'get_screenshot',
           'get_submission',
@@ -146,11 +148,13 @@ test.describe('the MCP server', () => {
           'revoke_invitation',
           'rollback_form',
           'rotate_hosted_form_address',
+          'send_slack_test_message',
           'save_form_draft',
           'set_member_role',
           'submit_feedback',
           'unpublish_form',
           'update_hosted_form',
+          'update_slack_notifications',
         ].sort(),
       );
 
@@ -740,6 +744,98 @@ test.describe('the MCP server', () => {
       expect((await request.get(`/v1/hosted/${rotated.slug}`)).status()).toBe(200);
     } finally {
       await session.close();
+    }
+  });
+
+  test('reads and configures Slack notifications, and can post a test message (FR-167)', async ({
+    request,
+  }) => {
+    const f = await fixture(request, 'MCP slack');
+    const slack = await startFakeSlack();
+    const session = await connect(f.secretKey);
+
+    try {
+      const initial = parsed<{ enabled: boolean; webhookConfigured: boolean; contentLevel: string }>(
+        await session.client.callTool({
+          name: 'get_slack_notifications',
+          arguments: { databaseId: f.databaseId },
+        }),
+      );
+      expect(initial.enabled).toBe(false);
+      expect(initial.webhookConfigured).toBe(false);
+      expect(initial.contentLevel).toBe('answers');
+
+      // An agent can shape the message and switch it on.
+      const configured = parsed<{ messageTitle: string; contentLevel: string }>(
+        await session.client.callTool({
+          name: 'update_slack_notifications',
+          arguments: {
+            databaseId: f.databaseId,
+            messageTitle: 'New feedback',
+            contentLevel: 'link_only',
+          },
+        }),
+      );
+      expect(configured.messageTitle).toBe('New feedback');
+      expect(configured.contentLevel).toBe('link_only');
+
+      // But it cannot switch on without somewhere to send.
+      const premature = await session.client.callTool({
+        name: 'update_slack_notifications',
+        arguments: { databaseId: f.databaseId, enabled: true },
+      });
+      expect(isError(premature)).toBe(true);
+
+      // And it cannot install a webhook at all: that is not in the tool's schema, because
+      // a webhook installed with a key would keep delivering after the key was revoked.
+      const tools = (await session.client.listTools()).tools;
+      const update = tools.find((tool) => tool.name === 'update_slack_notifications');
+      expect(Object.keys(update?.inputSchema.properties ?? {})).not.toContain('webhookUrl');
+
+      const rejected = await session.client.callTool({
+        name: 'update_slack_notifications',
+        arguments: { databaseId: f.databaseId, webhookUrl: slack.webhookUrl },
+      });
+      expect(isError(rejected)).toBe(true);
+
+      // A person saves the webhook, which is the only way it can be saved.
+      expect(
+        (
+          await request.patch(`/v1/feedback-databases/${f.databaseId}/slack-notifications`, {
+            data: { webhookUrl: slack.webhookUrl },
+          })
+        ).status(),
+      ).toBe(200);
+
+      // The tool that touches a third party demands the database's name first.
+      const unconfirmed = await session.client.callTool({
+        name: 'send_slack_test_message',
+        arguments: { databaseId: f.databaseId, confirm: 'the wrong name' },
+      });
+      expect(isError(unconfirmed)).toBe(true);
+      expect(textOf(unconfirmed)).toContain('Refusing to continue');
+      expect(slack.received).toHaveLength(0);
+
+      const sent = parsed<{ delivered: boolean }>(
+        await session.client.callTool({
+          name: 'send_slack_test_message',
+          arguments: { databaseId: f.databaseId, confirm: 'MCP slack feedback' },
+        }),
+      );
+      expect(sent.delivered).toBe(true);
+      expect(slack.received).toHaveLength(1);
+
+      // The webhook URL is not in anything the agent can read.
+      const readBack = textOf(
+        await session.client.callTool({
+          name: 'get_slack_notifications',
+          arguments: { databaseId: f.databaseId },
+        }),
+      );
+      expect(readBack).not.toContain('e2eSecretValue01');
+    } finally {
+      await session.close();
+      await slack.close();
     }
   });
 });

@@ -20,10 +20,11 @@ metadata land in your PostgreSQL and your object storage.
 
 ## What this release does
 
-All three releases of the PRD are implemented: **Release 1 (Solo)**, one operator
-running their own deployment, **Release 2 (Team)**, a second person invited with a
-limited role and an AI agent able to operate the project, and **Release 3 (Hosted
-forms)**, collecting from a shared link with no client code at all.
+All four releases of the PRD are implemented: **Release 1 (Solo)**, one operator running
+their own deployment, **Release 2 (Team)**, a second person invited with a limited role
+and an AI agent able to operate the project, **Release 3 (Hosted forms)**, collecting
+from a shared link with no client code at all, and **Release 4 (Notifications)**, telling
+Slack when a response arrives.
 
 - Email-and-password sign-in for a single Admin account provisioned from configuration.
 - Projects, each holding feedback databases and project-owned API keys.
@@ -70,6 +71,21 @@ And from Release 3:
   from the link, and a `?source=` recorded with the response.
 - The same submission intents, validation, retry contract and versioning as the API,
   so a response looks identical whichever way it arrived.
+
+And from Release 4:
+
+- Slack notifications per feedback database, through an incoming webhook. One required
+  input, a test-message button to prove it before you trust it, and a status line that
+  says what Slack refused when something breaks.
+- Answers in the message by default, the collected email address behind its own opt-in,
+  and a link-only mode that sends no answer content at all.
+- Optional heading, channel, bot name and icon, with a plain note about which of those a
+  Slack app webhook silently ignores.
+- Delivery that cannot lose feedback: the submission is stored first, the notification is
+  queued in the same transaction, and a worker retries with backoff. Slack being down,
+  throttling or deleted changes nothing a respondent sees.
+- Answers a respondent typed are escaped, so nobody can make your feedback form ping a
+  whole workspace.
 
 See [`docs/DECISIONS.md`](docs/DECISIONS.md) for every technical choice and its
 reasoning.

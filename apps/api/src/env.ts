@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DEFAULT_SLACK_WEBHOOK_ORIGIN } from '@inlet/shared';
 
 /**
  * Deployment configuration (PRD section 12.6).
@@ -83,6 +84,21 @@ const envSchema = z.object({
    */
   INLET_MALWARE_SCAN_REQUIRED: bool.default(false),
 
+  /**
+   * Which origins a Slack notification may be POSTed to (FR-163).
+   *
+   * An exact-origin allowlist is the whole answer to server-side request forgery for
+   * this feature rather than a mitigation of it: an operator-supplied URL whose origin
+   * is not on this list never receives a request, so there is no private-address
+   * denylist to get wrong and no DNS-rebinding window to close.
+   *
+   * Configurable rather than hard-coded so a deployment can target a Slack-compatible
+   * relay deliberately, and so the tests can point at a local fake. Widening it is a
+   * deliberate act with a stated cost: every origin here is somewhere this server can be
+   * made to send a request.
+   */
+  INLET_SLACK_WEBHOOK_ORIGINS: z.string().default(DEFAULT_SLACK_WEBHOOK_ORIGIN),
+
   /** Directory holding the built management interface. Empty disables SPA serving. */
   INLET_WEB_DIST: z.string().default(''),
 
@@ -93,7 +109,10 @@ const envSchema = z.object({
   INLET_DISABLE_RATE_LIMITS: bool.default(false),
 });
 
-export type Env = z.infer<typeof envSchema> & { trustProxy: boolean | number | string[] };
+export type Env = z.infer<typeof envSchema> & {
+  trustProxy: boolean | number | string[];
+  slackWebhookOrigins: string[];
+};
 
 let cached: Env | undefined;
 
@@ -107,7 +126,11 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
   if (env.NODE_ENV !== 'test' && env.INLET_DISABLE_RATE_LIMITS) {
     throw new Error('INLET_DISABLE_RATE_LIMITS is only honored when NODE_ENV=test.');
   }
-  return { ...env, trustProxy: parseTrustProxy(env.INLET_TRUSTED_PROXIES) };
+  return {
+    ...env,
+    trustProxy: parseTrustProxy(env.INLET_TRUSTED_PROXIES),
+    slackWebhookOrigins: parseOrigins(env.INLET_SLACK_WEBHOOK_ORIGINS),
+  };
 }
 
 export function env(): Env {
@@ -118,6 +141,21 @@ export function env(): Env {
 /** Only used by tests that build an app with a bespoke configuration. */
 export function resetEnvCache(): void {
   cached = undefined;
+}
+
+/** Normalises the allowlist to origins, so a trailing path in configuration cannot widen it. */
+export function parseOrigins(raw: string): string[] {
+  return raw
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .map((entry) => {
+      try {
+        return new URL(entry).origin;
+      } catch {
+        throw new Error(`INLET_SLACK_WEBHOOK_ORIGINS contains an invalid origin: ${entry}`);
+      }
+    });
 }
 
 export function parseTrustProxy(raw: string): boolean | number | string[] {

@@ -71,6 +71,13 @@ export const ERROR_STATUS = {
   invitation_already_redeemed: 409,
   last_admin_removal: 409,
 
+  // --- Notifications -------------------------------------------------------
+  /**
+   * Slack refused a message. The Slack error string travels in the message and the
+   * details, because that is what tells an operator what to fix.
+   */
+  slack_delivery_failed: 502,
+
   // --- Platform ------------------------------------------------------------
   rate_limit_exceeded: 429,
   internal_error: 500,

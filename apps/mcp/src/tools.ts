@@ -4,6 +4,8 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import {
   BRANDING_LIMITS,
   COLOR_SCHEMES,
+  NOTIFICATION_LIMITS,
+  SLACK_CONTENT_LEVELS,
   CORNER_RADII,
   EMBEDDING_MODES,
   TYPEFACES,
@@ -817,6 +819,99 @@ export function registerTools(server: McpServer, client: InletClient): void {
             'POST',
             `/v1/feedback-databases/${id}/hosted-form/rotate-slug`,
           ),
+        );
+      }),
+  );
+
+  // --- Slack notifications (FR-167) ---------------------------------------
+
+  server.registerTool(
+    'get_slack_notifications',
+    {
+      title: 'Read the Slack notification settings',
+      description:
+        'Whether a feedback database posts to Slack when a response arrives, and how the message is shaped. The webhook URL itself is never returned in full: only whether one is saved and a masked hint. Also reports the last delivery, the last Slack error, and how many notifications gave up.',
+      inputSchema: { databaseId },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ databaseId: id }) =>
+      guard(async () =>
+        json(await client.request('GET', `/v1/feedback-databases/${id}/slack-notifications`)),
+      ),
+  );
+
+  server.registerTool(
+    'update_slack_notifications',
+    {
+      title: 'Update the Slack notification settings',
+      description:
+        'Switches notifications on or off and shapes the message. Only the fields you pass change.\n\nThe webhook URL is deliberately not settable here. A secret server key can already read and export everything, but a webhook it installed would keep delivering after the key was revoked, so installing one requires a signed-in person. Ask the operator to paste the URL on the Notify tab, then use this to configure the rest.',
+      inputSchema: {
+        databaseId,
+        enabled: z
+          .boolean()
+          .optional()
+          .describe('Cannot be switched on until a webhook URL has been saved by a person.'),
+        contentLevel: z
+          .enum(SLACK_CONTENT_LEVELS)
+          .optional()
+          .describe(
+            'How much of a response the message carries. "link_only" sends no answer content at all. "answers" sends the answers but withholds any collected email address. "answers_with_email" sends the address too. Slack keeps its own copy of whatever is sent, and deleting a response in Inlet does not remove a message already delivered, so raising this level is a decision to make with the operator rather than for them.',
+          ),
+        messageTitle: z
+          .string()
+          .max(NOTIFICATION_LIMITS.messageTitleMaxLength)
+          .nullable()
+          .optional()
+          .describe('Replaces the default heading. May contain Slack mention syntax such as <!here>.'),
+        channel: z
+          .string()
+          .nullable()
+          .optional()
+          .describe(
+            'A channel like #feedback or a person like @someone. Honoured by legacy custom integration webhooks and silently ignored by Slack app webhooks.',
+          ),
+        username: z.string().nullable().optional(),
+        iconEmoji: z.string().nullable().optional().describe('An emoji name like :inbox_tray:.'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ databaseId: id, ...patch }) =>
+      guard(async () => {
+        const body = Object.fromEntries(
+          Object.entries(patch).filter(([, value]) => value !== undefined),
+        );
+        if (Object.keys(body).length === 0) {
+          throw new InletError(400, 'validation_failed', 'Pass at least one setting to change.');
+        }
+        return json(
+          await client.request('PATCH', `/v1/feedback-databases/${id}/slack-notifications`, body),
+        );
+      }),
+  );
+
+  server.registerTool(
+    'send_slack_test_message',
+    {
+      title: 'Send a test message to Slack',
+      description:
+        'Posts a real message into the operator\u2019s Slack channel, using the saved settings, and reports what Slack said. The content is placeholder text rather than a real response. This is the only tool here that reaches a third party and the only one whose effect other people see, so it asks for the feedback database\u2019s name as confirmation.',
+      inputSchema: {
+        databaseId,
+        confirm: z
+          .string()
+          .describe('The feedback database\u2019s exact name, as get_feedback_database reports it.'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    },
+    async ({ databaseId: id, confirm }) =>
+      guard(async () => {
+        const database = (await client.request('GET', `/v1/feedback-databases/${id}`)) as {
+          name: string;
+        };
+        assertConfirmed(database.name, confirm);
+        return json(
+          await client.request('POST', `/v1/feedback-databases/${id}/slack-notifications/test`),
         );
       }),
   );

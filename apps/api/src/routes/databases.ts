@@ -1,8 +1,13 @@
 import { z } from 'zod';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
-import { BRANDING_LIMITS, LIMITS, validateParsedTemplate } from '@inlet/shared';
+import { and, count, eq } from 'drizzle-orm';
+import { BRANDING_LIMITS, LIMITS, maskWebhookUrl, validateParsedTemplate } from '@inlet/shared';
 import type { AppContext } from '../context.js';
-import type { HostedFormRow } from '../db/schema.js';
+import {
+  notificationDeliveries,
+  type HostedFormRow,
+  type SlackNotificationRow,
+} from '../db/schema.js';
 import { apiError } from '../lib/errors.js';
 import { requireDatabase } from '../services/access.js';
 import { requireManagementPrincipal } from '../services/principal.js';
@@ -29,6 +34,11 @@ import {
   uploadLogo,
 } from '../services/hosted-forms.js';
 import { deletionImpact } from '../services/submissions.js';
+import {
+  getSlackNotifications,
+  sendTestMessage,
+  updateSlackNotifications,
+} from '../services/notifications.js';
 import { EXPORT_NOTICE } from '../services/export.js';
 import {
   databaseIdParam,
@@ -41,6 +51,9 @@ import {
   hostedFormSchema,
   okSchema,
   publishBodySchema,
+  slackNotificationsSchema,
+  slackTestResultSchema,
+  updateSlackNotificationsBodySchema,
   renameDatabaseBodySchema,
   rollbackBodySchema,
   saveDraftBodySchema,
@@ -458,4 +471,132 @@ export function hostedFormRoutes(ctx: AppContext): FastifyPluginAsyncZod {
       },
     );
   };
+}
+
+/**
+ * Slack notification settings (FR-155, FR-167).
+ *
+ * Mounted on the feedback database and gated like the form draft, because deciding that
+ * every response leaves the building for a Slack channel is a Creator's decision, not a
+ * Viewer's.
+ *
+ * One asymmetry with every other settings route in the product: saving the webhook URL
+ * needs a signed-in person, not a secret server key. A leaked key can already read and
+ * export everything, but a webhook it installs keeps delivering after the key is
+ * revoked, which turns read access into persistence. Everything else here stays open to
+ * a key, so MCP can still read the settings and change the harmless fields.
+ */
+export function slackNotificationRoutes(ctx: AppContext): FastifyPluginAsyncZod {
+  const view = async (row: SlackNotificationRow) => ({
+    feedbackDatabaseId: row.feedbackDatabaseId,
+    enabled: row.enabled,
+    webhookConfigured: row.webhookUrl !== null,
+    webhookUrlMasked: row.webhookUrl ? maskWebhookUrl(row.webhookUrl) : null,
+    contentLevel: row.contentLevel,
+    messageTitle: row.messageTitle,
+    channel: row.channel,
+    username: row.username,
+    iconEmoji: row.iconEmoji,
+    lastDeliveryAt: row.lastDeliveryAt,
+    lastErrorAt: row.lastErrorAt,
+    lastError: row.lastError,
+    failedCount: await failedDeliveryCount(ctx, row.feedbackDatabaseId),
+    updatedAt: row.updatedAt,
+  });
+
+  return async (app) => {
+    app.get(
+      '/:databaseId/slack-notifications',
+      {
+        schema: {
+          tags: ['Slack notifications'],
+          summary: 'Read the Slack notification settings',
+          description:
+            'The webhook URL is never returned. `webhookUrlMasked` carries the host and last four characters so an operator can confirm which webhook is saved.',
+          params: databaseIdParam,
+          response: { 200: slackNotificationsSchema, ...errorsFor(401, 403, 404) },
+        },
+      },
+      async (request) => {
+        const principal = await requireManagementPrincipal(ctx, request);
+        await requireDatabase(ctx.db, principal, request.params.databaseId, 'creator');
+        return view(await getSlackNotifications(ctx, request.params.databaseId));
+      },
+    );
+
+    app.patch(
+      '/:databaseId/slack-notifications',
+      {
+        schema: {
+          tags: ['Slack notifications'],
+          summary: 'Change the Slack notification settings',
+          description:
+            'Every field is optional; only what is sent changes. Setting `webhookUrl` requires a signed-in session rather than an API key. Sending `webhookUrl: null` clears it and switches notifications off.',
+          params: databaseIdParam,
+          body: updateSlackNotificationsBodySchema,
+          response: { 200: slackNotificationsSchema, ...errorsFor(400, 401, 403, 404) },
+        },
+      },
+      async (request) => {
+        const principal = await requireManagementPrincipal(ctx, request);
+        await requireDatabase(ctx.db, principal, request.params.databaseId, 'creator');
+
+        if (request.body.webhookUrl !== undefined && principal.kind !== 'user') {
+          throw apiError(
+            'forbidden',
+            'A Slack webhook URL can only be set by a signed-in Admin or Creator, not with an API key.',
+          );
+        }
+
+        return view(
+          await updateSlackNotifications(ctx, request.params.databaseId, request.body),
+        );
+      },
+    );
+
+    app.post(
+      '/:databaseId/slack-notifications/test',
+      {
+        // This route makes the server issue an outbound request on demand. The origin
+        // allowlist means it can only ever reach Slack, and this means it cannot be
+        // leaned on to flood a channel.
+        config: { rateLimit: { max: 6, timeWindow: '1 minute' } },
+        schema: {
+          tags: ['Slack notifications'],
+          summary: 'Send a test message to Slack',
+          description:
+            'Delivers a sample message immediately using the saved settings and reports what Slack said. The content is placeholder text, never a real response, so testing an integration never exposes a respondent.',
+          params: databaseIdParam,
+          response: {
+            200: slackTestResultSchema,
+            ...errorsFor(400, 401, 403, 404, 429, 502),
+          },
+        },
+      },
+      async (request) => {
+        const principal = await requireManagementPrincipal(ctx, request);
+        const access = await requireDatabase(
+          ctx.db,
+          principal,
+          request.params.databaseId,
+          'creator',
+        );
+        return sendTestMessage(ctx, request.params.databaseId, access.database.name);
+      },
+    );
+  };
+}
+
+/** FR-169: how many notifications gave up, so the panel can say so. */
+async function failedDeliveryCount(ctx: AppContext, databaseId: string): Promise<number> {
+  const rows = await ctx.db
+    .select({ total: count() })
+    .from(notificationDeliveries)
+    .where(
+      and(
+        eq(notificationDeliveries.feedbackDatabaseId, databaseId),
+        eq(notificationDeliveries.status, 'failed'),
+      ),
+    );
+  return rows[0]?.total ?? 0;
 }

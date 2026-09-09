@@ -461,6 +461,7 @@
                   "invitation_expired",
                   "invitation_already_redeemed",
                   "last_admin_removal",
+                  "slack_delivery_failed",
                   "rate_limit_exceeded",
                   "internal_error"
                 ],
@@ -1796,6 +1797,106 @@
           "behaviour"
         ]
       },
+      "SlackNotificationsInput": {
+        "type": "object",
+        "properties": {
+          "feedbackDatabaseId": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "webhookConfigured": {
+            "type": "boolean",
+            "description": "Whether a webhook URL is saved."
+          },
+          "webhookUrlMasked": {
+            "description": "Host and last four characters only. The URL itself is never returned.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "contentLevel": {
+            "type": "string",
+            "enum": [
+              "link_only",
+              "answers",
+              "answers_with_email"
+            ]
+          },
+          "messageTitle": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "channel": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "iconEmoji": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lastDeliveryAt": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lastErrorAt": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lastError": {
+            "description": "What Slack said about the last failure.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "failedCount": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Notifications that gave up and will not be retried."
+          },
+          "updatedAt": {}
+        },
+        "required": [
+          "feedbackDatabaseId",
+          "enabled",
+          "webhookConfigured",
+          "webhookUrlMasked",
+          "contentLevel",
+          "messageTitle",
+          "channel",
+          "username",
+          "iconEmoji",
+          "lastDeliveryAt",
+          "lastErrorAt",
+          "lastError",
+          "failedCount",
+          "updatedAt"
+        ]
+      },
       "FormDefinition": {
         "type": "object",
         "properties": {
@@ -2233,6 +2334,7 @@
                   "invitation_expired",
                   "invitation_already_redeemed",
                   "last_admin_removal",
+                  "slack_delivery_failed",
                   "rate_limit_exceeded",
                   "internal_error"
                 ],
@@ -3671,6 +3773,116 @@
           "branding",
           "copy",
           "behaviour"
+        ],
+        "additionalProperties": false
+      },
+      "SlackNotifications": {
+        "type": "object",
+        "properties": {
+          "feedbackDatabaseId": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "webhookConfigured": {
+            "type": "boolean",
+            "description": "Whether a webhook URL is saved."
+          },
+          "webhookUrlMasked": {
+            "description": "Host and last four characters only. The URL itself is never returned.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "contentLevel": {
+            "type": "string",
+            "enum": [
+              "link_only",
+              "answers",
+              "answers_with_email"
+            ]
+          },
+          "messageTitle": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "channel": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "iconEmoji": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lastDeliveryAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lastErrorAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lastError": {
+            "description": "What Slack said about the last failure.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "failedCount": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Notifications that gave up and will not be retried."
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "feedbackDatabaseId",
+          "enabled",
+          "webhookConfigured",
+          "webhookUrlMasked",
+          "contentLevel",
+          "messageTitle",
+          "channel",
+          "username",
+          "iconEmoji",
+          "lastDeliveryAt",
+          "lastErrorAt",
+          "lastError",
+          "failedCount",
+          "updatedAt"
         ],
         "additionalProperties": false
       }
@@ -7126,6 +7338,323 @@
             }
           },
           "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/feedback-databases/{databaseId}/slack-notifications": {
+      "get": {
+        "summary": "Read the Slack notification settings",
+        "tags": [
+          "Slack notifications"
+        ],
+        "description": "The webhook URL is never returned. `webhookUrlMasked` carries the host and last four characters so an operator can confirm which webhook is saved.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackNotifications"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Change the Slack notification settings",
+        "tags": [
+          "Slack notifications"
+        ],
+        "description": "Every field is optional; only what is sent changes. Setting `webhookUrl` requires a signed-in session rather than an API key. Sending `webhookUrl: null` clears it and switches notifications off.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "description": "Cannot be true without a webhook URL.",
+                    "type": "boolean"
+                  },
+                  "webhookUrl": {
+                    "description": "Write-only. Null clears it and switches notifications off. Never returned by any endpoint.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "contentLevel": {
+                    "description": "How much of a response the message carries. \"link_only\" sends no answer content at all; \"answers\" includes the answers but withholds a collected email address; \"answers_with_email\" includes it. Slack keeps its own copy of whatever is sent.",
+                    "type": "string",
+                    "enum": [
+                      "link_only",
+                      "answers",
+                      "answers_with_email"
+                    ]
+                  },
+                  "messageTitle": {
+                    "description": "Replaces the default heading. May contain Slack mention syntax.",
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 120
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "channel": {
+                    "description": "Legacy custom integration webhooks only; Slack app webhooks ignore it.",
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 80,
+                        "pattern": "^[#@][^\\s<>|]+$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "username": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 80
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "iconEmoji": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 60,
+                        "pattern": "^:[a-z0-9_+-]+:$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackNotifications"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/feedback-databases/{databaseId}/slack-notifications/test": {
+      "post": {
+        "summary": "Send a test message to Slack",
+        "tags": [
+          "Slack notifications"
+        ],
+        "description": "Delivers a sample message immediately using the saved settings and reports what Slack said. The content is placeholder text, never a real response, so testing an integration never exposes a respondent.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "delivered": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    }
+                  },
+                  "required": [
+                    "delivered"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
             "description": "Default Response",
             "content": {
               "application/json": {

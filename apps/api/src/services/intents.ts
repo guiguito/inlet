@@ -21,6 +21,7 @@ import { apiError, errors } from '../lib/errors.js';
 import { payloadHash, randomToken, safeEqual, sha256 } from '../lib/crypto.js';
 import { Storage } from '../lib/storage.js';
 import { getVersionById, getVersionByNumber, requireActiveVersion } from './forms.js';
+import { enqueueNotification } from './notifications.js';
 
 /**
  * Submission intents: the whole retry contract of section 9.2.
@@ -225,6 +226,33 @@ export async function finalizeIntent(
       .where(eq(submissionIntents.id, locked.id));
 
     ctx.log.debug({ submissionId, boundKeys: boundKeys.length }, 'submission finalized');
+
+    /**
+     * FR-158: queue a Slack notification, in this transaction and on this path only.
+     *
+     * Here rather than after the commit for two reasons. The duplicate path returned from
+     * `replayFinalized` long before this line, so a retried finalization structurally
+     * cannot enqueue a second time; and a rollback anywhere above discards the queue row
+     * with the submission, so there is never a notification for a submission that does
+     * not exist. It is also the one place both the client API and the hosted form pass
+     * through, which is what keeps this from becoming a second code path.
+     *
+     * The savepoint is load-bearing, not decoration. Postgres aborts a whole transaction
+     * once any statement in it errors, so a plain try/catch around a broken notifications
+     * query would still lose the submission. A nested transaction is a savepoint, and
+     * rolling back to it leaves the submission intact. A notification is never worth a
+     * lost piece of feedback.
+     */
+    try {
+      await tx.transaction(async (inner) => {
+        await enqueueNotification(inner, database.id, created.id);
+      });
+    } catch (error) {
+      ctx.log.warn(
+        { err: error, submissionId: created.id },
+        'slack notification could not be queued; the submission is stored',
+      );
+    }
 
     return {
       submissionId: created.id,

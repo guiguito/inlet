@@ -1,7 +1,8 @@
 # Inlet MCP
 
 `inlet-mcp` lets an AI agent operate one Inlet project: read and export feedback, build
-and publish forms, share a form as a link, and manage who has access.
+and publish forms, share a form as a link, set up Slack notifications, and manage who has
+access.
 
 It authenticates with a **secret server key**, so it acts with project Admin authority
 inside exactly one project and cannot reach outside it. Per-user MCP is not part of
@@ -75,6 +76,7 @@ and none to edit a submission, because submissions are immutable.
 | `export_submissions` | Everything as JSON or CSV. |
 | `get_screenshot` | The image itself, as WebP. |
 | `get_deletion_impact` | What deleting a feedback database would destroy. |
+| `get_slack_notifications` | Whether a feedback database posts to Slack, and how the message is shaped. The webhook URL comes back masked, never in full. |
 | `get_hosted_form` | The public link for a feedback database, its branding and its embedding rules. Creates a disabled one on first read, so this is how you find out what the address would be. |
 | `list_members` | Who has access at a scope, with the effective role resolved. |
 | `list_invitations` | Pending, redeemed, revoked and expired invitations. |
@@ -89,6 +91,7 @@ and none to edit a submission, because submissions are immutable.
 | `publish_form` | Cuts an immutable version from the draft and activates it. |
 | `unpublish_form`, `rollback_form` | Stop collecting, or reactivate an earlier version. |
 | `create_submission_intent`, `submit_feedback` | Submit a response, for checking a form works end to end. |
+| `update_slack_notifications` | Switches Slack notifications on or off and shapes the message. Cannot set the webhook URL: a webhook installed with a key would outlive the key's revocation, so a person has to paste it. |
 | `update_hosted_form` | Enables the public link, and sets its address, branding, wording and embedding rules. Only the fields you pass change. |
 | `invite_member` | A single-use expiring link for a role at a scope. |
 | `set_member_role` | A project role, or an assignment on one feedback database. |
@@ -106,6 +109,7 @@ HTTP endpoints for those.
 | `remove_member` | The member's exact email address. |
 | `revoke_invitation` | None; the link simply stops working. |
 | `rotate_hosted_form_address` | The hosted form's current address. |
+| `send_slack_test_message` | The feedback database's exact name. Not destructive, but the only tool that posts into a channel other people read. |
 
 Each is annotated `destructiveHint` so a client can flag it, and each requires the
 caller to echo the name of what it is about to destroy. That is deliberate: an agent
