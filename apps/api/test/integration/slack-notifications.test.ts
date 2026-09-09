@@ -691,6 +691,9 @@ describe('slack notifications', () => {
     const posted = slack.received[0]!;
     expect(posted.raw).toContain('Example question');
     expect(posted.raw).toContain('Test message from Inlet');
+    expect(posted.raw).toContain('a test message');
+    // A test message belongs to no published version, so it does not claim one.
+    expect(posted.raw).not.toContain('Version');
     // Never a real response, so testing an integration cannot expose a respondent.
     expect(posted.raw).not.toContain('card freeze toggle');
     expect((await settings())?.lastDeliveryAt).not.toBeNull();

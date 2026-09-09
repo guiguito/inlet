@@ -213,9 +213,16 @@ describe('buildSlackMessage', () => {
 
   it('carries the answers, with the labels the respondent saw', () => {
     const body = serialized();
-    expect(body).toContain('How do you feel about the app?');
+    // The question is bold so it is legible against its answer; the answer is not.
+    expect(body).toContain('*How do you feel about the app?*');
     expect(body).toContain('😍 Love it');
     expect(body).toContain('The card freeze toggle takes three taps.');
+  });
+
+  it('omits the version line for a message that belongs to no version', () => {
+    const body = serialized({ formVersion: null, via: 'a test message' });
+    expect(body).not.toContain('Version');
+    expect(body).toContain('a test message');
   });
 
   it('withholds the email address until that is opted into specifically', () => {
@@ -354,6 +361,19 @@ describe('buildSlackMessage', () => {
     expect(body).toContain('2026-09-09 14:02 UTC');
     expect(body).toContain('Version 3');
     expect(body).toContain('via the shared link');
+  });
+
+  it('reports the screenshot count once, not twice', () => {
+    // With the answers shown, the screenshot answer already says how many there are.
+    const withAnswers = buildSlackMessage(input());
+    const metadata = JSON.stringify(withAnswers.blocks.at(-1));
+    expect(metadata).not.toContain('screenshot');
+
+    // With only a link, the count is the one place it could appear.
+    const linkOnly = buildSlackMessage(
+      input({ settings: { ...input().settings, contentLevel: 'link_only' } }),
+    );
+    expect(JSON.stringify(linkOnly.blocks.at(-1))).toContain('2 screenshots');
   });
 
   it('omits an unset override rather than sending null', () => {

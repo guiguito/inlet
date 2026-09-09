@@ -31,7 +31,8 @@ export type SlackMessageInput = {
   databaseId: string;
   submissionId: string;
   submissionUrl: string;
-  formVersion: number;
+  /** Null for a test message, which belongs to no version. */
+  formVersion: number | null;
   createdAt: Date;
   answers: StoredAnswers;
   definition: FormDefinition | undefined;
@@ -73,7 +74,9 @@ export function buildSlackMessage(input: SlackMessageInput): SlackMessage {
     blocks.push(context(`+ ${hidden} more ${hidden === 1 ? 'answer' : 'answers'} — open in Inlet`));
   }
 
-  blocks.push(context(metadataLine(input)));
+  // The screenshot count belongs in the metadata line only when the answers are not
+  // there to report it themselves, or the message says "2 screenshots" twice.
+  blocks.push(context(metadataLine(input, fields.length === 0)));
 
   const message: SlackMessage = {
     // The fallback, and therefore what Slack shows on a lock screen and in the channel
@@ -97,17 +100,24 @@ export function buildSlackMessage(input: SlackMessageInput): SlackMessage {
  * Labels come from the submission's own pinned version, so a question renamed since
  * carries the wording the respondent actually saw (FR-065).
  */
-function answerFields(input: SlackMessageInput): { type: 'plain_text'; text: string }[] {
+function answerFields(input: SlackMessageInput): { type: 'mrkdwn'; text: string }[] {
   return shownQuestions(input).map((question) => {
-    const label = truncateByCodePoint(question.label, 80);
+    const label = escapeSlackText(truncateByCodePoint(question.label, 80));
     const value = answerText(input.answers[question.id], input.definition, input.settings.contentLevel);
-    // plain_text, so even if the escaping above were ever removed Slack would not parse a
-    // mention out of respondent-authored text. Belt and braces on the one boundary in
-    // this feature where a stranger controls the input.
+    /*
+     * `mrkdwn` rather than `plain_text`, so the question can be bold and told apart from
+     * the answer. In a message with five answers, uniform grey text is unreadable.
+     *
+     * The escaping is what makes this safe, not the block type: `escapeSlackText` has
+     * already turned every `&`, `<` and `>` in respondent text into an entity, so a
+     * mention or a link cannot survive into here. What `mrkdwn` additionally allows is an
+     * asterisk or a backtick in an answer rendering as emphasis, which is cosmetic and
+     * cannot address anybody.
+     */
     return {
-      type: 'plain_text' as const,
+      type: 'mrkdwn' as const,
       text: truncateByCodePoint(
-        `${label}\n${value === '' ? '—' : value}`,
+        `*${label}*\n${value === '' ? '—' : value}`,
         NOTIFICATION_LIMITS.slackFieldTextMaxLength,
       ),
     };
@@ -167,10 +177,11 @@ function answerText(
   );
 }
 
-function metadataLine(input: SlackMessageInput): string {
-  const parts = [`Version ${input.formVersion}`];
+function metadataLine(input: SlackMessageInput, includeAttachments: boolean): string {
+  const parts: string[] = [];
+  if (input.formVersion !== null) parts.push(`Version ${input.formVersion}`);
   if (input.via) parts.push(input.via);
-  if (input.attachmentCount > 0) {
+  if (includeAttachments && input.attachmentCount > 0) {
     parts.push(
       `${input.attachmentCount} ${input.attachmentCount === 1 ? 'screenshot' : 'screenshots'}`,
     );

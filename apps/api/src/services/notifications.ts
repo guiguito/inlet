@@ -565,7 +565,8 @@ export async function sendTestMessage(
     databaseId,
     submissionId: 'sub_example',
     submissionUrl: `${ctx.env.INLET_PUBLIC_URL.replace(/\/$/, '')}/databases/${databaseId}`,
-    formVersion: 0,
+    // A test message belongs to no published version, so it does not claim one.
+    formVersion: null,
     createdAt: new Date(),
     answers: { el_example000: { type: 'text', value: `Example answer. ${note}` } },
     definition: {
@@ -586,7 +587,7 @@ export async function sendTestMessage(
       ],
     },
     attachmentCount: 0,
-    via: null,
+    via: 'a test message',
     settings: {
       ...settings,
       messageTitle: settings.messageTitle ?? `Test message from Inlet · ${databaseName}`,
