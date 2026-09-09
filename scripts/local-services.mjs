@@ -144,9 +144,19 @@ export async function startMinio(options = {}) {
   const binary = await ensureMinioBinary();
   await fs.mkdir(dataDir, { recursive: true });
 
+  // Bound to loopback, not every interface. These are development credentials, and
+  // Inlet reaches the store over 127.0.0.1, so there is no reason for a local object
+  // store holding submitted screenshots to answer the network.
   const child = spawn(
     binary,
-    ['server', dataDir, '--address', `:${config.minioPort}`, '--console-address', `:${config.minioConsolePort}`],
+    [
+      'server',
+      dataDir,
+      '--address',
+      `127.0.0.1:${config.minioPort}`,
+      '--console-address',
+      `127.0.0.1:${config.minioConsolePort}`,
+    ],
     {
       env: {
         ...process.env,
