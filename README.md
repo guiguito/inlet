@@ -66,7 +66,7 @@ hands it back as JSON or CSV whenever you ask.
 Requires Docker.
 
 ```bash
-git clone https://github.com/OWNER/inlet.git
+git clone https://github.com/guiguito/inlet.git
 cd inlet
 cp .env.example .env
 ```

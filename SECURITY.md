@@ -3,7 +3,7 @@
 ## Reporting a vulnerability
 
 **Please do not open a public issue.** Report it privately through
-[GitHub's private vulnerability reporting](https://github.com/OWNER/inlet/security/advisories/new),
+[GitHub's private vulnerability reporting](https://github.com/guiguito/inlet/security/advisories/new),
 or by email to the address on the maintainer's GitHub profile.
 
 Useful things to include: what you did, what happened, what you expected, and the

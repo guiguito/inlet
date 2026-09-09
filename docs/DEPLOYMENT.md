@@ -36,7 +36,7 @@ meant as a working starting point, not a hardened production deployment — read
 [Configuration](#configuration) before exposing it.
 
 ```bash
-git clone https://github.com/OWNER/inlet.git
+git clone https://github.com/guiguito/inlet.git
 cd inlet
 cp .env.example .env
 ```

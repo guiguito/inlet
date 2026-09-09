@@ -7,11 +7,11 @@
   "author": "Guilhem Duch\u00e9",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/OWNER/inlet.git"
+    "url": "git+https://github.com/guiguito/inlet.git"
   },
-  "homepage": "https://github.com/OWNER/inlet#readme",
+  "homepage": "https://github.com/guiguito/inlet#readme",
   "bugs": {
-    "url": "https://github.com/OWNER/inlet/issues"
+    "url": "https://github.com/guiguito/inlet/issues"
   },
   "keywords": [
     "feedback",
