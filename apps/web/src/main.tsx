@@ -7,7 +7,17 @@ import { App } from './App';
 import { initTheme } from './components/theme-toggle';
 import './index.css';
 
-initTheme();
+/**
+ * FR-136 and FR-144: a hosted form reads no browser storage, so the management
+ * interface's stored theme is not consulted there, and the class that carries it is
+ * removed. A hosted form's colours are the operator's branding and nothing else.
+ */
+if (window.location.pathname.startsWith('/f/')) {
+  document.documentElement.classList.remove('dark');
+  document.documentElement.classList.add('inlet-hosted');
+} else {
+  initTheme();
+}
 
 const queryClient = new QueryClient({
   defaultOptions: {

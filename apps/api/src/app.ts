@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
 import cookie from '@fastify/cookie';
@@ -16,11 +17,18 @@ import {
   validatorCompiler,
 } from 'fastify-type-provider-zod';
 import { LIMITS, statusForErrorCode, type ErrorCode, type ErrorDetail } from '@inlet/shared';
+import {
+  frameHeaders,
+  hostedFormStyle,
+  resolveSlug,
+  type ResolvedHostedForm,
+} from './services/hosted-forms.js';
 import type { AppContext } from './context.js';
 import { ApiError } from './lib/errors.js';
 import { authRoutes } from './routes/auth.js';
 import { clientRoutes } from './routes/client.js';
-import { databaseRoutes } from './routes/databases.js';
+import { databaseRoutes, hostedFormRoutes } from './routes/databases.js';
+import { hostedRoutes } from './routes/hosted.js';
 import { memberRoutes } from './routes/members.js';
 import { projectRoutes } from './routes/projects.js';
 import { attachmentRoutes, submissionRoutes } from './routes/submissions.js';
@@ -88,6 +96,8 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
       await v1.register(clientRoutes(ctx), { prefix: '/feedback-databases' });
       await v1.register(submissionRoutes(ctx), { prefix: '/feedback-databases' });
       await v1.register(attachmentRoutes(ctx), { prefix: '/attachments' });
+      await v1.register(hostedFormRoutes(ctx), { prefix: '/feedback-databases' });
+      await v1.register(hostedRoutes(ctx), { prefix: '/hosted' });
       await v1.register(memberRoutes(ctx));
     },
     { prefix: '/v1' },
@@ -215,6 +225,77 @@ function mapFrameworkError(
 }
 
 /**
+ * The hosted form page (FR-130, FR-135, FR-138).
+ *
+ * A route of its own rather than a fall-through to the single-page app, because two
+ * things have to happen per slug before any HTML is sent: the framing headers the
+ * operator chose, which a browser only honours on the document itself, and the
+ * branding, injected so the first paint is already theirs.
+ */
+async function registerHostedPage(
+  app: FastifyInstance,
+  ctx: AppContext,
+  root: string,
+): Promise<void> {
+  const shell = await readFile(path.join(root, 'index.html'), 'utf8');
+
+  app.get<{ Params: { slug: string } }>(
+    '/f/:slug',
+    { schema: { hide: true } },
+    async (request, reply) => {
+      reply.type('text/html; charset=utf-8').header('cache-control', 'no-store');
+
+      let resolved;
+      try {
+        resolved = await resolveSlug(ctx, request.params.slug);
+      } catch {
+        // An unknown address still renders the page, which says so civilly rather
+        // than showing a browser error. Framing is denied, since there is no
+        // operator choice to honour.
+        return reply
+          .code(404)
+          .header('content-security-policy', "frame-ancestors 'self'")
+          .header('x-frame-options', 'SAMEORIGIN')
+          .send(shell.replace('<title>Inlet</title>', '<title>Form not found</title>'));
+      }
+
+      for (const [name, value] of Object.entries(frameHeaders(resolved.hosted))) {
+        reply.header(name, value);
+      }
+
+      return reply.send(hostedShell(shell, resolved));
+    },
+  );
+}
+
+/**
+ * The hosted page's initial HTML.
+ *
+ * Three substitutions on the built shell. The title is the feedback database's name,
+ * because a shared link shows up in a tab and in a chat preview and should say what it
+ * is. The root class swaps the management interface's stored theme for the hosted one,
+ * so the page never paints in a theme the respondent's browser happens to remember.
+ * The style block carries the branding, so the operator's colours are on the first
+ * paint rather than one round trip later (FR-138, FR-144).
+ */
+function hostedShell(shell: string, resolved: ResolvedHostedForm): string {
+  return shell
+    .replace('<title>Inlet</title>', `<title>${escapeHtml(resolved.database.name)}</title>`)
+    .replace('<html lang="en" class="dark">', '<html lang="en" class="inlet-hosted">')
+    .replace('</head>', `<style>${hostedFormStyle(resolved.hosted)}</style></head>`);
+}
+
+/** For the one place a stored name reaches HTML: the hosted page's title. */
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+/**
  * Serves the built management interface from the same origin as the API, so the
  * bundled deployment is one container and the session cookie is first-party.
  *
@@ -232,6 +313,7 @@ async function registerSpa(app: FastifyInstance, ctx: AppContext): Promise<void>
   }
   if (serveSpa) {
     await app.register(fastifyStatic, { root, prefix: '/', wildcard: false });
+    await registerHostedPage(app, ctx, root);
   }
 
   app.setNotFoundHandler((request, reply) => {

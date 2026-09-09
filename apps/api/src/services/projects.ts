@@ -13,6 +13,7 @@ import {
 } from '../db/schema.js';
 import { apiError, errors } from '../lib/errors.js';
 import { attachmentKeysForDatabase, attachmentKeysForProject } from './attachments.js';
+import { logoKeysForDatabase, logoKeysForProject } from './hosted-forms.js';
 import { enqueuePurge } from './purge.js';
 import { countProjectAdmins, type Principal } from './access.js';
 
@@ -120,7 +121,10 @@ export async function deleteProject(
   ctx: AppContext,
   projectId: string,
 ): Promise<{ purgedKeys: number }> {
-  const keys = await attachmentKeysForProject(ctx, projectId);
+  const keys = [
+    ...(await attachmentKeysForProject(ctx, projectId)),
+    ...(await logoKeysForProject(ctx, projectId)),
+  ];
   await ctx.db.transaction(async (tx) => {
     const deleted = await tx
       .delete(projects)
@@ -246,7 +250,10 @@ export async function deleteFeedbackDatabase(
   ctx: AppContext,
   databaseId: string,
 ): Promise<{ purgedKeys: number }> {
-  const keys = await attachmentKeysForDatabase(ctx, databaseId);
+  const keys = [
+    ...(await attachmentKeysForDatabase(ctx, databaseId)),
+    ...(await logoKeysForDatabase(ctx, databaseId)),
+  ];
   await ctx.db.transaction(async (tx) => {
     const deleted = await tx
       .delete(feedbackDatabases)

@@ -1,10 +1,18 @@
 import { z } from 'zod';
 import {
+  BRANDING_LIMITS,
+  COLOR_SCHEMES,
+  CORNER_RADII,
+  EMBEDDING_MODES,
   ERROR_STATUS,
   LIMITS,
-  formDefinitionSchema,
-  answersInputSchema,
   ROLES,
+  TYPEFACES,
+  answersInputSchema,
+  formDefinitionSchema,
+  hexColorSchema,
+  originSchema,
+  slugSchema,
 } from '@inlet/shared';
 
 /**
@@ -271,12 +279,113 @@ export const redeemInvitationBodySchema = z
   })
   .nullish();
 
-// --- Client feedback flow ---------------------------------------------------
-
+/** An element as a client receives it, with the platform limits injected (FR-046). */
 const clientElementSchema = z.looseObject({
   id: z.string(),
   type: z.enum(['title', 'subtitle', 'body_text', 'choice', 'text', 'email', 'screenshot']),
 });
+
+// --- Hosted forms (section 22) ----------------------------------------------
+
+export const slugParam = z.object({ slug: z.string().min(1) });
+export const slugIntentParam = slugParam.extend({ intentId: z.string().min(1) });
+
+const brandingViewSchema = z.object({
+  logoUrl: z.string().nullable().describe('Public, slug-scoped address of the logo.'),
+  logoAlt: z.string().nullable(),
+  logoWidth: z.int().nullable(),
+  logoHeight: z.int().nullable(),
+  accentColor: z.string(),
+  colorScheme: z.enum(COLOR_SCHEMES),
+  cornerRadius: z.enum(CORNER_RADII),
+  typeface: z.enum(TYPEFACES),
+});
+
+/** What the public page receives. A closed form carries no questions (FR-142). */
+export const hostedFormPublicSchema = z.object({
+  slug: z.string(),
+  open: z.boolean().describe('True when the form is enabled and has a published version.'),
+  form: z
+    .object({
+      feedbackDatabaseId: z.string(),
+      formVersion: z.int(),
+      pages: z.array(z.object({ id: z.string(), elements: z.array(clientElementSchema) })),
+    })
+    .nullable(),
+  closedMessage: z.string(),
+  branding: brandingViewSchema,
+  copy: z.object({
+    submitLabel: z.string(),
+    thankYouTitle: z.string(),
+    thankYouBody: z.string(),
+  }),
+  behaviour: z.object({
+    redirectUrl: z.string().nullable(),
+    showProgress: z.boolean(),
+  }),
+});
+
+/** What an operator sees and edits. */
+export const hostedFormSchema = z.object({
+  feedbackDatabaseId: z.string(),
+  slug: z.string(),
+  url: z.string().describe('The address to share, built from INLET_PUBLIC_URL.'),
+  enabled: z.boolean(),
+  accentColor: z.string(),
+  colorScheme: z.enum(COLOR_SCHEMES),
+  cornerRadius: z.enum(CORNER_RADII),
+  typeface: z.enum(TYPEFACES),
+  logoUrl: z.string().nullable(),
+  logoAlt: z.string().nullable(),
+  logoWidth: z.int().nullable(),
+  logoHeight: z.int().nullable(),
+  submitLabel: z.string(),
+  thankYouTitle: z.string(),
+  thankYouBody: z.string(),
+  closedMessage: z.string(),
+  redirectUrl: z.string().nullable(),
+  showProgress: z.boolean(),
+  embedding: z.enum(EMBEDDING_MODES),
+  allowedOrigins: z.array(z.string()),
+  updatedAt: z.date(),
+});
+
+export const updateHostedFormBodySchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    slug: slugSchema.optional().describe('A custom address. Must be unique and not reserved.'),
+    accentColor: hexColorSchema.optional(),
+    colorScheme: z.enum(COLOR_SCHEMES).optional(),
+    cornerRadius: z.enum(CORNER_RADII).optional(),
+    typeface: z.enum(TYPEFACES).optional(),
+    logoAlt: z.string().trim().max(BRANDING_LIMITS.logoAltMaxLength).nullable().optional(),
+    submitLabel: z.string().trim().min(1).max(BRANDING_LIMITS.submitLabelMaxLength).optional(),
+    thankYouTitle: z
+      .string()
+      .trim()
+      .min(1)
+      .max(BRANDING_LIMITS.thankYouTitleMaxLength)
+      .optional(),
+    thankYouBody: z.string().trim().max(BRANDING_LIMITS.thankYouBodyMaxLength).optional(),
+    closedMessage: z.string().trim().min(1).max(BRANDING_LIMITS.closedMessageMaxLength).optional(),
+    redirectUrl: z
+      .string()
+      .trim()
+      .url()
+      .nullable()
+      .optional()
+      .describe('Where to send the respondent after a successful submission.'),
+    showProgress: z.boolean().optional(),
+    embedding: z.enum(EMBEDDING_MODES).optional(),
+    allowedOrigins: z
+      .array(originSchema)
+      .max(BRANDING_LIMITS.allowedOriginsMax)
+      .optional()
+      .describe('Origins allowed to frame the page when embedding is "listed".'),
+  })
+  .strict();
+
+// --- Client feedback flow ---------------------------------------------------
 
 export const clientFormSchema = z.object({
   feedbackDatabaseId: z.string(),
@@ -427,6 +536,8 @@ for (const [id, schema] of Object.entries({
   Member: memberSchema,
   Invitation: invitationSchema,
   InvitationPreview: invitationPreviewSchema,
+  HostedForm: hostedFormSchema,
+  HostedFormPublic: hostedFormPublicSchema,
 })) {
   register(schema, id);
 }

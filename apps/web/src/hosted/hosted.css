@@ -1,0 +1,56 @@
+/**
+ * The hosted form's theme.
+ *
+ * The variables live on the document root rather than on a wrapper element, so the
+ * background reaches the edges of the page and of an iframe of any height, and so the
+ * server can inject the operator's values into the initial HTML and have them apply
+ * before React has run (FR-138, FR-144).
+ *
+ * These are only defaults. The `/f/:slug` route injects a `:root` block later in the
+ * cascade, and the page sets the loaded configuration inline on the root, so both
+ * override what is here.
+ */
+:root {
+  --r-radius: 0.5rem;
+  --r-font: ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --r-bg: #ffffff;
+  --r-surface: #ffffff;
+  --r-text: #18181b;
+  --r-muted: #71717a;
+  --r-border: #e4e4e7;
+  --r-hover: #fafafa;
+  --r-selected-bg: #f4f4f5;
+  --r-selected-border: #a1a1aa;
+  --r-accent: #18181b;
+  --r-accent-contrast: #ffffff;
+  --r-danger: #b91c1c;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --r-bg: #09090b;
+    --r-surface: #18181b;
+    --r-text: #fafafa;
+    --r-muted: #a1a1aa;
+    --r-border: #27272a;
+    --r-hover: #232326;
+    --r-selected-bg: #27272a;
+    --r-selected-border: #52525b;
+    --r-accent: #fafafa;
+    --r-accent-contrast: #18181b;
+    --r-danger: #f87171;
+  }
+}
+
+/* Unlayered on purpose, so it wins over the management interface's base styles. */
+html.inlet-hosted,
+html.inlet-hosted body {
+  background: var(--r-bg);
+  color: var(--r-text);
+  font-family: var(--r-font);
+}
+
+/* An embedded form has no page of its own to fill, so it must not force a scrollbar. */
+html.inlet-hosted body {
+  margin: 0;
+}

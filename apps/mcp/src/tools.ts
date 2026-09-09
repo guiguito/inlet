@@ -1,7 +1,18 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { formDefinitionSchema, ROLES } from '@inlet/shared';
+import {
+  BRANDING_LIMITS,
+  COLOR_SCHEMES,
+  CORNER_RADII,
+  EMBEDDING_MODES,
+  TYPEFACES,
+  formDefinitionSchema,
+  hexColorSchema,
+  originSchema,
+  ROLES,
+  slugSchema,
+} from '@inlet/shared';
 import { InletClient, InletError } from './client.js';
 
 /**
@@ -687,6 +698,127 @@ export function registerTools(server: McpServer, client: InletClient): void {
           ),
         ),
       ),
+  );
+
+  // --- The hosted form (FR-151) -------------------------------------------
+
+  server.registerTool(
+    'get_hosted_form',
+    {
+      title: 'Read the hosted form',
+      description:
+        'The public link for a feedback database, its branding, its wording and its embedding rules. Reading it creates a disabled hosted form with a generated address if there was none, so this is safe to call to find out what the address would be. The hosted form is a second way to collect, beside the client API; both can be used at once.',
+      inputSchema: { databaseId },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ databaseId: id }) =>
+      guard(async () =>
+        json(await client.request('GET', `/v1/feedback-databases/${id}/hosted-form`)),
+      ),
+  );
+
+  server.registerTool(
+    'update_hosted_form',
+    {
+      title: 'Update the hosted form',
+      description:
+        'Enables or disables collection through the link, and sets the address, the branding, the wording and the embedding rules. Only the fields you pass change. Branding is presentation only: it cannot change what is asked, what is validated or what is stored.',
+      inputSchema: {
+        databaseId,
+        enabled: z
+          .boolean()
+          .optional()
+          .describe('Whether the link collects responses. Disabling keeps every setting.'),
+        slug: slugSchema
+          .optional()
+          .describe(
+            'A custom address, lowercase letters, digits and hyphens. Changing it stops the previous link working.',
+          ),
+        accentColor: hexColorSchema
+          .optional()
+          .describe('A hex colour like #C2410C. The readable text colour on it is derived.'),
+        colorScheme: z.enum(COLOR_SCHEMES).optional(),
+        cornerRadius: z.enum(CORNER_RADII).optional(),
+        typeface: z.enum(TYPEFACES).optional(),
+        logoAlt: z
+          .string()
+          .max(BRANDING_LIMITS.logoAltMaxLength)
+          .nullable()
+          .optional()
+          .describe('How the logo reads to a screen reader. Upload the logo itself through the API or the interface.'),
+        submitLabel: z.string().max(BRANDING_LIMITS.submitLabelMaxLength).optional(),
+        thankYouTitle: z.string().max(BRANDING_LIMITS.thankYouTitleMaxLength).optional(),
+        thankYouBody: z.string().max(BRANDING_LIMITS.thankYouBodyMaxLength).optional(),
+        closedMessage: z
+          .string()
+          .max(BRANDING_LIMITS.closedMessageMaxLength)
+          .optional()
+          .describe('Shown when the link is disabled or no version is published.'),
+        redirectUrl: z
+          .string()
+          .url()
+          .nullable()
+          .optional()
+          .describe('Where to send a respondent after a successful submission. Null shows the thank-you message instead.'),
+        showProgress: z.boolean().optional(),
+        embedding: z
+          .enum(EMBEDDING_MODES)
+          .optional()
+          .describe('anywhere, listed or nowhere. Enforced by the browser through the page\u2019s own headers.'),
+        allowedOrigins: z
+          .array(originSchema)
+          .max(BRANDING_LIMITS.allowedOriginsMax)
+          .optional()
+          .describe('Origins allowed to frame the page when embedding is "listed", like https://app.example.com.'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ databaseId: id, ...patch }) =>
+      guard(async () => {
+        const body = Object.fromEntries(
+          Object.entries(patch).filter(([, value]) => value !== undefined),
+        );
+        if (Object.keys(body).length === 0) {
+          throw new InletError(
+            400,
+            'validation_failed',
+            'Pass at least one setting to change.',
+          );
+        }
+        return json(
+          await client.request('PATCH', `/v1/feedback-databases/${id}/hosted-form`, body),
+        );
+      }),
+  );
+
+  server.registerTool(
+    'rotate_hosted_form_address',
+    {
+      title: 'Change the hosted form address',
+      description:
+        'Issues a new address and retires the current one immediately. Every shared link and embedded frame using the old address stops working, which is the point: this is how a leaked link is revoked. Confirm with the current address.',
+      inputSchema: {
+        databaseId,
+        confirm: z
+          .string()
+          .describe('The current address, exactly as get_hosted_form reports its slug.'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    },
+    async ({ databaseId: id, confirm }) =>
+      guard(async () => {
+        const current = (await client.request(
+          'GET',
+          `/v1/feedback-databases/${id}/hosted-form`,
+        )) as { slug: string };
+        assertConfirmed(current.slug, confirm);
+        return json(
+          await client.request(
+            'POST',
+            `/v1/feedback-databases/${id}/hosted-form/rotate-slug`,
+          ),
+        );
+      }),
   );
 }
 

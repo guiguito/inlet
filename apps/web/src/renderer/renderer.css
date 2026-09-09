@@ -7,6 +7,7 @@
  */
 .inlet-renderer {
   --r-radius: 0.5rem;
+  --r-font: ui-sans-serif, system-ui, -apple-system, sans-serif;
   --r-bg: #ffffff;
   --r-surface: #ffffff;
   --r-text: #18181b;
@@ -20,6 +21,7 @@
 
   background: var(--r-bg);
   color: var(--r-text);
+  font-family: var(--r-font);
 }
 
 @media (prefers-color-scheme: dark) {

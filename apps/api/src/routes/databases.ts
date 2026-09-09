@@ -1,7 +1,9 @@
 import { z } from 'zod';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
-import { validateParsedTemplate } from '@inlet/shared';
+import { BRANDING_LIMITS, validateParsedTemplate } from '@inlet/shared';
 import type { AppContext } from '../context.js';
+import type { HostedFormRow } from '../db/schema.js';
+import { apiError } from '../lib/errors.js';
 import { requireDatabase } from '../services/access.js';
 import { requireManagementPrincipal } from '../services/principal.js';
 import {
@@ -18,6 +20,14 @@ import {
   listFeedbackDatabases,
   renameFeedbackDatabase,
 } from '../services/projects.js';
+import {
+  getHostedForm,
+  hostedFormUrl,
+  removeLogo,
+  rotateSlug,
+  updateHostedForm,
+  uploadLogo,
+} from '../services/hosted-forms.js';
 import { deletionImpact } from '../services/submissions.js';
 import { EXPORT_NOTICE } from '../services/export.js';
 import {
@@ -28,11 +38,13 @@ import {
   errorsFor,
   feedbackDatabaseSchema,
   formVersionSchema,
+  hostedFormSchema,
   okSchema,
   publishBodySchema,
   renameDatabaseBodySchema,
   rollbackBodySchema,
   saveDraftBodySchema,
+  updateHostedFormBodySchema,
 } from './schemas.js';
 
 /**
@@ -287,6 +299,162 @@ export function databaseRoutes(ctx: AppContext): FastifyPluginAsyncZod {
           request.body.version ?? (await previousVersion(ctx.db, database)).version;
         const version = await rollbackTo(ctx.db, database.id, target);
         return { ...version, active: true };
+      },
+    );
+  };
+}
+
+/**
+ * Hosted form management (FR-151).
+ *
+ * Mounted on the feedback database because that is what a hosted form belongs to, and
+ * gated by the same permission as the form draft: a Creator or Admin, or a secret
+ * server key. The public side lives in routes/hosted.ts and shares nothing but the
+ * services underneath.
+ */
+export function hostedFormRoutes(ctx: AppContext): FastifyPluginAsyncZod {
+  const view = (row: HostedFormRow) => ({
+    feedbackDatabaseId: row.feedbackDatabaseId,
+    slug: row.slug,
+    url: hostedFormUrl(ctx, row.slug),
+    enabled: row.enabled,
+    accentColor: row.accentColor,
+    colorScheme: row.colorScheme,
+    cornerRadius: row.cornerRadius,
+    typeface: row.typeface,
+    logoUrl: row.logoStorageKey ? `/v1/hosted/${row.slug}/logo` : null,
+    logoAlt: row.logoAlt,
+    logoWidth: row.logoWidth,
+    logoHeight: row.logoHeight,
+    submitLabel: row.submitLabel,
+    thankYouTitle: row.thankYouTitle,
+    thankYouBody: row.thankYouBody,
+    closedMessage: row.closedMessage,
+    redirectUrl: row.redirectUrl,
+    showProgress: row.showProgress,
+    embedding: row.embedding,
+    allowedOrigins: row.allowedOrigins,
+    updatedAt: row.updatedAt,
+  });
+
+  return async (app) => {
+    app.get(
+      '/:databaseId/hosted-form',
+      {
+        schema: {
+          tags: ['Hosted form'],
+          summary: 'Read the hosted form settings',
+          description:
+            'A hosted form is created, disabled, with a generated address the first time this is read.',
+          params: databaseIdParam,
+          response: { 200: hostedFormSchema, ...errorsFor(401, 403, 404) },
+        },
+      },
+      async (request) => {
+        const principal = await requireManagementPrincipal(ctx, request);
+        await requireDatabase(ctx.db, principal, request.params.databaseId, 'creator');
+        return view(await getHostedForm(ctx, request.params.databaseId));
+      },
+    );
+
+    app.patch(
+      '/:databaseId/hosted-form',
+      {
+        schema: {
+          tags: ['Hosted form'],
+          summary: 'Change the hosted form settings',
+          description:
+            'Enable or disable it, set a custom address, and set the branding, copy and behaviour. Every field is optional; only what is sent changes.',
+          params: databaseIdParam,
+          body: updateHostedFormBodySchema,
+          response: { 200: hostedFormSchema, ...errorsFor(400, 401, 403, 404, 409) },
+        },
+      },
+      async (request) => {
+        const principal = await requireManagementPrincipal(ctx, request);
+        await requireDatabase(ctx.db, principal, request.params.databaseId, 'creator');
+        return view(await updateHostedForm(ctx, request.params.databaseId, request.body));
+      },
+    );
+
+    app.post(
+      '/:databaseId/hosted-form/rotate-slug',
+      {
+        schema: {
+          tags: ['Hosted form'],
+          summary: 'Give the hosted form a new address',
+          description: 'The previous address stops working immediately (FR-133).',
+          params: databaseIdParam,
+          response: { 200: hostedFormSchema, ...errorsFor(401, 403, 404) },
+        },
+      },
+      async (request) => {
+        const principal = await requireManagementPrincipal(ctx, request);
+        await requireDatabase(ctx.db, principal, request.params.databaseId, 'creator');
+        return view(await rotateSlug(ctx, request.params.databaseId));
+      },
+    );
+
+    app.post(
+      '/:databaseId/hosted-form/logo',
+      {
+        schema: {
+          tags: ['Hosted form'],
+          summary: 'Upload the hosted form’s logo',
+          description:
+            'Multipart, with a `file` part and an optional `alt` field. Validated by content and re-encoded to WebP, exactly as a screenshot is.',
+          params: databaseIdParam,
+          consumes: ['multipart/form-data'],
+          response: { 200: hostedFormSchema, ...errorsFor(400, 401, 403, 404, 413, 415) },
+        },
+      },
+      async (request) => {
+        const principal = await requireManagementPrincipal(ctx, request);
+        await requireDatabase(ctx.db, principal, request.params.databaseId, 'creator');
+
+        let file: Buffer | undefined;
+        let alt: string | null = null;
+
+        for await (const part of request.parts()) {
+          if (part.type === 'field' && part.fieldname === 'alt') {
+            alt = String(part.value).trim() || null;
+          } else if (part.type === 'file' && part.fieldname === 'file') {
+            file = await part.toBuffer();
+            if (part.file.truncated) {
+              throw apiError(
+                'file_too_large',
+                `A logo may be at most ${Math.floor(BRANDING_LIMITS.logoMaxSourceBytes / 1024)} KB.`,
+              );
+            }
+          } else if (part.type === 'file') {
+            await part.toBuffer();
+          }
+        }
+
+        if (!file) {
+          throw apiError('validation_failed', 'Send the logo as a "file" part.', [
+            { path: 'file', code: 'required', message: 'file is required.' },
+          ]);
+        }
+
+        return view(await uploadLogo(ctx, request.params.databaseId, file, alt));
+      },
+    );
+
+    app.delete(
+      '/:databaseId/hosted-form/logo',
+      {
+        schema: {
+          tags: ['Hosted form'],
+          summary: 'Remove the hosted form’s logo',
+          params: databaseIdParam,
+          response: { 200: hostedFormSchema, ...errorsFor(401, 403, 404) },
+        },
+      },
+      async (request) => {
+        const principal = await requireManagementPrincipal(ctx, request);
+        await requireDatabase(ctx.db, principal, request.params.databaseId, 'creator');
+        return view(await removeLogo(ctx, request.params.databaseId));
       },
     );
   };

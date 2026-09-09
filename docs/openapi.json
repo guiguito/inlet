@@ -1448,6 +1448,354 @@
           "requiresAccount"
         ]
       },
+      "HostedFormInput": {
+        "type": "object",
+        "properties": {
+          "feedbackDatabaseId": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "description": "The address to share, built from INLET_PUBLIC_URL."
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "accentColor": {
+            "type": "string"
+          },
+          "colorScheme": {
+            "type": "string",
+            "enum": [
+              "light",
+              "dark",
+              "system"
+            ]
+          },
+          "cornerRadius": {
+            "type": "string",
+            "enum": [
+              "sharp",
+              "soft",
+              "round"
+            ]
+          },
+          "typeface": {
+            "type": "string",
+            "enum": [
+              "sans",
+              "serif",
+              "mono"
+            ]
+          },
+          "logoUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "logoAlt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "logoWidth": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "logoHeight": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "submitLabel": {
+            "type": "string"
+          },
+          "thankYouTitle": {
+            "type": "string"
+          },
+          "thankYouBody": {
+            "type": "string"
+          },
+          "closedMessage": {
+            "type": "string"
+          },
+          "redirectUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "showProgress": {
+            "type": "boolean"
+          },
+          "embedding": {
+            "type": "string",
+            "enum": [
+              "anywhere",
+              "listed",
+              "nowhere"
+            ]
+          },
+          "allowedOrigins": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "updatedAt": {}
+        },
+        "required": [
+          "feedbackDatabaseId",
+          "slug",
+          "url",
+          "enabled",
+          "accentColor",
+          "colorScheme",
+          "cornerRadius",
+          "typeface",
+          "logoUrl",
+          "logoAlt",
+          "logoWidth",
+          "logoHeight",
+          "submitLabel",
+          "thankYouTitle",
+          "thankYouBody",
+          "closedMessage",
+          "redirectUrl",
+          "showProgress",
+          "embedding",
+          "allowedOrigins",
+          "updatedAt"
+        ]
+      },
+      "HostedFormPublicInput": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string"
+          },
+          "open": {
+            "type": "boolean",
+            "description": "True when the form is enabled and has a published version."
+          },
+          "form": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "feedbackDatabaseId": {
+                    "type": "string"
+                  },
+                  "formVersion": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  "pages": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "elements": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "type": {
+                                "type": "string",
+                                "enum": [
+                                  "title",
+                                  "subtitle",
+                                  "body_text",
+                                  "choice",
+                                  "text",
+                                  "email",
+                                  "screenshot"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "type"
+                            ],
+                            "additionalProperties": {}
+                          }
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "elements"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "feedbackDatabaseId",
+                  "formVersion",
+                  "pages"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "closedMessage": {
+            "type": "string"
+          },
+          "branding": {
+            "type": "object",
+            "properties": {
+              "logoUrl": {
+                "description": "Public, slug-scoped address of the logo.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "logoAlt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "logoWidth": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "logoHeight": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "accentColor": {
+                "type": "string"
+              },
+              "colorScheme": {
+                "type": "string",
+                "enum": [
+                  "light",
+                  "dark",
+                  "system"
+                ]
+              },
+              "cornerRadius": {
+                "type": "string",
+                "enum": [
+                  "sharp",
+                  "soft",
+                  "round"
+                ]
+              },
+              "typeface": {
+                "type": "string",
+                "enum": [
+                  "sans",
+                  "serif",
+                  "mono"
+                ]
+              }
+            },
+            "required": [
+              "logoUrl",
+              "logoAlt",
+              "logoWidth",
+              "logoHeight",
+              "accentColor",
+              "colorScheme",
+              "cornerRadius",
+              "typeface"
+            ]
+          },
+          "copy": {
+            "type": "object",
+            "properties": {
+              "submitLabel": {
+                "type": "string"
+              },
+              "thankYouTitle": {
+                "type": "string"
+              },
+              "thankYouBody": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "submitLabel",
+              "thankYouTitle",
+              "thankYouBody"
+            ]
+          },
+          "behaviour": {
+            "type": "object",
+            "properties": {
+              "redirectUrl": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "showProgress": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "redirectUrl",
+              "showProgress"
+            ]
+          }
+        },
+        "required": [
+          "slug",
+          "open",
+          "form",
+          "closedMessage",
+          "branding",
+          "copy",
+          "behaviour"
+        ]
+      },
       "FormDefinition": {
         "type": "object",
         "properties": {
@@ -2965,6 +3313,364 @@
           "projectName",
           "expiresAt",
           "requiresAccount"
+        ],
+        "additionalProperties": false
+      },
+      "HostedForm": {
+        "type": "object",
+        "properties": {
+          "feedbackDatabaseId": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "description": "The address to share, built from INLET_PUBLIC_URL."
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "accentColor": {
+            "type": "string"
+          },
+          "colorScheme": {
+            "type": "string",
+            "enum": [
+              "light",
+              "dark",
+              "system"
+            ]
+          },
+          "cornerRadius": {
+            "type": "string",
+            "enum": [
+              "sharp",
+              "soft",
+              "round"
+            ]
+          },
+          "typeface": {
+            "type": "string",
+            "enum": [
+              "sans",
+              "serif",
+              "mono"
+            ]
+          },
+          "logoUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "logoAlt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "logoWidth": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "logoHeight": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "submitLabel": {
+            "type": "string"
+          },
+          "thankYouTitle": {
+            "type": "string"
+          },
+          "thankYouBody": {
+            "type": "string"
+          },
+          "closedMessage": {
+            "type": "string"
+          },
+          "redirectUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "showProgress": {
+            "type": "boolean"
+          },
+          "embedding": {
+            "type": "string",
+            "enum": [
+              "anywhere",
+              "listed",
+              "nowhere"
+            ]
+          },
+          "allowedOrigins": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "feedbackDatabaseId",
+          "slug",
+          "url",
+          "enabled",
+          "accentColor",
+          "colorScheme",
+          "cornerRadius",
+          "typeface",
+          "logoUrl",
+          "logoAlt",
+          "logoWidth",
+          "logoHeight",
+          "submitLabel",
+          "thankYouTitle",
+          "thankYouBody",
+          "closedMessage",
+          "redirectUrl",
+          "showProgress",
+          "embedding",
+          "allowedOrigins",
+          "updatedAt"
+        ],
+        "additionalProperties": false
+      },
+      "HostedFormPublic": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string"
+          },
+          "open": {
+            "type": "boolean",
+            "description": "True when the form is enabled and has a published version."
+          },
+          "form": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "feedbackDatabaseId": {
+                    "type": "string"
+                  },
+                  "formVersion": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  "pages": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "elements": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "type": {
+                                "type": "string",
+                                "enum": [
+                                  "title",
+                                  "subtitle",
+                                  "body_text",
+                                  "choice",
+                                  "text",
+                                  "email",
+                                  "screenshot"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "type"
+                            ],
+                            "additionalProperties": {}
+                          }
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "elements"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "feedbackDatabaseId",
+                  "formVersion",
+                  "pages"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "closedMessage": {
+            "type": "string"
+          },
+          "branding": {
+            "type": "object",
+            "properties": {
+              "logoUrl": {
+                "description": "Public, slug-scoped address of the logo.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "logoAlt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "logoWidth": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "logoHeight": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "accentColor": {
+                "type": "string"
+              },
+              "colorScheme": {
+                "type": "string",
+                "enum": [
+                  "light",
+                  "dark",
+                  "system"
+                ]
+              },
+              "cornerRadius": {
+                "type": "string",
+                "enum": [
+                  "sharp",
+                  "soft",
+                  "round"
+                ]
+              },
+              "typeface": {
+                "type": "string",
+                "enum": [
+                  "sans",
+                  "serif",
+                  "mono"
+                ]
+              }
+            },
+            "required": [
+              "logoUrl",
+              "logoAlt",
+              "logoWidth",
+              "logoHeight",
+              "accentColor",
+              "colorScheme",
+              "cornerRadius",
+              "typeface"
+            ],
+            "additionalProperties": false
+          },
+          "copy": {
+            "type": "object",
+            "properties": {
+              "submitLabel": {
+                "type": "string"
+              },
+              "thankYouTitle": {
+                "type": "string"
+              },
+              "thankYouBody": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "submitLabel",
+              "thankYouTitle",
+              "thankYouBody"
+            ],
+            "additionalProperties": false
+          },
+          "behaviour": {
+            "type": "object",
+            "properties": {
+              "redirectUrl": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "showProgress": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "redirectUrl",
+              "showProgress"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "slug",
+          "open",
+          "form",
+          "closedMessage",
+          "branding",
+          "copy",
+          "behaviour"
         ],
         "additionalProperties": false
       }
@@ -5962,6 +6668,1026 @@
         "responses": {
           "200": {
             "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/v1/feedback-databases/{databaseId}/hosted-form": {
+      "get": {
+        "summary": "Read the hosted form settings",
+        "tags": [
+          "Hosted form"
+        ],
+        "description": "A hosted form is created, disabled, with a generated address the first time this is read.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HostedForm"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Change the hosted form settings",
+        "tags": [
+          "Hosted form"
+        ],
+        "description": "Enable or disable it, set a custom address, and set the branding, copy and behaviour. Every field is optional; only what is sent changes.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "slug": {
+                    "description": "A custom address. Must be unique and not reserved.",
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 64,
+                    "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+                  },
+                  "accentColor": {
+                    "type": "string"
+                  },
+                  "colorScheme": {
+                    "type": "string",
+                    "enum": [
+                      "light",
+                      "dark",
+                      "system"
+                    ]
+                  },
+                  "cornerRadius": {
+                    "type": "string",
+                    "enum": [
+                      "sharp",
+                      "soft",
+                      "round"
+                    ]
+                  },
+                  "typeface": {
+                    "type": "string",
+                    "enum": [
+                      "sans",
+                      "serif",
+                      "mono"
+                    ]
+                  },
+                  "logoAlt": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 200
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "submitLabel": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 60
+                  },
+                  "thankYouTitle": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  },
+                  "thankYouBody": {
+                    "type": "string",
+                    "maxLength": 600
+                  },
+                  "closedMessage": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 600
+                  },
+                  "redirectUrl": {
+                    "description": "Where to send the respondent after a successful submission.",
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "uri"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "showProgress": {
+                    "type": "boolean"
+                  },
+                  "embedding": {
+                    "type": "string",
+                    "enum": [
+                      "anywhere",
+                      "listed",
+                      "nowhere"
+                    ]
+                  },
+                  "allowedOrigins": {
+                    "description": "Origins allowed to frame the page when embedding is \"listed\".",
+                    "maxItems": 20,
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HostedForm"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/feedback-databases/{databaseId}/hosted-form/rotate-slug": {
+      "post": {
+        "summary": "Give the hosted form a new address",
+        "tags": [
+          "Hosted form"
+        ],
+        "description": "The previous address stops working immediately (FR-133).",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HostedForm"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/feedback-databases/{databaseId}/hosted-form/logo": {
+      "post": {
+        "summary": "Upload the hosted form’s logo",
+        "tags": [
+          "Hosted form"
+        ],
+        "description": "Multipart, with a `file` part and an optional `alt` field. Validated by content and re-encoded to WebP, exactly as a screenshot is.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HostedForm"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Remove the hosted form’s logo",
+        "tags": [
+          "Hosted form"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HostedForm"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/hosted/{slug}": {
+      "get": {
+        "summary": "Read a hosted form",
+        "tags": [
+          "Hosted form"
+        ],
+        "description": "Public. Returns the branding, the copy, and the published form when the hosted form is open. A closed hosted form returns its message and no questions.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "slug",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HostedFormPublic"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/hosted/{slug}/logo": {
+      "get": {
+        "summary": "Read a hosted form’s logo",
+        "tags": [
+          "Hosted form"
+        ],
+        "description": "Public, scoped to the slug. Served as WebP.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "slug",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/v1/hosted/{slug}/submission-intents": {
+      "post": {
+        "summary": "Open a submission intent on a hosted form",
+        "tags": [
+          "Hosted form"
+        ],
+        "description": "The same intent the client API issues, pinned to the same published version.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "slug",
+            "required": true
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "intentId": {
+                      "type": "string"
+                    },
+                    "token": {
+                      "type": "string"
+                    },
+                    "formVersion": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "expiresAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  },
+                  "required": [
+                    "intentId",
+                    "token",
+                    "formVersion",
+                    "expiresAt"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/hosted/{slug}/submission-intents/{intentId}/attachments": {
+      "post": {
+        "summary": "Upload a screenshot from a hosted form",
+        "tags": [
+          "Hosted form"
+        ],
+        "description": "Multipart, with a `questionId` field and a `file` part. Validated, scanned and re-encoded exactly as an upload through the client API.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "slug",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "intentId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "header",
+            "name": "x-inlet-intent-token",
+            "required": true
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadedAttachment"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/hosted/{slug}/submission-intents/{intentId}/attachments/{attachmentId}": {
+      "delete": {
+        "summary": "Discard a screenshot before submitting",
+        "tags": [
+          "Hosted form"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "slug",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "intentId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "attachmentId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "header",
+            "name": "x-inlet-intent-token",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/hosted/{slug}/submission-intents/{intentId}/submit": {
+      "post": {
+        "summary": "Submit a hosted form",
+        "tags": [
+          "Hosted form"
+        ],
+        "description": "The retry contract of section 9.2 applies unchanged: the same payload replays, a different payload conflicts, a validation failure leaves the intent usable, and a deleted submission is reported rather than recreated.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "formVersion": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991,
+                    "description": "Must equal the version pinned on the intent (FR-094)."
+                  },
+                  "answers": {
+                    "$ref": "#/components/schemas/AnswersInput"
+                  },
+                  "context": {
+                    "type": "object",
+                    "properties": {
+                      "source": {
+                        "type": "string",
+                        "maxLength": 120
+                      },
+                      "userAgent": {
+                        "type": "string",
+                        "maxLength": 500
+                      },
+                      "language": {
+                        "type": "string",
+                        "maxLength": 35
+                      },
+                      "viewport": {
+                        "type": "string",
+                        "maxLength": 20
+                      },
+                      "embeddedOn": {
+                        "type": "string",
+                        "maxLength": 255
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "formVersion",
+                  "answers"
+                ]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "slug",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "intentId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "header",
+            "name": "x-inlet-intent-token",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinalizeResult"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinalizeResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
         }
       }

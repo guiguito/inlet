@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import sharp from 'sharp';
 import { LIMITS } from '@inlet/shared';
-import { processScreenshot } from '../../src/lib/images.js';
+import { processImage, processScreenshot } from '../../src/lib/images.js';
 import { ApiError } from '../../src/lib/errors.js';
 import * as fixtures from '../setup/images.js';
 
@@ -76,5 +76,52 @@ describe('processScreenshot', () => {
     const result = await processScreenshot(withExif);
     // WebP output from a fresh encode carries no EXIF or XMP chunk.
     expect(result.data.includes(Buffer.from('Exif'))).toBe(false);
+  });
+});
+
+/** FR-140: a hosted form's logo goes through the same pipeline, with tighter limits. */
+describe('processImage for a logo', () => {
+  const LOGO = { maxSourceBytes: 1024 * 1024, maxPixels: 4_000_000, noun: 'logo' };
+
+  it('keeps transparency, which a logo on a dark form depends on', async () => {
+    const transparent = await sharp({
+      create: {
+        width: 120,
+        height: 40,
+        channels: 4,
+        background: { r: 250, g: 204, b: 20, alpha: 0 },
+      },
+    })
+      .png()
+      .toBuffer();
+
+    const result = await processImage(transparent, LOGO);
+    const metadata = await sharp(result.data).metadata();
+    expect(result.storedMediaType).toBe('image/webp');
+    expect(metadata.hasAlpha).toBe(true);
+  });
+
+  it('applies the logo ceilings rather than the screenshot ceilings', async () => {
+    // Comfortably under the screenshot limits, over the logo's.
+    const wide = await sharp({
+      create: { width: 2400, height: 1800, channels: 3, background: '#C2410C' },
+    })
+      .png()
+      .toBuffer();
+
+    await expect(processImage(wide, LOGO)).rejects.toMatchObject({
+      code: 'image_too_many_pixels',
+    });
+    // The same image is an acceptable screenshot.
+    await expect(processScreenshot(wide)).resolves.toMatchObject({
+      storedMediaType: 'image/webp',
+    });
+  });
+
+  it('names the logo in its messages, so an operator is not told about screenshots', async () => {
+    const oversize = Buffer.alloc(2 * 1024 * 1024, 1);
+    await expect(processImage(oversize, LOGO)).rejects.toMatchObject({
+      message: expect.stringContaining('logo'),
+    });
   });
 });

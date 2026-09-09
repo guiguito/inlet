@@ -1,4 +1,13 @@
-import type { ErrorDetail, FormDefinition, Role, StoredAnswer } from '@inlet/shared';
+import type {
+  ColorScheme,
+  CornerRadius,
+  EmbeddingMode,
+  ErrorDetail,
+  FormDefinition,
+  Role,
+  StoredAnswer,
+  Typeface,
+} from '@inlet/shared';
 
 /**
  * The typed API client.
@@ -32,14 +41,16 @@ type RequestOptions = {
   body?: unknown;
   headers?: Record<string, string>;
   signal?: AbortSignal;
+  /** Hosted form requests omit credentials, so the page needs no cookie (FR-136). */
+  credentials?: RequestCredentials;
 };
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { method = 'GET', body, headers = {}, signal } = options;
+  const { method = 'GET', body, headers = {}, signal, credentials = 'same-origin' } = options;
 
   const response = await fetch(path, {
     method,
-    credentials: 'same-origin',
+    credentials,
     headers: body === undefined ? headers : { 'content-type': 'application/json', ...headers },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     ...(signal ? { signal } : {}),
@@ -231,6 +242,75 @@ export type FinalizeResult = {
   createdAt: string;
 };
 
+export type HostedFormPublic = {
+  slug: string;
+  open: boolean;
+  form: {
+    feedbackDatabaseId: string;
+    formVersion: number;
+    pages: { id: string; elements: Record<string, unknown>[] }[];
+  } | null;
+  closedMessage: string;
+  branding: {
+    logoUrl: string | null;
+    logoAlt: string | null;
+    logoWidth: number | null;
+    logoHeight: number | null;
+    accentColor: string;
+    colorScheme: ColorScheme;
+    cornerRadius: CornerRadius;
+    typeface: Typeface;
+  };
+  copy: { submitLabel: string; thankYouTitle: string; thankYouBody: string };
+  behaviour: { redirectUrl: string | null; showProgress: boolean };
+};
+
+/** What an operator reads and edits on the Share tab. */
+export type HostedForm = {
+  feedbackDatabaseId: string;
+  slug: string;
+  url: string;
+  enabled: boolean;
+  accentColor: string;
+  colorScheme: ColorScheme;
+  cornerRadius: CornerRadius;
+  typeface: Typeface;
+  logoUrl: string | null;
+  logoAlt: string | null;
+  logoWidth: number | null;
+  logoHeight: number | null;
+  submitLabel: string;
+  thankYouTitle: string;
+  thankYouBody: string;
+  closedMessage: string;
+  redirectUrl: string | null;
+  showProgress: boolean;
+  embedding: EmbeddingMode;
+  allowedOrigins: string[];
+  updatedAt: string;
+};
+
+export type HostedFormPatch = Partial<
+  Pick<
+    HostedForm,
+    | 'enabled'
+    | 'slug'
+    | 'accentColor'
+    | 'colorScheme'
+    | 'cornerRadius'
+    | 'typeface'
+    | 'logoAlt'
+    | 'submitLabel'
+    | 'thankYouTitle'
+    | 'thankYouBody'
+    | 'closedMessage'
+    | 'redirectUrl'
+    | 'showProgress'
+    | 'embedding'
+    | 'allowedOrigins'
+  >
+>;
+
 // --- Management operations ---------------------------------------------------
 
 export const api = {
@@ -293,6 +373,43 @@ export const api = {
     request<FormVersion>(`/v1/feedback-databases/${databaseId}/form/rollback`, {
       method: 'POST',
       body: version === undefined ? {} : { version },
+    }),
+
+  getHostedForm: (databaseId: string) =>
+    request<HostedForm>(`/v1/feedback-databases/${databaseId}/hosted-form`),
+  updateHostedForm: (databaseId: string, patch: HostedFormPatch) =>
+    request<HostedForm>(`/v1/feedback-databases/${databaseId}/hosted-form`, {
+      method: 'PATCH',
+      body: patch,
+    }),
+  rotateHostedSlug: (databaseId: string) =>
+    request<HostedForm>(`/v1/feedback-databases/${databaseId}/hosted-form/rotate-slug`, {
+      method: 'POST',
+    }),
+  uploadHostedLogo: async (databaseId: string, file: File, alt: string) => {
+    const form = new FormData();
+    form.set('file', file, file.name);
+    if (alt.trim() !== '') form.set('alt', alt.trim());
+    const response = await fetch(`/v1/feedback-databases/${databaseId}/hosted-form/logo`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      body: form,
+    });
+    const text = await response.text();
+    const parsed = text.length > 0 ? safeJson(text) : null;
+    if (!response.ok) {
+      const error = (parsed as { error?: { code?: string; message?: string } })?.error;
+      throw new ApiError(
+        response.status,
+        error?.code ?? 'upload_failed',
+        error?.message ?? 'That logo could not be uploaded.',
+      );
+    }
+    return parsed as HostedForm;
+  },
+  removeHostedLogo: (databaseId: string) =>
+    request<HostedForm>(`/v1/feedback-databases/${databaseId}/hosted-form/logo`, {
+      method: 'DELETE',
     }),
 
   listCredentials: (projectId: string) =>
@@ -482,6 +599,92 @@ export const clientApi = {
       {
         method: 'POST',
         headers: { authorization: `Bearer ${key}`, 'x-inlet-intent-token': intent.token },
+        body: payload,
+      },
+    ),
+};
+
+// --- The hosted form, the second collection path ----------------------------
+
+/**
+ * The public hosted form's client (FR-134, FR-136).
+ *
+ * Authorized by the slug in the path and nothing else: no key, no cookie, no stored
+ * token. Credentials are omitted explicitly rather than left to the default, because
+ * this page runs inside third-party frames and webviews where sending a cookie would
+ * be both useless and a privacy surprise.
+ */
+export const hostedApi = {
+  getForm: (slug: string, signal?: AbortSignal) =>
+    request<HostedFormPublic>(`/v1/hosted/${encodeURIComponent(slug)}`, {
+      credentials: 'omit',
+      ...(signal ? { signal } : {}),
+    }),
+
+  createIntent: (slug: string) =>
+    request<SubmissionIntent>(`/v1/hosted/${encodeURIComponent(slug)}/submission-intents`, {
+      method: 'POST',
+      credentials: 'omit',
+    }),
+
+  uploadAttachment: async (
+    slug: string,
+    intent: SubmissionIntent,
+    questionId: string,
+    file: File,
+  ): Promise<UploadedAttachment> => {
+    const form = new FormData();
+    form.set('questionId', questionId);
+    form.set('file', file, file.name);
+
+    const response = await fetch(
+      `/v1/hosted/${encodeURIComponent(slug)}/submission-intents/${intent.intentId}/attachments`,
+      {
+        method: 'POST',
+        credentials: 'omit',
+        headers: { 'x-inlet-intent-token': intent.token },
+        body: form,
+      },
+    );
+
+    const text = await response.text();
+    const parsed = text.length > 0 ? safeJson(text) : null;
+    if (!response.ok) {
+      const error = (parsed as { error?: { code?: string; message?: string } })?.error;
+      throw new ApiError(
+        response.status,
+        error?.code ?? 'upload_failed',
+        error?.message ?? 'That screenshot could not be uploaded.',
+      );
+    }
+    return parsed as UploadedAttachment;
+  },
+
+  discardAttachment: (slug: string, intent: SubmissionIntent, attachmentId: string) =>
+    request<{ ok: true }>(
+      `/v1/hosted/${encodeURIComponent(slug)}/submission-intents/${intent.intentId}/attachments/${attachmentId}`,
+      {
+        method: 'DELETE',
+        credentials: 'omit',
+        headers: { 'x-inlet-intent-token': intent.token },
+      },
+    ),
+
+  submit: (
+    slug: string,
+    intent: SubmissionIntent,
+    payload: {
+      formVersion: number;
+      answers: Record<string, unknown>;
+      context?: Record<string, string>;
+    },
+  ) =>
+    request<FinalizeResult>(
+      `/v1/hosted/${encodeURIComponent(slug)}/submission-intents/${intent.intentId}/submit`,
+      {
+        method: 'POST',
+        credentials: 'omit',
+        headers: { 'x-inlet-intent-token': intent.token },
         body: payload,
       },
     ),

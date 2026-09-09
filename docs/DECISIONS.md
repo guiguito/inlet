@@ -28,6 +28,7 @@ places where the PRD deliberately left the decision to technical design.
 17. [Known ceilings](#17-known-ceilings)
 18. [Bugs found by the tests](#18-bugs-found-by-the-tests)
 19. [Release 2: team, MCP and scanning](#19-release-2-team-mcp-and-scanning)
+20. [Release 3: hosted forms](#20-release-3-hosted-forms)
 
 ---
 
@@ -718,3 +719,162 @@ including a payload larger than one 64 KiB frame.
 | --- | --- |
 | **Redeeming while signed in silently granted the access to the wrong account.** Journey 7.4's behaviour is right, but a body naming a different address was ignored rather than questioned. | An Admin pasting a colleague's link into their own browser would have given themselves the role and consumed the link, with nothing to say so. |
 | **A Creator saw an Access tab they could not use.** Role dropdowns that failed on use, and an invitations list that rendered empty because the request was refused. | Someone would reasonably conclude there were no invitations, when in fact they were not allowed to see them. |
+
+---
+
+## 20. Release 3: hosted forms
+
+A hosted form is a page Inlet serves at `/f/{slug}` that renders the published form and
+collects responses. One link an operator shares, in an email, a webview, a help centre
+or an iframe.
+
+**It is an additional collection path, not a replacement.** The client API is untouched
+and both work at once on the same feedback database. Everything below follows from that
+decision, and a test asserts it directly: one response through the link, one through a
+publishable key, two rows in the same place.
+
+### 20.1 No second path to a stored submission
+
+The hosted routes resolve a slug to a feedback database and then call exactly the same
+`createIntent`, `uploadAttachment` and `finalizeIntent` services the key-authorized
+routes call. Nothing about intents, payload hashing, answer validation, the retry
+contract, version pinning, attachment binding or the purge queue is reimplemented.
+
+That is the single most important choice in this release. A hosted form is a second
+*door*, not a second *building*. If it had its own submission code, every invariant
+Release 1 proved would need proving twice, and the two would drift. Instead a submission
+carries no marker of having arrived through a link beyond its recorded client context,
+and looks identical in the responses view, the export and the API.
+
+**The slug is the credential.** No API key, no respondent account, no cookie. A slug is
+therefore treated as a secret that will leak: it is rotatable, and rotation retires the
+previous address the moment it returns. That is the revocation story, and it is the same
+shape as rotating a project key.
+
+**An unknown slug and a closed form are different answers.** An unknown slug is a 404,
+because there is nothing there. A disabled or unpublished one is a real page that is
+closed, and the respondent gets the operator's own message. A closed form returns no
+questions at all, so disabling is also a way to withhold the form's content.
+
+### 20.2 The page is a route, not a fall-through
+
+`GET /f/{slug}` is its own route rather than letting the single-page app catch the path.
+Two things have to happen per slug before any HTML is sent, and neither can happen in
+the browser:
+
+- **The framing headers.** `Content-Security-Policy: frame-ancestors` is only honoured
+  on the document itself. A client-side check would be advisory, and an operator who
+  chose "nowhere" would have been given a promise the browser never enforced.
+- **The branding.** The accent, the corner radius, the typeface and the colour-scheme
+  decision are injected as a `:root` block before `</head>`. Without it the page would
+  paint Inlet's neutral defaults and then repaint in the operator's colours a round trip
+  later. On someone else's branded form, a flash like that reads as a bug.
+
+The same route swaps the shell's `<title>` for the feedback database's name, HTML-escaped,
+and replaces the management interface's remembered theme class with the hosted one, so a
+respondent never inherits an operator's dark mode.
+
+**Inlet's own origin is always allowed to frame the page**, in every embedding mode. The
+Share tab previews the real page in an iframe rather than re-implementing it, and an
+operator choosing "nowhere" means nowhere *else*, not nowhere including their own
+settings page.
+
+### 20.3 Branding lives in the shared package
+
+`packages/shared/src/branding.ts` holds the schemas, the limits, the reserved slugs and
+the function that turns branding into CSS variables. The API validates with it, the
+server-side injection renders with it, and the browser applies it. One definition means
+the builder's preview cannot show something the page will not.
+
+**The readable foreground is derived, never configured.** The contrast ratios of white
+and black against a colour cross at a relative luminance of 0.1791, where both equal
+4.58:1. So picking whichever is better always clears WCAG AA's 4.5:1 for normal text,
+whatever accent an operator chooses. A unit test sweeps the RGB space and asserts it.
+Leaving it as a setting would have let an operator ship an unreadable submit button.
+
+**Only the accent is configurable; the neutral palette comes from the colour scheme.**
+Asking an operator to pick six colours that work together is asking them to design, and
+most will get it wrong. One accent on a considered neutral palette is brandable enough
+and cannot come out broken.
+
+**The variables go on the document root, not on a wrapper element.** The branded
+background then reaches the edges of the page and of an iframe of any height, and the
+server's injected block and the loaded configuration target the same thing.
+
+### 20.4 The submitted context is bounded
+
+The client API accepts arbitrary `clientContext` JSON, because the caller holds a
+project key and is the operator's own code. A hosted form is a public page, so its
+`context` is a fixed set of five fields with length caps: `source`, `userAgent`,
+`language`, `viewport`, `embeddedOn`. Anything else is a 400.
+
+Arbitrary JSON from a public page would be a way for anyone with the link to write
+whatever they liked into an operator's stored data, and to grow it without limit. The
+bounded object gives an operator what they actually need, which is where the response
+came from and on what.
+
+**Only the origin of the embedding page is kept.** A full address can carry personal
+data in a query string, and the origin is the part that answers "which of our pages did
+this come from". A test asserts an email address in a referrer never reaches storage.
+
+### 20.5 No cookies, no storage
+
+The page sets no cookie and reads no browser storage, and its API calls send
+`credentials: 'omit'` explicitly. That is what makes it work in a third-party frame,
+in a webview, and in a browser configured to block site data. A browser test asserts
+all three of `document.cookie`, `localStorage` and `sessionStorage` are empty after a
+complete submission.
+
+The cost is that a respondent who reloads loses their answers. That is the right trade
+for a short feedback form: storing a draft would mean writing to a device we told the
+respondent we would not write to.
+
+### 20.6 The intent opens on first need
+
+The reference renderer opens a submission intent as soon as the form loads. A hosted
+form does not: it opens one on the first upload or the first submit. A public link gets
+opened by crawlers, link previews and people who change their mind, and an intent row
+for every one of those is waste with a 30-minute expiry attached.
+
+### 20.7 The logo is stored bound, not pending
+
+Attachments are uploaded with an `inlet-state=pending` tag that a lifecycle rule expires,
+and binding retags them. A logo has no intent to expire with, so it is written with the
+bound value from the start and the lifecycle rule never applies to it. It is deleted with
+its hosted form instead, and enters the same purge queue as attachments when a feedback
+database or project is deleted.
+
+Its storage key carries a timestamp, so replacing a logo never collides with a cached
+one and the bytes at a given key never change. That is what lets the public logo route
+be cached hard while the configuration route is `no-store`.
+
+**A logo goes through the same image pipeline as a screenshot**, so the same
+content-based format detection, animation rejection and WebP re-encoding apply. The
+limits differ, because a logo is a small mark and not a screenshot: 1 MB and 4
+megapixels. Generalising `processScreenshot` into `processImage(source, limits)` was
+about a dozen lines and meant no second decoder path to audit.
+
+### 20.8 Prefilling names questions by their own ID
+
+`?el_7k2…=Good` prefills that question. A choice matches an option by ID *or* by label,
+case-insensitively, because a link written by hand in an email is far more likely to say
+`=Good` than `=op_7k2mnp4qrs8t`. A prefilled answer is an ordinary answer: shown,
+editable, validated and stored the same way. Nothing is hidden and nothing is trusted.
+
+### 20.9 The frame sizes itself
+
+The embed snippet is an iframe plus six lines that listen for a `postMessage`. The page
+observes its own document with a `ResizeObserver` and posts the height it needs, so the
+embedding page never has to guess or measure across an origin.
+
+The height is posted to `*`, because a form allowed to embed anywhere cannot know its
+parent's origin, and a height is not sensitive. The snippet's own check is the one that
+matters: it compares `event.source` against the frame's `contentWindow`, so another
+frame on the embedding page cannot resize the form by posting the same message.
+
+### 20.10 Bugs Release 3's tests found
+
+| Bug | Consequence had it shipped |
+| --- | --- |
+| **Uploading a logo discarded unsaved branding edits.** The logo and the enable switch save on their own, and adopting the server's answer replaced the whole editor state. | An operator typing a custom address, then uploading a logo, would silently lose the address and the Save button would go quiet as though there were nothing to save. |
+| **The management preview was blocked by the operator's own embedding choice.** `frame-ancestors 'none'` applied to Inlet's origin too. | Choosing "nowhere" would have left the Share tab showing an empty box with a console error, and an operator with no way to see their own form. |

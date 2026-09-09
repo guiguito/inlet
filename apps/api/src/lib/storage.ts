@@ -132,6 +132,23 @@ export class Storage {
   }
 
   /**
+   * Stores an object that is not tied to a submission intent, so the pending-upload
+   * lifecycle rule never applies to it. A hosted form's logo is the case: there is no
+   * intent for it to expire with, and it is deleted with its hosted form instead.
+   */
+  async putBound(key: string, body: Buffer, contentType: string): Promise<void> {
+    await this.client.send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: body,
+        ContentType: contentType,
+        Tagging: `${PENDING_TAG.key}=${BOUND_TAG_VALUE}`,
+      }),
+    );
+  }
+
+  /**
    * Takes an object out of the lifecycle rule's reach. Called before the finalization
    * transaction commits: if it fails the intent stays active and the client retries,
    * and if the commit then fails the object is still tagged bound and is only ever

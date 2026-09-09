@@ -31,6 +31,10 @@ export const credentialTypeEnum = pgEnum('inlet_credential_type', ['publishable'
 export const intentStatusEnum = pgEnum('inlet_intent_status', ['active', 'finalized']);
 export const purgeStatusEnum = pgEnum('inlet_purge_status', ['pending', 'failed']);
 export const scanStatusEnum = pgEnum('inlet_scan_status', ['skipped', 'clean', 'error']);
+export const colorSchemeEnum = pgEnum('inlet_color_scheme', ['light', 'dark', 'system']);
+export const cornerRadiusEnum = pgEnum('inlet_corner_radius', ['sharp', 'soft', 'round']);
+export const typefaceEnum = pgEnum('inlet_typeface', ['sans', 'serif', 'mono']);
+export const embeddingEnum = pgEnum('inlet_embedding', ['anywhere', 'listed', 'nowhere']);
 
 const createdAt = timestamp('created_at', { withTimezone: true }).notNull().defaultNow();
 const updatedAt = timestamp('updated_at', { withTimezone: true }).notNull().defaultNow();
@@ -338,6 +342,69 @@ export const storagePurgeQueue = pgTable(
 );
 
 /**
+ * Section 10.14: the hosted form (FR-130 to FR-154).
+ *
+ * At most one row per feedback database, which is why the feedback database is the
+ * primary key rather than a separate identifier: there is nothing to address a second
+ * hosted form by.
+ *
+ * The slug is the whole credential for the public page (FR-134), so it is unique across
+ * the deployment and indexed for the one lookup every public request performs. Rotating
+ * it is an update to this column, which is what makes the old address stop working
+ * immediately (FR-133).
+ *
+ * Branding lives in columns rather than one JSON blob: every field is a fixed,
+ * validated setting the interface has a control for, and columns keep the constraints
+ * where the database can see them.
+ */
+export const hostedForms = pgTable(
+  'hosted_forms',
+  {
+    feedbackDatabaseId: text('feedback_database_id')
+      .primaryKey()
+      .references(() => feedbackDatabases.id, { onDelete: 'cascade' }),
+
+    /** FR-132: the public address component. Unique across the deployment. */
+    slug: text('slug').notNull(),
+    /** FR-131: opt-in. Nothing is collected until this is true. */
+    enabled: boolean('enabled').notNull().default(false),
+
+    // --- Branding (FR-138) --------------------------------------------------
+    /** Storage key of the uploaded logo, or null. Purged with the row (FR-154). */
+    logoStorageKey: text('logo_storage_key'),
+    logoMediaType: text('logo_media_type'),
+    logoWidth: integer('logo_width'),
+    logoHeight: integer('logo_height'),
+    logoBytes: bigint('logo_bytes', { mode: 'number' }),
+    logoAlt: text('logo_alt'),
+    /** A hex colour. The readable foreground is derived, never stored (FR-139). */
+    accentColor: text('accent_color').notNull().default('#18181B'),
+    colorScheme: colorSchemeEnum('color_scheme').notNull().default('system'),
+    cornerRadius: cornerRadiusEnum('corner_radius').notNull().default('soft'),
+    typeface: typefaceEnum('typeface').notNull().default('sans'),
+
+    // --- Copy (FR-141, FR-142) ----------------------------------------------
+    submitLabel: text('submit_label').notNull().default('Submit'),
+    thankYouTitle: text('thank_you_title').notNull().default('Thank you'),
+    thankYouBody: text('thank_you_body').notNull().default('Your feedback has been recorded.'),
+    closedMessage: text('closed_message')
+      .notNull()
+      .default('This form is not accepting responses right now.'),
+
+    // --- Behaviour (FR-135, FR-141, FR-143) ---------------------------------
+    redirectUrl: text('redirect_url'),
+    showProgress: boolean('show_progress').notNull().default(true),
+    embedding: embeddingEnum('embedding').notNull().default('anywhere'),
+    /** Origins allowed to frame the page when `embedding` is "listed". */
+    allowedOrigins: jsonb('allowed_origins').$type<string[]>().notNull().default([]),
+
+    createdAt,
+    updatedAt,
+  },
+  (table) => [uniqueIndex('hosted_forms_slug_idx').on(table.slug)],
+);
+
+/**
  * Section 10.2: invitations (FR-006, FR-007).
  *
  * Exactly one of `projectId` or `feedbackDatabaseId` is set, which is the invitation's
@@ -378,3 +445,4 @@ export type AttachmentRow = typeof attachments.$inferSelect;
 export type InvitationRow = typeof invitations.$inferSelect;
 export type ProjectMembershipRow = typeof projectMemberships.$inferSelect;
 export type FeedbackDatabaseMembershipRow = typeof feedbackDatabaseMemberships.$inferSelect;
+export type HostedFormRow = typeof hostedForms.$inferSelect;

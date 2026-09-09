@@ -11,6 +11,7 @@ import { BuilderPage } from '@/pages/builder';
 import { InvitationPage } from '@/pages/invitation';
 import { NotFoundPage } from '@/pages/not-found';
 import { RendererPage } from '@/renderer/renderer-page';
+import { HostedFormPage } from '@/hosted/hosted-page';
 
 /**
  * FR-004: nothing in the management interface renders before the session is known.
@@ -23,6 +24,9 @@ export function App() {
     <Routes>
       <Route path="/sign-in" element={<SignInGate />} />
       <Route path="/render/:databaseId" element={<RendererPage />} />
+      {/* FR-130: the shared address. Outside the session, like the renderer, and
+          outside the management shell, because it belongs to the operator's brand. */}
+      <Route path="/f/:slug" element={<HostedFormPage />} />
       {/* Journey 7.4: reachable without an account, since for most invitees this is
           the first Inlet page they see. */}
       <Route path="/invitations/:token" element={<InvitationPage />} />

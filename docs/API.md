@@ -14,6 +14,7 @@ Everything is under `/v1`. Requests and responses are JSON unless stated otherwi
 - [Screenshots](#screenshots)
 - [Reading and exporting feedback](#reading-and-exporting-feedback)
 - [Managing forms](#managing-forms)
+- [Hosted forms](#hosted-forms)
 - [Access: members and invitations](#access-members-and-invitations)
 - [Errors](#errors)
 - [Limits](#limits)
@@ -37,6 +38,10 @@ Send either as a bearer token:
 ```
 Authorization: Bearer ipk_...
 ```
+
+**A hosted form slug** authorizes the public page and nothing else. It is a fourth
+way in, used only by the routes under `/v1/hosted/{slug}`, and it needs no key, no
+account and no cookie. See [Hosted forms](#hosted-forms).
 
 **A management session** is what the web interface uses. `POST /v1/auth/sign-in` with
 an email and password sets an HTTP-only cookie; `POST /v1/auth/sign-out` ends it.
@@ -397,6 +402,192 @@ draft moved since you loaded it.
 Unpublishing blocks client retrieval and new intents without deleting anything. Rolling
 back reactivates an earlier version. Neither affects intents already issued.
 
+## Hosted forms
+
+A hosted form is a second way to collect, beside the client feedback flow. You share
+one link and anyone who opens it can respond: no key to embed, no code to write.
+Both paths work at once on the same feedback database, and a response looks identical
+whichever way it arrived, because the hosted routes call exactly the same intent,
+validation and storage services the client API calls.
+
+Use the client API when you are building the form into your own product, and a hosted
+form when you want a link to put in an email, a webview, a help centre, or an iframe.
+
+### The address
+
+Every feedback database can expose one hosted form at `/f/{slug}`. It is created
+disabled the first time anybody reads it, with a generated address, and collects
+nothing until you enable it.
+
+```
+GET    /v1/feedback-databases/{databaseId}/hosted-form
+PATCH  /v1/feedback-databases/{databaseId}/hosted-form
+POST   /v1/feedback-databases/{databaseId}/hosted-form/rotate-slug
+POST   /v1/feedback-databases/{databaseId}/hosted-form/logo
+DELETE /v1/feedback-databases/{databaseId}/hosted-form/logo
+```
+
+These need a Creator or Admin of the feedback database, or a secret server key. A
+publishable key is refused.
+
+```json
+{
+  "feedbackDatabaseId": "fdb_n8b3mj3axdfh",
+  "slug": "beta-feedback",
+  "url": "https://inlet.example.com/f/beta-feedback",
+  "enabled": true,
+  "accentColor": "#0F766E",
+  "colorScheme": "system",
+  "cornerRadius": "soft",
+  "typeface": "sans",
+  "logoUrl": "/v1/hosted/beta-feedback/logo",
+  "logoAlt": "Acme",
+  "submitLabel": "Send feedback",
+  "thankYouTitle": "Thank you",
+  "thankYouBody": "We read every response.",
+  "closedMessage": "This form is not accepting responses right now.",
+  "redirectUrl": null,
+  "showProgress": true,
+  "embedding": "anywhere",
+  "allowedOrigins": []
+}
+```
+
+`PATCH` changes only the fields you send. A slug is lowercase letters, digits and
+single hyphens, 3 to 64 characters; a taken or reserved one returns
+`409 name_conflict`. `POST .../rotate-slug` issues a new address and the previous one
+stops working immediately, which is how you revoke a link that spread further than you
+meant.
+
+A logo is `multipart/form-data` with a `file` part and an optional `alt` field. It is
+validated by content and re-encoded to WebP exactly as a screenshot is, with a 1 MB
+source ceiling and 4 megapixels.
+
+### Branding
+
+| Setting | Values |
+| --- | --- |
+| `accentColor` | A hex colour. The readable text colour on it is derived, never configured. |
+| `colorScheme` | `light`, `dark`, `system` |
+| `cornerRadius` | `sharp`, `soft`, `round` |
+| `typeface` | `sans`, `serif`, `mono` |
+
+Branding is presentation only. It cannot change what is asked, what is validated, or
+what is stored.
+
+### The public routes
+
+Everything here is authorized by the slug in the path.
+
+```
+GET    /v1/hosted/{slug}
+GET    /v1/hosted/{slug}/logo
+POST   /v1/hosted/{slug}/submission-intents
+POST   /v1/hosted/{slug}/submission-intents/{intentId}/attachments
+DELETE /v1/hosted/{slug}/submission-intents/{intentId}/attachments/{attachmentId}
+POST   /v1/hosted/{slug}/submission-intents/{intentId}/submit
+```
+
+`GET /v1/hosted/{slug}` returns the branding, the wording, and the published form when
+the hosted form is open. A closed one returns `open: false`, your closed message, and
+no questions at all.
+
+```json
+{
+  "slug": "beta-feedback",
+  "open": true,
+  "form": { "feedbackDatabaseId": "fdb_…", "formVersion": 3, "pages": [] },
+  "closedMessage": "This form is not accepting responses right now.",
+  "branding": { "accentColor": "#0F766E", "colorScheme": "system", "…": "…" },
+  "copy": { "submitLabel": "Send feedback", "thankYouTitle": "Thank you", "thankYouBody": "…" },
+  "behaviour": { "redirectUrl": null, "showProgress": true }
+}
+```
+
+The intent, upload, discard and submit routes behave exactly as their client-API
+counterparts, including the retry contract: the same payload replays, a different
+payload conflicts, a validation failure leaves the intent usable. The intent token
+goes in `X-Inlet-Intent-Token` as usual.
+
+The one difference is the submit body, which takes `context` in place of
+`clientContext`. It is a fixed, bounded set of fields rather than arbitrary JSON,
+because a public page must not be a way to write anything at all into your stored
+data:
+
+```json
+{
+  "formVersion": 3,
+  "answers": { "el_…": { "value": "…" } },
+  "context": {
+    "source": "release-email",
+    "userAgent": "…",
+    "language": "en-GB",
+    "viewport": "390x844",
+    "embeddedOn": "https://help.example.com"
+  }
+}
+```
+
+Inlet records `via: "hosted"` and the slug alongside whatever you send, and keeps only
+the origin of `embeddedOn`, never its full address.
+
+### The page
+
+`GET /f/{slug}` serves the page itself. Two things happen per request that a
+single-page fallback could not do: the framing headers the operator chose, which a
+browser only honours on the document, and the branding, injected into the initial HTML
+so the first paint is already in their colours.
+
+The page never displays Inlet's own brand, sets no cookie, and reads no browser
+storage, so it works inside a third-party frame, inside a webview, and in a browser
+configured to block site data.
+
+### Prefilling and attribution
+
+| Query parameter | Effect |
+| --- | --- |
+| `?source=…` | Recorded with the submission. |
+| `?embed=1` | Renders for a frame: no outer card, and the page reports its height to the parent. |
+| `?el_…=value` | Prefills the question with that element ID. |
+
+A prefill names the question by its own element ID, as the builder shows it, for
+example `?el_7k2mnp4qrs8t=Good`. A choice accepts an option ID or an option label, so
+a link in an email can carry a readable first answer. Repeat the parameter for a multi-select. A
+prefilled answer is an ordinary answer: shown to the respondent, editable, validated
+and stored the same way.
+
+### Embedding
+
+`embedding` controls where the page may be framed: `anywhere`, `nowhere`, or `listed`
+with `allowedOrigins`. It is enforced by the browser through `Content-Security-Policy:
+frame-ancestors` on the document. Your own Inlet origin is always allowed, because the
+management interface previews the real page in a frame.
+
+The frame reports the height it needs, so the embedding page never has to guess:
+
+```html
+<iframe id="inlet-form" src="https://inlet.example.com/f/beta-feedback?embed=1"
+        title="Feedback" width="100%" height="520" style="border:0" loading="lazy"></iframe>
+<script>
+  window.addEventListener('message', function (event) {
+    var frame = document.getElementById('inlet-form');
+    if (!frame || event.source !== frame.contentWindow) return;
+    var data = event.data;
+    if (!data || data.source !== 'inlet' || data.type !== 'height') return;
+    frame.style.height = data.height + 'px';
+  });
+</script>
+```
+
+The `event.source` check matters: without it any frame on the page could resize this
+one by posting the same message.
+
+### What a hosted form does not do
+
+It does not establish who a respondent is. Repeat submissions through a public link are
+expected, exactly as they are through the client API. If you need identity, collect it
+as a question, or use the client API from an authenticated part of your product.
+
 ## Access: members and invitations
 
 These need a secret server key or a signed-in Admin of the scope.
@@ -576,11 +767,16 @@ The codes you are most likely to handle:
 | Free-text answer | The question's own limit, at most 10,000 characters |
 | Submission intent lifetime | 30 minutes by default |
 | Pending upload lifetime | 1 day, enforced by the object store |
+| Hosted form logo source file | 1 MB |
+| Hosted form logo decoded size | 4 megapixels |
+| Hosted form slug | 3 to 64 characters |
+| Embedding origins per hosted form | 20 |
 
 These are product limits, not deployment settings: they are part of the contract.
 
 Security rate limits also apply and are not configurable: sign-in, submission-intent
-creation, uploads and finalization are all throttled. A throttled request returns
+creation, uploads and finalization are all throttled. The public hosted form routes
+carry their own limits, applied per requesting address and per slug. A throttled request returns
 `429 rate_limit_exceeded`.
 
 ## What each credential may do
@@ -606,3 +802,5 @@ creation, uploads and finalization are all throttled. A throttled request return
 | List who has access | No | Yes | Viewer or above |
 | Invite, change a role, remove access | No | Yes | Admin of the scope |
 | Read or redeem an invitation link | Not applicable | Not applicable | Anyone holding the link |
+| Read or change the hosted form | No | Yes | Creator or Admin |
+| Open the hosted form and respond | Not applicable | Not applicable | Anyone holding the link |

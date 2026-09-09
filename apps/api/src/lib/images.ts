@@ -22,20 +22,51 @@ export type ProcessedImage = {
   storedBytes: number;
 };
 
+function formatMegabytes(bytes: number): string {
+  const mb = bytes / (1024 * 1024);
+  return mb >= 1 ? `${Math.floor(mb)} MB` : `${Math.floor(bytes / 1024)} KB`;
+}
+
 const FORMAT_TO_MEDIA_TYPE: Record<string, string> = {
   jpeg: 'image/jpeg',
   png: 'image/png',
   webp: 'image/webp',
 };
 
-export async function processScreenshot(source: Buffer): Promise<ProcessedImage> {
+/** What differs between an uploaded screenshot and an uploaded logo. */
+export type ImageLimits = {
+  maxSourceBytes: number;
+  maxPixels: number;
+  /** Names the thing in an error message, so a respondent reads about a screenshot. */
+  noun?: string;
+};
+
+export function processScreenshot(source: Buffer): Promise<ProcessedImage> {
+  return processImage(source, {
+    maxSourceBytes: LIMITS.attachmentMaxSourceBytes,
+    maxPixels: LIMITS.attachmentMaxPixels,
+    noun: 'screenshot',
+  });
+}
+
+/**
+ * The one image pipeline. A logo and a screenshot differ only in their limits, so
+ * they share every check: format by content, animation by container, decoded size,
+ * and re-encoding to WebP.
+ */
+export async function processImage(
+  source: Buffer,
+  limits: ImageLimits,
+): Promise<ProcessedImage> {
+  const noun = limits.noun ?? 'image';
+
   if (source.length === 0) {
     throw apiError('upload_failed', 'The uploaded file is empty.');
   }
-  if (source.length > LIMITS.attachmentMaxSourceBytes) {
+  if (source.length > limits.maxSourceBytes) {
     throw apiError(
       'file_too_large',
-      `A screenshot may be at most ${Math.floor(LIMITS.attachmentMaxSourceBytes / (1024 * 1024))} MB.`,
+      `A ${noun} may be at most ${formatMegabytes(limits.maxSourceBytes)}.`,
     );
   }
 
@@ -50,7 +81,7 @@ export async function processScreenshot(source: Buffer): Promise<ProcessedImage>
   if (!mediaType || !ACCEPTED_IMAGE_MEDIA_TYPES.includes(mediaType as never)) {
     throw apiError(
       'unsupported_image_format',
-      'Screenshots must be JPEG, PNG, or WebP.',
+      `A ${noun} must be JPEG, PNG, or WebP.`,
     );
   }
 
@@ -67,10 +98,10 @@ export async function processScreenshot(source: Buffer): Promise<ProcessedImage>
   if (width <= 0 || height <= 0) {
     throw apiError('unsupported_image_format', 'That image has no readable dimensions.');
   }
-  if (width * height > LIMITS.attachmentMaxPixels) {
+  if (width * height > limits.maxPixels) {
     throw apiError(
       'image_too_many_pixels',
-      `A screenshot may be at most ${LIMITS.attachmentMaxPixels / 1_000_000} megapixels.`,
+      `A ${noun} may be at most ${limits.maxPixels / 1_000_000} megapixels.`,
     );
   }
 
@@ -83,7 +114,7 @@ export async function processScreenshot(source: Buffer): Promise<ProcessedImage>
       .webp({ quality: STORED_IMAGE_QUALITY })
       .toBuffer({ resolveWithObject: true });
   } catch {
-    throw apiError('upload_failed', 'That image could not be converted for storage.');
+    throw apiError('upload_failed', `That ${noun} could not be converted for storage.`);
   }
 
   return {

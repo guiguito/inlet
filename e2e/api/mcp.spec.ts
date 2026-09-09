@@ -127,6 +127,7 @@ test.describe('the MCP server', () => {
           'get_deletion_impact',
           'get_feedback_database',
           'get_form_draft',
+          'get_hosted_form',
           'get_project',
           'get_published_form',
           'get_screenshot',
@@ -144,10 +145,12 @@ test.describe('the MCP server', () => {
           'rename_project',
           'revoke_invitation',
           'rollback_form',
+          'rotate_hosted_form_address',
           'save_form_draft',
           'set_member_role',
           'submit_feedback',
           'unpublish_form',
+          'update_hosted_form',
         ].sort(),
       );
 
@@ -650,6 +653,93 @@ test.describe('the MCP server', () => {
     } finally {
       await client.close();
       await server.close();
+    }
+  });
+
+  test('reads, configures and rotates the hosted form (FR-151)', async ({ request }) => {
+    const f = await fixture(request, 'MCP hosted');
+    const session = await connect(f.secretKey);
+
+    try {
+      // Reading it is what tells an agent the address, and creates a disabled one on
+      // the first call rather than requiring a separate step.
+      const initial = parsed<{ slug: string; enabled: boolean; url: string }>(
+        await session.client.callTool({
+          name: 'get_hosted_form',
+          arguments: { databaseId: f.databaseId },
+        }),
+      );
+      expect(initial.enabled).toBe(false);
+      expect(initial.url.endsWith(`/f/${initial.slug}`)).toBe(true);
+
+      const updated = parsed<{
+        enabled: boolean;
+        slug: string;
+        accentColor: string;
+        submitLabel: string;
+        embedding: string;
+        allowedOrigins: string[];
+      }>(
+        await session.client.callTool({
+          name: 'update_hosted_form',
+          arguments: {
+            databaseId: f.databaseId,
+            enabled: true,
+            slug: 'mcp-configured-form',
+            accentColor: '#7C3AED',
+            submitLabel: 'Send it',
+            embedding: 'listed',
+            allowedOrigins: ['https://help.example.com'],
+          },
+        }),
+      );
+      expect(updated).toMatchObject({
+        enabled: true,
+        slug: 'mcp-configured-form',
+        accentColor: '#7C3AED',
+        submitLabel: 'Send it',
+        embedding: 'listed',
+        allowedOrigins: ['https://help.example.com'],
+      });
+
+      // The link is live from that call alone.
+      const anonymous = await request.get('/v1/hosted/mcp-configured-form');
+      expect(anonymous.status()).toBe(200);
+      expect((await anonymous.json()).open).toBe(true);
+
+      // A change with nothing to change is refused rather than being a silent no-op.
+      const empty = await session.client.callTool({
+        name: 'update_hosted_form',
+        arguments: { databaseId: f.databaseId },
+      });
+      expect(isError(empty)).toBe(true);
+
+      // An invalid colour never reaches the server's stored settings.
+      const badColour = await session.client.callTool({
+        name: 'update_hosted_form',
+        arguments: { databaseId: f.databaseId, accentColor: 'rebeccapurple' },
+      });
+      expect(isError(badColour)).toBe(true);
+
+      // Rotating retires a shared link, so it demands the current address first.
+      const unconfirmed = await session.client.callTool({
+        name: 'rotate_hosted_form_address',
+        arguments: { databaseId: f.databaseId, confirm: 'guessed-address' },
+      });
+      expect(isError(unconfirmed)).toBe(true);
+      expect(textOf(unconfirmed)).toContain('Refusing to continue');
+
+      const rotated = parsed<{ slug: string }>(
+        await session.client.callTool({
+          name: 'rotate_hosted_form_address',
+          arguments: { databaseId: f.databaseId, confirm: 'mcp-configured-form' },
+        }),
+      );
+      expect(rotated.slug).not.toBe('mcp-configured-form');
+      expect((await request.get('/v1/hosted/mcp-configured-form')).status()).toBe(404);
+      expect((await request.get(`/v1/hosted/${rotated.slug}`)).status()).toBe(200);
+    } finally {
+      await session.close();
     }
   });
 });

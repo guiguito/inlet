@@ -6,10 +6,11 @@ Put a feedback form in any app in an afternoon, then read what users actually sa
 screenshots included, from your own server.
 
 Inlet separates form definition from form rendering and response storage. You design a
-multi-page form in a visual builder and publish it. Your application fetches the
-published definition, renders it however it likes, and posts the answers back in one
-call. Responses, screenshots and metadata land in your PostgreSQL and your object
-storage.
+multi-page form in a visual builder and publish it, then collect in either of two ways,
+or both at once: **share a link** to a branded page Inlet hosts for you, or **call the
+API** from your own application, which fetches the published definition, renders it
+however it likes, and posts the answers back in one call. Responses, screenshots and
+metadata land in your PostgreSQL and your object storage.
 
 - **Plain.** Forms are simple, answers are JSON, no analytics theatre.
 - **Yours.** Self-hosted by default, your data, your server. No vendor lock-in, no
@@ -19,9 +20,10 @@ storage.
 
 ## What this release does
 
-Both releases of the PRD are implemented: **Release 1 (Solo)**, one operator running
-their own deployment, and **Release 2 (Team)**, a second person invited with a limited
-role and an AI agent able to operate the project.
+All three releases of the PRD are implemented: **Release 1 (Solo)**, one operator
+running their own deployment, **Release 2 (Team)**, a second person invited with a
+limited role and an AI agent able to operate the project, and **Release 3 (Hosted
+forms)**, collecting from a shared link with no client code at all.
 
 - Email-and-password sign-in for a single Admin account provisioned from configuration.
 - Projects, each holding feedback databases and project-owned API keys.
@@ -51,6 +53,22 @@ And from Release 2:
   and publish forms, and manage access. See [`docs/MCP.md`](docs/MCP.md).
 - Optional malware scanning of uploads through ClamAV, alongside the WebP re-encoding
   that always runs.
+
+And from Release 3:
+
+- Hosted forms: every feedback database can expose one branded page at `/f/<address>`.
+  Share the link in an email or a webview, or embed it in an iframe that sizes itself.
+  No API key, no respondent account, no cookie, no browser storage.
+- Branding an operator cannot get wrong: a logo, an accent colour, a colour scheme,
+  corner radius and typeface. The readable text colour on the accent is derived rather
+  than configured, so it always clears WCAG AA contrast.
+- Custom addresses, and rotation that retires a link the moment it has spread too far.
+- Embedding allowed anywhere, nowhere, or only on origins you list, enforced by the
+  browser through the page's own headers.
+- The wording a respondent reads, a thank-you page or a redirect, prefilled answers
+  from the link, and a `?source=` recorded with the response.
+- The same submission intents, validation, retry contract and versioning as the API,
+  so a response looks identical whichever way it arrived.
 
 See [`docs/DECISIONS.md`](docs/DECISIONS.md) for every technical choice and its
 reasoning.
@@ -124,6 +142,19 @@ Full reference: [`docs/API.md`](docs/API.md) for the guide, `/docs` for the
 interactive OpenAPI reference, and [`docs/openapi.json`](docs/openapi.json) for the
 machine-readable document.
 
+## Or share a link
+
+No client code at all. On a feedback database's **Share** tab, turn the link on, brand
+it, and pass the address around:
+
+```
+https://inlet.example.com/f/beta-feedback
+```
+
+It works in an email, a webview and an iframe, sets no cookie, and reads no browser
+storage. Both paths collect into the same place, and you can use either or both.
+Details in [`docs/API.md`](docs/API.md#hosted-forms).
+
 There is also a **reference renderer** built into the app. Open
 `/render/<databaseId>?key=<publishableKey>` and it runs the whole client flow against
 your API: useful for checking a form before writing any client code, and it is what
@@ -136,7 +167,7 @@ the browser tests drive. It ships unbranded and themeable.
 | `packages/shared` | The form definition, answer validation, limits and error codes. Shared by the API and the web app so the contract cannot drift. |
 | `apps/api` | Fastify server, Drizzle schema and migrations, services, routes, tests. |
 | `apps/mcp` | `inlet-mcp`, the MCP server. A thin layer over the HTTP API. |
-| `apps/web` | React management interface, form builder and reference renderer. |
+| `apps/web` | React management interface, form builder, hosted form page and reference renderer. |
 | `e2e` | Playwright suites: the HTTP contract, and the interface in a browser. |
 | `docs` | API guide, MCP guide, technical decisions, generated OpenAPI document. |
 | `scripts` | Local PostgreSQL and MinIO, and the end-to-end server. |

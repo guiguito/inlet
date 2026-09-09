@@ -31,6 +31,7 @@ const TABLES = [
   'attachments',
   'submissions',
   'submission_intents',
+  'hosted_forms',
   'form_versions',
   'form_drafts',
   'invitations',
