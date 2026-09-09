@@ -1,7 +1,7 @@
-<!-- The Inlet mark: a form with a gap in its left edge, and an arrow entering through it. -->
+<!-- The Inlet mark: the depth contours of a bay narrowing inland. Two contours at a
+     heavier weight, because the third closes up at this size. See components/logo.tsx. -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none"
-     stroke="#C2410C" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-  <path d="M6 8.5A2.5 2.5 0 0 1 8.5 6h15A2.5 2.5 0 0 1 26 8.5v15A2.5 2.5 0 0 1 23.5 26h-15A2.5 2.5 0 0 1 6 23.5V20M6 12v-1.5" />
-  <path d="M1.5 16H11" />
-  <path d="M7.5 12.5 11 16l-3.5 3.5" />
+     stroke="#C2410C" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M3.5 4v10c0 6.9 5.6 12.5 12.5 12.5S28.5 20.9 28.5 14V4" />
+  <path d="M11 4v11a5 5 0 0 0 10 0V4" />
 </svg>

@@ -1,9 +1,12 @@
 import { cn } from '@/lib/utils';
 
 /**
- * The Inlet mark (PRD section 20.4): a rounded rectangle standing for a page or form,
- * with a gap in its left edge and a short arrow entering through the gap. Single
- * stroke weight, monochrome, no gradients. Reads at 16 pixels.
+ * The Inlet mark (PRD section 20.4): the depth contours of a bay narrowing inland —
+ * three nested lines that stop at the open mouth. Single stroke weight, monochrome,
+ * no gradients.
+ *
+ * Below 20 pixels the innermost line closes up against the second, so the favicon in
+ * `public/favicon.svg` carries two contours at a heavier weight. Keep the two in step.
  */
 export function Logo({ className }: { className?: string }) {
   return (
@@ -17,14 +20,14 @@ export function Logo({ className }: { className?: string }) {
       className={cn('size-5', className)}
       aria-hidden="true"
     >
-      <path d="M6 8.5A2.5 2.5 0 0 1 8.5 6h15A2.5 2.5 0 0 1 26 8.5v15A2.5 2.5 0 0 1 23.5 26h-15A2.5 2.5 0 0 1 6 23.5V20M6 12v-1.5" />
-      <path d="M1.5 16H11" />
-      <path d="M7.5 12.5 11 16l-3.5 3.5" />
+      <path d="M3.5 4v10c0 6.9 5.6 12.5 12.5 12.5S28.5 20.9 28.5 14V4" />
+      <path d="M11 4v11a5 5 0 0 0 10 0V4" />
+      <path d="M16 4v9" />
     </svg>
   );
 }
 
-/** Mark plus lowercase wordmark, optically aligned to the rectangle. */
+/** Mark plus lowercase wordmark, optically aligned to the outer contour. */
 export function Wordmark({ className }: { className?: string }) {
   return (
     <span className={cn('inline-flex items-center gap-2 font-semibold tracking-tight', className)}>
