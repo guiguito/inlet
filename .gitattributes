@@ -1,3 +1,9 @@
 * text=auto eol=lf
-*.png binary
-*.woff2 binary
+
+# Generated from the Zod schemas by `npm run openapi`. Never edited by hand, and large
+# enough to bury a real diff if GitHub counts it as source.
+docs/openapi.json linguist-generated=true
+package-lock.json linguist-generated=true
+
+# Exported from Notion by hand; the Notion page is the working document.
+docs/PRD.md linguist-documentation=true

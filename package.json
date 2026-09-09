@@ -4,6 +4,25 @@
   "private": true,
   "description": "Inlet \u2014 the self-hosted feedback collector",
   "license": "MIT",
+  "author": "Guilhem Duch\u00e9",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OWNER/inlet.git"
+  },
+  "homepage": "https://github.com/OWNER/inlet#readme",
+  "bugs": {
+    "url": "https://github.com/OWNER/inlet/issues"
+  },
+  "keywords": [
+    "feedback",
+    "self-hosted",
+    "forms",
+    "survey",
+    "nps",
+    "fastify",
+    "postgres",
+    "mcp"
+  ],
   "type": "module",
   "engines": {
     "node": ">=22"
