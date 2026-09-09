@@ -148,6 +148,7 @@ export type SubmissionSummary = {
   answers: Record<string, StoredAnswer>;
   clientContext: unknown;
   attachmentCount: number;
+  firstAttachmentId: string | null;
 };
 
 export type SubmissionAttachment = {
@@ -163,7 +164,8 @@ export type SubmissionAttachment = {
   createdAt: string;
 };
 
-export type SubmissionDetail = SubmissionSummary & {
+/** The detail hands back every attachment, so it carries no list thumbnail ID. */
+export type SubmissionDetail = Omit<SubmissionSummary, 'firstAttachmentId'> & {
   formDefinition: FormDefinition;
   attachments: SubmissionAttachment[];
 };
@@ -172,7 +174,11 @@ export type SubmissionList = {
   submissions: SubmissionSummary[];
   nextCursor: string | null;
   total: number;
+  /** Null `since` means this reader has no marker yet, so nothing counts as unread. */
+  unread: { since: string | null; count: number };
 };
+
+export type SubmissionFilter = 'all' | 'unread' | 'screenshots';
 
 export type DeletionImpact = { submissions: number; attachments: number; notice: string };
 
@@ -477,13 +483,27 @@ export const api = {
       method: 'POST',
     }),
 
-  listSubmissions: (databaseId: string, options: { limit?: number; cursor?: string } = {}) => {
+  listSubmissions: (
+    databaseId: string,
+    options: {
+      limit?: number;
+      cursor?: string;
+      filter?: SubmissionFilter;
+      formVersion?: number;
+    } = {},
+  ) => {
     const params = new URLSearchParams();
     if (options.limit) params.set('limit', String(options.limit));
     if (options.cursor) params.set('cursor', options.cursor);
+    if (options.filter && options.filter !== 'all') params.set('filter', options.filter);
+    if (options.formVersion !== undefined) params.set('formVersion', String(options.formVersion));
     const query = params.size > 0 ? `?${params.toString()}` : '';
     return request<SubmissionList>(`/v1/feedback-databases/${databaseId}/submissions${query}`);
   },
+  markSubmissionsSeen: (databaseId: string) =>
+    request<{ seenAt: string }>(`/v1/feedback-databases/${databaseId}/submissions/seen`, {
+      method: 'POST',
+    }),
   getSubmission: (databaseId: string, submissionId: string) =>
     request<SubmissionDetail>(
       `/v1/feedback-databases/${databaseId}/submissions/${submissionId}`,
@@ -565,7 +585,11 @@ export const api = {
    * absolute URL naming a different hostname is fetched without credentials and the
    * image fails to load.
    */
-  attachmentPath: (attachmentId: string) => `/v1/attachments/${attachmentId}`,
+  /** A width asks the server to resize on the way out, for a list thumbnail. */
+  attachmentPath: (attachmentId: string, width?: number) =>
+    width === undefined
+      ? `/v1/attachments/${attachmentId}`
+      : `/v1/attachments/${attachmentId}?width=${width}`,
 };
 
 // --- The client feedback flow, used by the reference renderer ---------------

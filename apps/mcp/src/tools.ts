@@ -197,14 +197,26 @@ export function registerTools(server: McpServer, client: InletClient): void {
         databaseId,
         limit: z.number().int().min(1).max(200).optional().describe('Default 50.'),
         cursor: z.string().optional().describe('The nextCursor from a previous call.'),
+        formVersion: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe('Only responses answered against this published version.'),
+        withScreenshots: z
+          .boolean()
+          .optional()
+          .describe('Only responses that carry at least one screenshot.'),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ databaseId: id, limit, cursor }) =>
+    async ({ databaseId: id, limit, cursor, formVersion, withScreenshots }) =>
       guard(async () => {
         const params = new URLSearchParams();
         if (limit !== undefined) params.set('limit', String(limit));
         if (cursor) params.set('cursor', cursor);
+        if (formVersion !== undefined) params.set('formVersion', String(formVersion));
+        if (withScreenshots) params.set('filter', 'screenshots');
         const query = params.size > 0 ? `?${params.toString()}` : '';
         return json(
           await client.request('GET', `/v1/feedback-databases/${id}/submissions${query}`),

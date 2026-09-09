@@ -212,7 +212,10 @@ export async function attachmentsForSubmissions(
   const rows = await ctx.db
     .select()
     .from(attachments)
-    .where(inArray(attachments.submissionId, submissionIds));
+    .where(inArray(attachments.submissionId, submissionIds))
+    // FR-176: ordered so a submission's screenshots read the same way twice, and so
+    // the one the responses list shows as a thumbnail is always the same one.
+    .orderBy(attachments.createdAt, attachments.id);
 
   for (const row of rows) {
     if (!row.submissionId) continue;

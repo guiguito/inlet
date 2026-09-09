@@ -1028,6 +1028,13 @@
             "type": "integer",
             "minimum": -9007199254740991,
             "maximum": 9007199254740991
+          },
+          "firstAttachmentId": {
+            "description": "The screenshot a list view shows as a thumbnail, or null. Fetch it from /v1/attachments/{id}, optionally with ?width=.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -1037,7 +1044,8 @@
           "observedIp",
           "answers",
           "clientContext",
-          "attachmentCount"
+          "attachmentCount",
+          "firstAttachmentId"
         ]
       },
       "AttachmentInput": {
@@ -1247,13 +1255,38 @@
           "total": {
             "type": "integer",
             "minimum": -9007199254740991,
-            "maximum": 9007199254740991
+            "maximum": 9007199254740991,
+            "description": "How many submissions match the filters, not how many the feedback database holds."
+          },
+          "unread": {
+            "type": "object",
+            "properties": {
+              "since": {
+                "anyOf": [
+                  {},
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "count": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "since",
+              "count"
+            ],
+            "description": "What arrived since the signed-in reader last opened this list (FR-063A)."
           }
         },
         "required": [
           "submissions",
           "nextCursor",
-          "total"
+          "total",
+          "unread"
         ]
       },
       "DeletionImpactInput": {
@@ -2962,6 +2995,13 @@
             "type": "integer",
             "minimum": -9007199254740991,
             "maximum": 9007199254740991
+          },
+          "firstAttachmentId": {
+            "description": "The screenshot a list view shows as a thumbnail, or null. Fetch it from /v1/attachments/{id}, optionally with ?width=.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -2971,7 +3011,8 @@
           "observedIp",
           "answers",
           "clientContext",
-          "attachmentCount"
+          "attachmentCount",
+          "firstAttachmentId"
         ],
         "additionalProperties": false
       },
@@ -3194,13 +3235,42 @@
           "total": {
             "type": "integer",
             "minimum": -9007199254740991,
-            "maximum": 9007199254740991
+            "maximum": 9007199254740991,
+            "description": "How many submissions match the filters, not how many the feedback database holds."
+          },
+          "unread": {
+            "type": "object",
+            "properties": {
+              "since": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "count": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "since",
+              "count"
+            ],
+            "additionalProperties": false,
+            "description": "What arrived since the signed-in reader last opened this list (FR-063A)."
           }
         },
         "required": [
           "submissions",
           "nextCursor",
-          "total"
+          "total",
+          "unread"
         ],
         "additionalProperties": false
       },
@@ -6612,6 +6682,31 @@
           },
           {
             "schema": {
+              "default": "all",
+              "type": "string",
+              "enum": [
+                "all",
+                "unread",
+                "screenshots"
+              ]
+            },
+            "in": "query",
+            "name": "filter",
+            "required": false,
+            "description": "\"unread\" narrows to what arrived since the signed-in reader last looked, and is \"all\" for an API key."
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "in": "query",
+            "name": "formVersion",
+            "required": false
+          },
+          {
+            "schema": {
               "type": "string",
               "minLength": 1
             },
@@ -6627,6 +6722,78 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SubmissionList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/feedback-databases/{databaseId}/submissions/seen": {
+      "post": {
+        "summary": "Mark this list read up to now",
+        "tags": [
+          "Submissions"
+        ],
+        "description": "Moves the signed-in reader’s marker, so the next read reports only what arrived after this call. Requires a session: an API key has no reader to track.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "seenAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  },
+                  "required": [
+                    "seenAt"
+                  ],
+                  "additionalProperties": false
                 }
               }
             }
@@ -6869,6 +7036,17 @@
         ],
         "description": "Requires a management session or a secret server key with at least Viewer access to the attachment’s feedback database.",
         "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 16,
+              "maximum": 512
+            },
+            "in": "query",
+            "name": "width",
+            "required": false,
+            "description": "Resize to this width on the way out. Omit for the stored image."
+          },
           {
             "schema": {
               "type": "string",

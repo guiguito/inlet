@@ -14,11 +14,20 @@ Create a secret server key under the project's API keys tab. It is shown once.
 
 Then point an MCP client at the server. For Claude Code:
 
+The server is not published to npm, so build it from a checkout of this repository
+first:
+
+```bash
+npm install && npm run build
+```
+
+Then, for Claude Code:
+
 ```bash
 claude mcp add inlet \
   --env INLET_URL=https://inlet.example.com \
   --env INLET_SECRET_KEY=isk_your_secret_server_key \
-  -- npx -y inlet-mcp
+  -- node "/absolute/path/to/inlet/apps/mcp/dist/server.js"
 ```
 
 Or, in a client that reads a JSON config:
@@ -27,8 +36,8 @@ Or, in a client that reads a JSON config:
 {
   "mcpServers": {
     "inlet": {
-      "command": "npx",
-      "args": ["-y", "inlet-mcp"],
+      "command": "node",
+      "args": ["/absolute/path/to/inlet/apps/mcp/dist/server.js"],
       "env": {
         "INLET_URL": "https://inlet.example.com",
         "INLET_SECRET_KEY": "isk_your_secret_server_key"
@@ -38,10 +47,9 @@ Or, in a client that reads a JSON config:
 }
 ```
 
-Running from a checkout instead of npm:
+Or run it directly, to check it starts:
 
 ```bash
-npm run build
 INLET_URL=https://inlet.example.com INLET_SECRET_KEY=isk_... node apps/mcp/dist/server.js
 ```
 
@@ -71,7 +79,7 @@ and none to edit a submission, because submissions are immutable.
 | `get_published_form` | The definition a client would render. |
 | `get_form_draft` | The draft, its revision, and what stops it being published. |
 | `list_form_versions` | Published versions, newest first. |
-| `list_submissions` | Responses, newest first, paginated. |
+| `list_submissions` | Responses, newest first, paginated. Narrow with `formVersion` or `withScreenshots`. |
 | `get_submission` | One response, with the definition of the version it was answered against. |
 | `export_submissions` | Everything as JSON or CSV. |
 | `get_screenshot` | The image itself, as WebP. |

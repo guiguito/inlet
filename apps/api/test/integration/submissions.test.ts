@@ -366,4 +366,167 @@ describe('reviewing submissions', () => {
     expect(impact).toMatchObject({ submissions: 2, attachments: 1 });
     expect(impact.notice).toContain('Screenshot files are not included');
   });
+  /** FR-173 to FR-185: what the responses list narrows to, and what it calls unread. */
+  describe('narrowing the list', () => {
+    async function submitWithScreenshot(): Promise<string> {
+      const intent = await createIntent(h, ctx.publishableKey, ctx.databaseId, 1);
+      const uploaded = JSON.parse(
+        (
+          await uploadScreenshot(
+            h,
+            ctx.publishableKey,
+            ctx.databaseId,
+            intent,
+            f.shot,
+            await fixtures.png(120, 80),
+          )
+        ).body,
+      ) as { attachmentId: string };
+      const response = await finalize(h, ctx.publishableKey, ctx.databaseId, intent, {
+        formVersion: 1,
+        answers: {
+          [f.mood]: { optionId: f.moodOptions[0] },
+          [f.detail]: { value: 'with a screenshot' },
+          [f.shot]: { attachmentIds: [uploaded.attachmentId] },
+        },
+      });
+      return JSON.parse(response.body).submissionId as string;
+    }
+
+    const list = async (query = '') =>
+      JSON.parse(
+        (
+          await asAdmin(
+            h,
+            'GET',
+            `/v1/feedback-databases/${ctx.databaseId}/submissions${query}`,
+          )
+        ).body,
+      ) as {
+        submissions: { id: string; attachmentCount: number; firstAttachmentId: string | null }[];
+        total: number;
+        unread: { since: string | null; count: number };
+      };
+
+    it('carries the first screenshot ID so a list can show a thumbnail', async () => {
+      const withShot = await submitWithScreenshot();
+      await submit('no screenshot');
+
+      const listed = await list();
+      const shot = listed.submissions.find((row) => row.id === withShot);
+      const plain = listed.submissions.find((row) => row.id !== withShot);
+
+      expect(shot?.firstAttachmentId).toMatch(/^att_/);
+      expect(shot?.attachmentCount).toBe(1);
+      expect(plain?.firstAttachmentId).toBeNull();
+    });
+
+    it('narrows to responses that carry a screenshot, and counts only those', async () => {
+      const withShot = await submitWithScreenshot();
+      await submit('no screenshot');
+      await submit('also none');
+
+      const listed = await list('?filter=screenshots');
+
+      expect(listed.total).toBe(1);
+      expect(listed.submissions.map((row) => row.id)).toEqual([withShot]);
+    });
+
+    it('narrows to one published version', async () => {
+      await submit('against v1');
+      await saveDraft(h, ctx.databaseId, referenceDefinition(f));
+      await publish(h, ctx.databaseId);
+      const onV2 = await submit('against v2', 2);
+
+      const listed = await list('?formVersion=2');
+
+      expect(listed.total).toBe(1);
+      expect(listed.submissions.map((row) => row.id)).toEqual([onV2]);
+    });
+
+    it('reports nothing unread on a reader’s first visit, however much history there is', async () => {
+      await submit('long before you arrived');
+
+      const listed = await list();
+
+      expect(listed.unread).toEqual({ since: null, count: 0 });
+      // And asking for the unread ones on that first visit matches nothing, rather
+      // than quietly matching everything for want of a boundary.
+      expect((await list('?filter=unread')).total).toBe(0);
+    });
+
+    it('counts what arrived after the reader marked the list read', async () => {
+      await submit('before');
+      await list();
+      await asAdmin(h, 'POST', `/v1/feedback-databases/${ctx.databaseId}/submissions/seen`);
+
+      const quiet = await list();
+      expect(quiet.unread.count).toBe(0);
+
+      const arrived = await submit('after');
+      const listed = await list();
+
+      expect(listed.unread.count).toBe(1);
+      expect(listed.unread.since).not.toBeNull();
+      expect((await list('?filter=unread')).submissions.map((row) => row.id)).toEqual([arrived]);
+    });
+
+    it('does not move the marker just because the list was read', async () => {
+      await list();
+      await asAdmin(h, 'POST', `/v1/feedback-databases/${ctx.databaseId}/submissions/seen`);
+      await submit('unread');
+
+      // Three reads in a row must all still report the same one unread response: a
+      // read that moved the marker would clear the dot the reader is looking at.
+      expect((await list()).unread.count).toBe(1);
+      expect((await list()).unread.count).toBe(1);
+      expect((await list()).unread.count).toBe(1);
+    });
+
+    it('reports no unread state to a secret server key, and refuses to mark it read', async () => {
+      await submit('one');
+
+      const listed = JSON.parse(
+        (
+          await withKey(
+            h.app,
+            ctx.secretKey,
+            'GET',
+            `/v1/feedback-databases/${ctx.databaseId}/submissions`,
+          )
+        ).body,
+      ) as { unread: { since: string | null; count: number } };
+      expect(listed.unread).toEqual({ since: null, count: 0 });
+
+      const marked = await withKey(
+        h.app,
+        ctx.secretKey,
+        'POST',
+        `/v1/feedback-databases/${ctx.databaseId}/submissions/seen`,
+      );
+      expect(marked.statusCode).toBe(403);
+      expect(errorCode(marked)).toBe('insufficient_scope');
+    });
+
+    it('serves a narrower screenshot on request and never upscales one', async () => {
+      const submissionId = await submitWithScreenshot();
+      const listed = await list();
+      const attachmentId = listed.submissions.find((row) => row.id === submissionId)
+        ?.firstAttachmentId;
+
+      const thumbnail = await asAdmin(h, 'GET', `/v1/attachments/${attachmentId}?width=48`);
+      const stored = await asAdmin(h, 'GET', `/v1/attachments/${attachmentId}`);
+      const wider = await asAdmin(h, 'GET', `/v1/attachments/${attachmentId}?width=512`);
+
+      expect(thumbnail.statusCode).toBe(200);
+      expect(thumbnail.rawPayload.length).toBeLessThan(stored.rawPayload.length);
+      // Asking for more than the stored width hands back the stored bytes untouched.
+      expect(wider.rawPayload.length).toBe(stored.rawPayload.length);
+    });
+
+    it('refuses a width outside the thumbnail range', async () => {
+      expect((await asAdmin(h, 'GET', '/v1/attachments/att_x?width=4')).statusCode).toBe(400);
+      expect((await asAdmin(h, 'GET', '/v1/attachments/att_x?width=9000')).statusCode).toBe(400);
+    });
+  });
 });

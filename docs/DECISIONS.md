@@ -2,7 +2,8 @@
 
 Every choice made building Inlet that a future maintainer would otherwise have to
 reverse-engineer, with the reasoning and the alternatives that were rejected. Sections
-1 to 18 cover Release 1; section 19 covers Release 2.
+1 to 18 cover Release 1, 19 covers Release 2, 20 hosted forms, 21 Slack notifications,
+and 22 the identity and interface work that followed.
 
 The product requirements live in the PRD. This document is about *how*, and about the
 places where the PRD deliberately left the decision to technical design.
@@ -30,6 +31,7 @@ places where the PRD deliberately left the decision to technical design.
 19. [Release 2: team, MCP and scanning](#19-release-2-team-mcp-and-scanning)
 20. [Release 3: hosted forms](#20-release-3-hosted-forms)
 21. [Release 4: Slack notifications](#21-release-4-slack-notifications)
+22. [The mark, and the responses list](#22-the-mark-and-the-responses-list)
 
 ---
 
@@ -1176,3 +1178,138 @@ queue's plain select. The other has the fake never answer, and asserts the batch
 about five seconds rather than minutes.
 
 The user's real webhook is used exactly once, by hand, and never from a suite.
+
+---
+
+## 22. The mark, and the responses list
+
+PRD section 24 and the revised section 20.4 are the requirements; this section is the
+reasoning behind them, including two things that changed shape while being built.
+
+The interface had been correct and anonymous: shadcn defaults, zinc neutrals, one warm
+accent, and a mark that was very nearly lucide's `log-in` icon. Section 13 records the
+tokens; this section records what changed once someone looked at the result.
+
+### 22.1 The mark carries the name, not a category icon
+
+The old mark was a rounded rectangle with a gap in its left edge and an arrow entering
+through it. Two problems, both fatal for a mark: an arrow entering a box is the
+universal sign-in glyph, and the gap — the only part carrying the idea — closed up
+below 20 pixels, which is where a favicon lives.
+
+The mark is now the depth contours of a bay narrowing inland: three nested lines,
+stopping at the open mouth. Same 32-unit box, same single stroke weight, same
+monochrome rule.
+
+**The favicon drops the innermost line and takes a heavier stroke.** Three contours at
+16 pixels close up exactly as the old gap did. Rather than adding a size prop nobody
+else needs, `public/favicon.svg` carries the two-contour form and both files carry a
+comment pointing at the other.
+
+**It was chosen partly for what it is not: a single solid shape.** A solid mark is more
+robust at small sizes, and that was the runner-up. The contours won because the same
+path redraws at any size as a watermark in an empty state or a band behind a hosted
+form's header, which a solid shape cannot do. That reuse is the difference between a
+logo and an identity.
+
+### 22.2 Four tabs, because three of the seven were not tabs
+
+The feedback database page had seven: Responses, Integrate, Share, Notify, Versions,
+Access, Settings. Four of the seven were configuration, which made the row read as a
+settings menu with the actual work hidden at one end.
+
+They are now Responses, Form, Collect and Settings. Versions is what the form has
+looked like, so it became Form. Integrate and Share are both ways feedback gets in, so
+they became Collect. Access and the feedback database's own settings became Settings.
+
+**Slack sits under Settings, not Collect.** The first grouping put it with Integrate and
+Share on the reasoning that all three are integrations. That was the wrong axis: Collect
+is how a response gets *in*, and a notification is how it gets *out* again once
+collected. Grouping by "things involving an external system" would eventually put
+exports there too.
+
+**Both grouped tabs have a sub-nav rather than stacked panels.** Stacking was the first
+attempt and it was worse than what it replaced: panels that each save independently, one
+under another, mean several Save buttons down one page. Collect and Settings each carry
+sub-tabs, driven by the same `panel` search parameter, and a `panel` that does not belong
+to the tab being shown falls back to that tab's first panel rather than rendering
+nothing.
+
+**Every old address still lands on the exact panel it used to open**, not merely on the
+group: `?tab=notify` resolves to `?tab=settings&panel=notifications`. The address is then
+*rewritten* with `replace: true`, so a reader who bookmarks it again gets a tab that
+exists. These addresses are in bookmarks, in Slack messages and in this documentation,
+and the browser tests navigate to them directly — which makes them the redirect's own
+test.
+
+### 22.3 The response is the row
+
+The list was a table whose widest column was a truncated grey line between a date and
+two counters. The response — the only content on the page — was the least legible thing
+on it.
+
+A row now leads with the rating the respondent chose as a chip, then what they typed at
+reading size, then the screenshot as a thumbnail, then when it arrived. `answerPreview`,
+which flattened both answers into one string for a single table cell, was replaced by
+`answerSummary`, which returns them apart. Both still read labels from the version the
+submission was answered against (FR-065).
+
+**A thumbnail is resized on read, not stored twice.** `GET /v1/attachments/{id}?width=88`
+re-encodes the stored object narrower. Storing a second variant would mean a second
+object to tag, purge and keep in step with the first, for bytes that are cheap to
+recompute from something already bounded at 2 MB.
+
+**Screenshots are now ordered.** `attachmentsForSubmissions` and the submission detail
+both selected attachments with no `ORDER BY`, so a submission's screenshots could come
+back in a different order between two loads. Harmless until a list picks "the first
+one" to show as a thumbnail, at which point the thumbnail would change on refresh. Both
+queries now order by `(created_at, id)`.
+
+### 22.4 Unread is per reader, so it lives outside the submission
+
+A response belongs to the feedback database; "have I seen it" belongs to a reader, and
+two people reading the same feedback database read it separately. So `submission_views`
+holds one `seen_at` per (reader, feedback database), and the list reports
+`unread: { since, count }`.
+
+**A reader's first visit reports nothing unread.** The row is created at `now()` on
+first read, so opening a database with a year of history does not present four hundred
+unread responses. The same is true of a secret server key, which is a program and not a
+reader: its `since` is always null.
+
+**Reading the list does not move the marker; a separate call does.** This was the one
+real design trap. If a read moved it, the second page of an unread-filtered list would
+be measured against a boundary the first page had already moved, and a background
+refetch would clear the dots the reader was looking at. So `POST …/submissions/seen` is
+explicit, and the interface calls it when the reader *leaves* the list rather than when
+they arrive — marking on arrival would erase the dots in the same breath as drawing
+them.
+
+The client also freezes the boundary it was given in component state, so narrowing or
+paging never moves the dots underneath the reader.
+
+### 22.5 A bug the switcher walked into
+
+**Listing a project's feedback databases was a 500 for every Creator and Viewer.**
+`listAccessibleDatabaseIds` builds the "reachable through a database assignment alone"
+branch as a left join onto `project_memberships` whose condition reads
+`feedback_databases.project_id`, followed by the inner join that brings
+`feedback_databases` into scope. Postgres only lets a join condition reference tables
+already joined, so the statement was rejected outright — not a wrong answer, an error.
+Reordering the two joins fixes it.
+
+A project Admin short-circuits before that query and sees everything, and the
+management interface only reached the route from the project page, so it had gone
+unnoticed. The header switcher calls the same route from every feedback database page,
+which is how it surfaced. `roles.test.ts` now lists a project's feedback databases as a
+Viewer; without the reorder it fails with a 500.
+
+### 22.6 Kept off the list
+
+**Sentiment colour.** A red chip for "Not great" would have meant a new colour
+role — the palette's `destructive` means a dangerous action, not a bad review. The
+emoji the operator put in their own form already carries the sentiment, and it is
+their data rather than our interpretation of it, so the chip stays neutral.
+
+**A response volume chart.** It would have been the only number on the page nobody
+asked for.

@@ -19,11 +19,18 @@ export type Crumb = { label: string; to?: string };
 export function AppShell({
   user,
   crumbs = [],
+  context,
   actions,
   children,
 }: {
   user: CurrentUser;
   crumbs?: Crumb[];
+  /**
+   * Replaces the breadcrumb where a page can offer somewhere to go rather than only
+   * where it is — the feedback database switcher. Pages without a sideways move keep
+   * the breadcrumb.
+   */
+  context?: React.ReactNode;
   actions?: React.ReactNode;
   children: React.ReactNode;
 }) {
@@ -46,24 +53,31 @@ export function AppShell({
             <Wordmark />
           </Link>
 
-          <nav aria-label="Breadcrumb" className="min-w-0 flex-1">
-            <ol className="flex min-w-0 items-center gap-1.5 text-sm text-muted-foreground">
-              {crumbs.map((crumb, index) => (
-                <li key={`${crumb.label}-${index}`} className="flex min-w-0 items-center gap-1.5">
-                  <span aria-hidden="true" className="text-border">
-                    /
-                  </span>
-                  {crumb.to && index < crumbs.length - 1 ? (
-                    <Link className="truncate hover:text-foreground" to={crumb.to}>
-                      {crumb.label}
-                    </Link>
-                  ) : (
-                    <span className="truncate text-foreground">{crumb.label}</span>
-                  )}
-                </li>
-              ))}
-            </ol>
-          </nav>
+          {context ? (
+            <>
+              <span aria-hidden="true" className="h-4 w-px shrink-0 bg-border" />
+              <div className="min-w-0 flex-1">{context}</div>
+            </>
+          ) : (
+            <nav aria-label="Breadcrumb" className="min-w-0 flex-1">
+              <ol className="flex min-w-0 items-center gap-1.5 text-sm text-muted-foreground">
+                {crumbs.map((crumb, index) => (
+                  <li key={`${crumb.label}-${index}`} className="flex min-w-0 items-center gap-1.5">
+                    <span aria-hidden="true" className="text-border">
+                      /
+                    </span>
+                    {crumb.to && index < crumbs.length - 1 ? (
+                      <Link className="truncate hover:text-foreground" to={crumb.to}>
+                        {crumb.label}
+                      </Link>
+                    ) : (
+                      <span className="truncate text-foreground">{crumb.label}</span>
+                    )}
+                  </li>
+                ))}
+              </ol>
+            </nav>
+          )}
 
           <div className="flex shrink-0 items-center gap-1">
             {actions}

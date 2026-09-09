@@ -110,6 +110,21 @@ export const submissionIdParam = databaseIdParam.extend({ submissionId: z.string
 export const intentIdParam = databaseIdParam.extend({ intentId: z.string().min(1) });
 export const attachmentIdParam = z.object({ attachmentId: z.string().min(1) });
 
+/**
+ * A screenshot is stored once, at up to 2 MB, and a list view wants a thumbnail of it.
+ * Resizing on read rather than storing a second object keeps one object per attachment,
+ * so nothing new has to be purged, tagged or kept in step with the original.
+ */
+export const attachmentQuerySchema = z.object({
+  width: z.coerce
+    .number()
+    .int()
+    .min(16)
+    .max(512)
+    .optional()
+    .describe('Resize to this width on the way out. Omit for the stored image.'),
+});
+
 // --- Authentication ---------------------------------------------------------
 
 export const signInBodySchema = z.object({
@@ -540,6 +555,10 @@ export const submissionSummarySchema = z.object({
   answers: z.record(z.string(), storedAnswerSchema),
   clientContext: z.unknown().nullable(),
   attachmentCount: z.int(),
+  firstAttachmentId: z
+    .string()
+    .nullable()
+    .describe('The screenshot a list view shows as a thumbnail, or null. Fetch it from /v1/attachments/{id}, optionally with ?width=.'),
 });
 
 export const attachmentSchema = z.object({
@@ -555,7 +574,7 @@ export const attachmentSchema = z.object({
   createdAt: z.date(),
 });
 
-export const submissionDetailSchema = submissionSummarySchema.extend({
+export const submissionDetailSchema = submissionSummarySchema.omit({ firstAttachmentId: true }).extend({
   formDefinition: formDefinitionSchema.describe(
     'The definition this submission was made against, for label-accurate display (FR-065).',
   ),
@@ -565,13 +584,30 @@ export const submissionDetailSchema = submissionSummarySchema.extend({
 export const submissionListSchema = z.object({
   submissions: z.array(submissionSummarySchema),
   nextCursor: z.string().nullable(),
-  total: z.int(),
+  total: z.int().describe('How many submissions match the filters, not how many the feedback database holds.'),
+  unread: z
+    .object({
+      /**
+       * Null on a reader's first visit and for an API key, which has no reader to
+       * track. The list marks itself seen when it is read without a cursor.
+       */
+      since: z.date().nullable(),
+      count: z.int(),
+    })
+    .describe('What arrived since the signed-in reader last opened this list (FR-179, FR-180).'),
 });
 
 export const listSubmissionsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(50),
   cursor: z.string().optional(),
+  filter: z
+    .enum(['all', 'unread', 'screenshots'])
+    .default('all')
+    .describe('"unread" narrows to what arrived since the signed-in reader last looked, and is "all" for an API key.'),
+  formVersion: z.coerce.number().int().min(1).optional(),
 });
+
+export const seenResultSchema = z.object({ seenAt: z.date() });
 
 export const exportQuerySchema = z.object({
   format: z.enum(['json', 'csv']).default('json'),

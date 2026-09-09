@@ -29,6 +29,13 @@
       "when": 1788939144172,
       "tag": "0003_slack_notifications",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1788945316648,
+      "tag": "0004_submission_views",
+      "breakpoints": true
     }
   ]
 }

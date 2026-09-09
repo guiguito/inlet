@@ -1,22 +1,26 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  ChevronDownIcon,
   DownloadIcon,
   ExternalLinkIcon,
   InboxIcon,
+  Link2Icon,
   PencilRulerIcon,
   RotateCcwIcon,
   TrashIcon,
   UploadIcon,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { api, ApiError, type CurrentUser, type FormVersion } from '@/lib/api';
+import type { FormDefinition } from '@inlet/shared';
+import { api, ApiError, type CurrentUser, type FormVersion, type SubmissionFilter, type SubmissionSummary } from '@/lib/api';
 import { AccessPanel } from '@/components/access-panel';
-import { AppShell, PageHeader } from '@/components/app-shell';
-import { answerPreview } from '@/components/answer-view';
+import { AppShell } from '@/components/app-shell';
+import { answerSummary } from '@/components/answer-view';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { CopyField } from '@/components/copy-field';
+import { DatabaseSwitcher } from '@/components/database-switcher';
 import { NotifyPanel } from '@/components/notify-panel';
 import { SharePanel } from '@/components/share-panel';
 import { EmptyState } from '@/components/empty-state';
@@ -33,17 +37,92 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { formatDateTime, pluralize } from '@/lib/format';
+import { cn } from '@/lib/utils';
 
 /**
  * One feedback database: its responses, how to integrate it, its published versions,
  * and its settings (FR-021 to FR-025, FR-042E to FR-042G, FR-063, FR-110).
  */
+/**
+ * FR-186, FR-186A, FR-187: the tabs, and where the seven this page used to have went.
+ *
+ * Four of the seven were configuration, which made the row of tabs a settings menu
+ * with the actual work hidden at one end. Integrate, Share and Notify are all "how
+ * feedback gets here", so they became Collect; Access and the rest are administration,
+ * so they became Settings. Versions is what the form has looked like, which is Form.
+ */
+const TABS = [
+  { value: 'responses', label: 'Responses' },
+  { value: 'form', label: 'Form' },
+  {
+    value: 'collect',
+    label: 'Collect',
+    // Both are ways feedback gets in. Slack is not: it is how a response gets out
+    // again once collected, which makes it a setting rather than a channel.
+    panels: [
+      { value: 'app', label: 'Your app' },
+      { value: 'link', label: 'A shared link' },
+    ],
+  },
+  {
+    value: 'settings',
+    label: 'Settings',
+    // General leads because a tab's first panel is what a bare `?tab=settings`
+    // opens, and that address meant the name-and-delete panel before this
+    // regrouping. Changing what an existing address opens is the one thing the
+    // regrouping is not allowed to do.
+    panels: [
+      { value: 'general', label: 'General' },
+      { value: 'notifications', label: 'Notifications' },
+      { value: 'access', label: 'Access' },
+    ],
+  },
+] as const;
+
+/** The panels of a grouped tab, or none for a tab that is a single panel. */
+function panelsFor(tab: string): readonly { value: string; label: string }[] {
+  const entry = TABS.find((candidate) => candidate.value === tab);
+  return entry && 'panels' in entry ? entry.panels : [];
+}
+
+/**
+ * Where a link written against the old seven tabs now lands. Kept rather than dropped
+ * because these addresses are in people's bookmarks, in Slack, and in the docs — and
+ * each one resolves to the exact panel it used to open, not just the group.
+ */
+const MOVED_TABS: Record<string, { tab: string; panel?: string }> = {
+  integrate: { tab: 'collect', panel: 'app' },
+  share: { tab: 'collect', panel: 'link' },
+  notify: { tab: 'settings', panel: 'notifications' },
+  versions: { tab: 'form' },
+  access: { tab: 'settings', panel: 'access' },
+};
+
 export function DatabasePage({ user }: { user: CurrentUser }) {
   const { databaseId = '' } = useParams();
   const [params, setParams] = useSearchParams();
-  const tab = params.get('tab') ?? 'responses';
+  const requested = params.get('tab') ?? 'responses';
+  const moved = MOVED_TABS[requested];
+  const tab = moved?.tab ?? requested;
+  // A panel belongs to one tab, so a stale or foreign panel falls back to the first
+  // panel of the tab actually being shown rather than rendering nothing.
+  const panels = panelsFor(tab);
+  const requestedPanel = params.get('panel') ?? moved?.panel;
+  const panel =
+    panels.find((entry) => entry.value === requestedPanel)?.value ?? panels[0]?.value ?? '';
+
+  const show = (nextTab: string, nextPanel?: string) => {
+    if (nextTab === 'responses') return setParams({});
+    return setParams({ tab: nextTab, ...(nextPanel ? { panel: nextPanel } : {}) });
+  };
 
   const database = useQuery({
     queryKey: ['database', databaseId],
@@ -51,24 +130,40 @@ export function DatabasePage({ user }: { user: CurrentUser }) {
   });
 
   // The database response carries only its project's ID, so the project is fetched to
-  // name it in the breadcrumb.
+  // name it in the switcher.
   const project = useQuery({
     queryKey: ['project', database.data?.projectId],
     queryFn: () => api.getProject(database.data?.projectId ?? ''),
     enabled: Boolean(database.data?.projectId),
   });
 
+  // An old address is rewritten rather than merely honoured, so a reader who bookmarks
+  // it again gets the tab that exists.
+  useEffect(() => {
+    const target = MOVED_TABS[requested];
+    if (!target) return;
+    setParams(
+      { tab: target.tab, ...(target.panel ? { panel: target.panel } : {}) },
+      { replace: true },
+    );
+  }, [requested, setParams]);
+
   return (
     <AppShell
       user={user}
-      crumbs={[
-        { label: 'Projects', to: '/' },
-        {
-          label: project.data?.name ?? 'Project',
-          ...(database.data ? { to: `/projects/${database.data.projectId}` } : {}),
-        },
-        { label: database.data?.name ?? 'Feedback database' },
-      ]}
+      crumbs={[{ label: 'Projects', to: '/' }, { label: database.data?.name ?? 'Feedback database' }]}
+      {...(database.data
+        ? {
+            context: (
+              <DatabaseSwitcher
+                projectId={database.data.projectId}
+                projectName={project.data?.name ?? 'Project'}
+                databaseId={databaseId}
+                databaseName={database.data.name}
+              />
+            ),
+          }
+        : {})}
     >
       {database.isLoading ? (
         <Skeleton className="h-64" />
@@ -88,71 +183,109 @@ export function DatabasePage({ user }: { user: CurrentUser }) {
         />
       ) : database.data ? (
         <>
-          <PageHeader
-            title={database.data.name}
-            description={`${pluralize(database.data.submissionCount, 'response')} collected`}
-            actions={
-              <>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="space-y-1.5">
+              <h1 className="text-xl font-semibold tracking-tight">{database.data.name}</h1>
+              <div className="flex flex-wrap items-center gap-2 text-[13px] text-muted-foreground">
                 {database.data.activeFormVersion === null ? (
-                  <Badge variant="outline">Unpublished</Badge>
+                  <>
+                    <span className="inline-flex items-center gap-1.5">
+                      <span aria-hidden="true" className="size-1.5 rounded-full bg-muted-foreground/50" />
+                      Not collecting
+                    </span>
+                    <span aria-hidden="true" className="text-border">
+                      ·
+                    </span>
+                    <span>No published version</span>
+                  </>
                 ) : (
-                  <Badge variant="primary">Version {database.data.activeFormVersion}</Badge>
+                  <>
+                    <span className="inline-flex items-center gap-1.5">
+                      <span aria-hidden="true" className="size-1.5 rounded-full bg-success" />
+                      Collecting
+                    </span>
+                    <span aria-hidden="true" className="text-border">
+                      ·
+                    </span>
+                    <span className="numeric">Version {database.data.activeFormVersion} live</span>
+                  </>
                 )}
-                <Button variant="outline" asChild>
-                  <Link to={`/databases/${databaseId}/builder`}>
-                    <PencilRulerIcon />
-                    Open the builder
-                  </Link>
-                </Button>
-              </>
-            }
-          />
+                <span aria-hidden="true" className="text-border">
+                  ·
+                </span>
+                <span className="numeric">
+                  {pluralize(database.data.submissionCount, 'response')}
+                </span>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" asChild>
+                <Link to={`/databases/${databaseId}/builder`}>
+                  <PencilRulerIcon />
+                  Open the builder
+                </Link>
+              </Button>
+              <Button onClick={() => show('collect', 'link')}>
+                <Link2Icon />
+                Share the form
+              </Button>
+            </div>
+          </div>
 
-          <Tabs
-            value={tab}
-            onValueChange={(next) => setParams(next === 'responses' ? {} : { tab: next })}
-          >
+          <Tabs className="mt-6" value={tab} onValueChange={(next) => show(next)}>
             <TabsList>
-              <TabsTrigger value="responses">Responses</TabsTrigger>
-              <TabsTrigger value="integrate">Integrate</TabsTrigger>
-              <TabsTrigger value="share">Share</TabsTrigger>
-              <TabsTrigger value="notify">Notify</TabsTrigger>
-              <TabsTrigger value="versions">Versions</TabsTrigger>
-              <TabsTrigger value="access">Access</TabsTrigger>
-              <TabsTrigger value="settings">Settings</TabsTrigger>
+              {TABS.map((entry) => (
+                <TabsTrigger key={entry.value} value={entry.value}>
+                  {entry.label}
+                </TabsTrigger>
+              ))}
             </TabsList>
 
             <TabsContent value="responses">
               <ResponsesTab databaseId={databaseId} />
             </TabsContent>
-            <TabsContent value="integrate">
-              <IntegrateTab databaseId={databaseId} projectId={database.data.projectId} />
-            </TabsContent>
-            <TabsContent value="share">
-              <SharePanel databaseId={databaseId} />
-            </TabsContent>
-            <TabsContent value="notify">
-              <NotifyPanel databaseId={databaseId} />
-            </TabsContent>
-            <TabsContent value="versions">
+
+            <TabsContent value="form">
               <VersionsTab databaseId={databaseId} />
             </TabsContent>
-            <TabsContent value="access">
-              <AccessPanel
-                scope={{
-                  kind: 'feedbackDatabase',
-                  databaseId,
-                  name: database.data.name,
-                }}
-                currentUserId={user.id}
-              />
+
+            {/* One panel at a time in both grouped tabs: each saves on its own, and
+                several Save buttons down one page is the confusion this regrouping was
+                meant to remove rather than move. */}
+            <TabsContent value="collect">
+              <PanelTabs tab="collect" panel={panel} show={show}>
+                <TabsContent value="app">
+                  <IntegrateTab databaseId={databaseId} projectId={database.data.projectId} />
+                </TabsContent>
+                <TabsContent value="link">
+                  <SharePanel databaseId={databaseId} />
+                </TabsContent>
+              </PanelTabs>
             </TabsContent>
+
             <TabsContent value="settings">
-              <SettingsTab
-                databaseId={databaseId}
-                projectId={database.data.projectId}
-                name={database.data.name}
-              />
+              <PanelTabs tab="settings" panel={panel} show={show}>
+                <TabsContent value="access">
+                  <AccessPanel
+                    scope={{
+                      kind: 'feedbackDatabase',
+                      databaseId,
+                      name: database.data.name,
+                    }}
+                    currentUserId={user.id}
+                  />
+                </TabsContent>
+                <TabsContent value="notifications">
+                  <NotifyPanel databaseId={databaseId} />
+                </TabsContent>
+                <TabsContent value="general">
+                  <SettingsTab
+                    databaseId={databaseId}
+                    projectId={database.data.projectId}
+                    name={database.data.name}
+                  />
+                </TabsContent>
+              </PanelTabs>
             </TabsContent>
           </Tabs>
         </>
@@ -161,21 +294,93 @@ export function DatabasePage({ user }: { user: CurrentUser }) {
   );
 }
 
+/** The sub-navigation of a grouped tab, driven by the same `panel` search parameter. */
+function PanelTabs({
+  tab,
+  panel,
+  show,
+  children,
+}: {
+  tab: string;
+  panel: string;
+  show: (tab: string, panel?: string) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <Tabs value={panel} onValueChange={(next) => show(tab, next)}>
+      <TabsList>
+        {panelsFor(tab).map((entry) => (
+          <TabsTrigger key={entry.value} value={entry.value}>
+            {entry.label}
+          </TabsTrigger>
+        ))}
+      </TabsList>
+      {children}
+    </Tabs>
+  );
+}
+
+/**
+ * FR-063, FR-173 to FR-185: the responses list.
+ *
+ * The response is the content, so it gets the reading position: the rating it chose as
+ * a chip, what it typed at reading size, the screenshot as a thumbnail rather than a
+ * number, and a dot against whatever arrived since this reader last looked. It replaced
+ * a table whose widest column was a truncated grey line between a date and two counters.
+ */
 function ResponsesTab({ databaseId }: { databaseId: string }) {
+  const [filter, setFilter] = useState<SubmissionFilter>('all');
+  const [formVersion, setFormVersion] = useState<number | undefined>(undefined);
   const [cursor, setCursor] = useState<string | undefined>(undefined);
+
   const versions = useQuery({
     queryKey: ['versions', databaseId],
     queryFn: () => api.listVersions(databaseId),
   });
   const page = useQuery({
-    queryKey: ['submissions', databaseId, cursor ?? 'first'],
-    queryFn: () => api.listSubmissions(databaseId, { limit: 25, ...(cursor ? { cursor } : {}) }),
+    queryKey: ['submissions', databaseId, filter, formVersion ?? 'any', cursor ?? 'first'],
+    queryFn: () =>
+      api.listSubmissions(databaseId, {
+        limit: 25,
+        filter,
+        ...(cursor ? { cursor } : {}),
+        ...(formVersion === undefined ? {} : { formVersion }),
+      }),
   });
+
+  /**
+   * FR-185: the unread boundary is frozen at whatever the first load reported, so
+   * narrowing the list or paging through it does not move the dots under the reader.
+   */
+  const [unread, setUnread] = useState<{ since: string | null; count: number } | null>(null);
+  useEffect(() => {
+    setUnread((current) => current ?? page.data?.unread ?? null);
+  }, [page.data]);
+
+  /**
+   * Leaving marks the list read, not arriving. Marking on arrival would clear the dots
+   * in the same breath as drawing them, and would leave the unread filter with nothing
+   * to select for the rest of the visit.
+   */
+  useEffect(() => {
+    return () => {
+      void api.markSubmissionsSeen(databaseId).catch(() => {
+        // A marker that failed to move costs a reader one stale dot. Not worth a toast.
+      });
+    };
+  }, [databaseId]);
 
   const definitionFor = (version: number) =>
     versions.data?.find((candidate) => candidate.version === version)?.definition;
 
-  if (page.isLoading) return <Skeleton className="h-48" />;
+  const narrow = (next: SubmissionFilter) => {
+    setFilter(next);
+    setCursor(undefined);
+  };
+  const onlyVersion = (next: number | undefined) => {
+    setFormVersion(next);
+    setCursor(undefined);
+  };
 
   if (page.error) {
     return (
@@ -186,30 +391,59 @@ function ResponsesTab({ databaseId }: { databaseId: string }) {
     );
   }
 
-  if (!page.data || page.data.total === 0) {
-    return (
-      <EmptyState
-        icon={<InboxIcon />}
-        title="No responses yet"
-        description="Publish the form and point your app at this feedback database. Responses appear here as they arrive."
-      />
-    );
-  }
+  const showing = page.data?.submissions ?? [];
+  const unfiltered = filter === 'all' && formVersion === undefined;
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-muted-foreground numeric">
-          {pluralize(page.data.total, 'response')}
-        </p>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" asChild>
+        <div className="flex flex-wrap items-center gap-1" data-testid="response-filters">
+          <FilterChip active={filter === 'all'} onClick={() => narrow('all')}>
+            All
+          </FilterChip>
+          <FilterChip active={filter === 'unread'} onClick={() => narrow('unread')}>
+            Unread
+            {unread && unread.count > 0 ? (
+              <span className="numeric font-normal text-muted-foreground">{unread.count}</span>
+            ) : null}
+          </FilterChip>
+          <FilterChip active={filter === 'screenshots'} onClick={() => narrow('screenshots')}>
+            With screenshots
+          </FilterChip>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" className="text-[13px]">
+                {formVersion === undefined ? 'All versions' : `Version ${formVersion}`}
+                <ChevronDownIcon className="text-muted-foreground" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onSelect={() => onlyVersion(undefined)}>
+                All versions
+              </DropdownMenuItem>
+              {versions.data?.map((version) => (
+                <DropdownMenuItem
+                  key={version.version}
+                  onSelect={() => onlyVersion(version.version)}
+                >
+                  Version {version.version}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {/* Exporting stays two plain buttons. A menu would save a little width and
+              cost a click on the thing people come here to do. */}
+          <Button variant="outline" size="sm" className="text-[13px]" asChild>
             <a href={api.exportUrl(databaseId, 'json')} download>
               <DownloadIcon />
               Export JSON
             </a>
           </Button>
-          <Button variant="outline" size="sm" asChild>
+          <Button variant="outline" size="sm" className="text-[13px]" asChild>
             <a href={api.exportUrl(databaseId, 'csv')} download>
               <DownloadIcon />
               Export CSV
@@ -218,62 +452,169 @@ function ResponsesTab({ databaseId }: { databaseId: string }) {
         </div>
       </div>
 
-      <Card>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Received</TableHead>
-              <TableHead>Response</TableHead>
-              <TableHead className="w-20">Version</TableHead>
-              <TableHead className="w-24 text-right">Screenshots</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {page.data.submissions.map((submission) => (
-              <TableRow key={submission.id}>
-                <TableCell className="numeric whitespace-nowrap text-muted-foreground">
-                  <Link
-                    to={`/databases/${databaseId}/submissions/${submission.id}`}
-                    className="hover:text-primary"
+      {page.isLoading ? (
+        <Skeleton className="h-48" />
+      ) : showing.length === 0 ? (
+        <EmptyState
+          icon={<InboxIcon />}
+          title={unfiltered ? 'No responses yet' : 'Nothing matches that'}
+          description={
+            unfiltered
+              ? 'Publish the form and point your app at this feedback database, or share its link. Responses appear here as they arrive.'
+              : 'Widen the filters to see the rest.'
+          }
+          {...(unfiltered
+            ? {}
+            : {
+                action: (
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      narrow('all');
+                      onlyVersion(undefined);
+                    }}
                   >
-                    {formatDateTime(submission.createdAt)}
-                  </Link>
-                </TableCell>
-                <TableCell className="max-w-md">
-                  <Link
-                    to={`/databases/${databaseId}/submissions/${submission.id}`}
-                    className="line-clamp-1 hover:text-primary"
-                  >
-                    {answerPreview(definitionFor(submission.formVersion), submission.answers) ||
-                      'Open the response'}
-                  </Link>
-                </TableCell>
-                <TableCell className="numeric">{submission.formVersion}</TableCell>
-                <TableCell className="numeric text-right">
-                  {submission.attachmentCount > 0 ? submission.attachmentCount : '—'}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </Card>
+                    Show everything
+                  </Button>
+                ),
+              })}
+        />
+      ) : (
+        <ul className="divide-y" data-testid="response-list">
+          {showing.map((submission) => (
+            <ResponseRow
+              key={submission.id}
+              databaseId={databaseId}
+              submission={submission}
+              definition={definitionFor(submission.formVersion)}
+              unread={Boolean(unread?.since && submission.createdAt > unread.since)}
+            />
+          ))}
+        </ul>
+      )}
 
-      {page.data.nextCursor ? (
-        <div className="flex justify-center">
-          <Button variant="outline" onClick={() => setCursor(page.data.nextCursor ?? undefined)}>
-            Load more
-          </Button>
-        </div>
-      ) : null}
-
-      {cursor ? (
-        <div className="flex justify-center">
-          <Button variant="ghost" size="sm" onClick={() => setCursor(undefined)}>
-            Back to the newest
-          </Button>
+      {page.data && showing.length > 0 ? (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="numeric text-[13px] text-muted-foreground">
+            Showing {showing.length} of {page.data.total}
+          </p>
+          <div className="flex gap-2">
+            {cursor ? (
+              <Button variant="ghost" size="sm" onClick={() => setCursor(undefined)}>
+                Back to the newest
+              </Button>
+            ) : null}
+            {page.data.nextCursor ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCursor(page.data.nextCursor ?? undefined)}
+              >
+                Load more
+              </Button>
+            ) : null}
+          </div>
         </div>
       ) : null}
     </div>
+  );
+}
+
+function FilterChip({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        'inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[13px] font-medium transition-colors',
+        'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring',
+        active ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground',
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+function ResponseRow({
+  databaseId,
+  submission,
+  definition,
+  unread,
+}: {
+  databaseId: string;
+  submission: SubmissionSummary;
+  definition: FormDefinition | undefined;
+  unread: boolean;
+}) {
+  const { chip, text } = answerSummary(definition, submission.answers);
+
+  return (
+    <li>
+      <Link
+        to={`/databases/${databaseId}/submissions/${submission.id}`}
+        className="flex items-center gap-3.5 rounded-md px-3 py-3 transition-colors hover:bg-muted/50"
+      >
+        {/* The dot is decoration; the state it stands for is announced as text, since
+            a screen reader gets nothing from a coloured circle. */}
+        {unread ? <span className="sr-only">Unread. </span> : null}
+        <span
+          aria-hidden="true"
+          className={cn('size-1.5 shrink-0 rounded-full', unread ? 'bg-primary' : 'bg-transparent')}
+        />
+
+        {chip ? (
+          <Badge variant="default" className="shrink-0 gap-1.5 px-2.5 py-1">
+            {chip.emoji ? <span aria-hidden="true">{chip.emoji}</span> : null}
+            {chip.label}
+          </Badge>
+        ) : null}
+
+        <p
+          className={cn(
+            'min-w-0 flex-1 truncate text-[15px]',
+            unread ? 'font-medium' : 'font-normal',
+          )}
+        >
+          {text || <span className="text-muted-foreground">Open the response</span>}
+        </p>
+
+        {submission.firstAttachmentId ? (
+          <span className="flex w-[74px] shrink-0 items-center gap-1.5">
+            <img
+              // Twice the rendered width, so it stays sharp on a dense display and
+              // still costs a fraction of the stored screenshot.
+              src={api.attachmentPath(submission.firstAttachmentId, 88)}
+              alt=""
+              width={44}
+              height={30}
+              loading="lazy"
+              className="h-[30px] w-11 rounded-md border bg-muted object-cover"
+            />
+            {submission.attachmentCount > 1 ? (
+              <span className="numeric text-xs text-muted-foreground">
+                ×{submission.attachmentCount}
+              </span>
+            ) : null}
+          </span>
+        ) : (
+          <span aria-hidden="true" className="w-[74px] shrink-0" />
+        )}
+
+        <span className="numeric w-32 shrink-0 whitespace-nowrap text-right text-[13px] text-muted-foreground">
+          {formatDateTime(submission.createdAt)}
+        </span>
+      </Link>
+    </li>
   );
 }
 

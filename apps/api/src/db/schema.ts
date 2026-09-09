@@ -286,6 +286,33 @@ export const submissions = pgTable(
 );
 
 /**
+ * FR-179, FR-180, section 10.16: the per-reader, per-feedback-database
+ * "you have seen up to here" marker.
+ *
+ * The responses list shows a dot against everything that arrived since a reader last
+ * opened it, which needs one timestamp per reader — the submission itself cannot carry
+ * read state, because two people reading the same feedback database read it separately.
+ *
+ * The row is created on a reader's first visit and reports no unread from that visit,
+ * so opening a database with a year of history does not present four hundred unread
+ * responses. Only a management session has a reader; an API key never marks anything.
+ */
+export const submissionViews = pgTable(
+  'submission_views',
+  {
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    feedbackDatabaseId: text('feedback_database_id')
+      .notNull()
+      .references(() => feedbackDatabases.id, { onDelete: 'cascade' }),
+    seenAt: timestamp('seen_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt,
+  },
+  (table) => [primaryKey({ columns: [table.userId, table.feedbackDatabaseId] })],
+);
+
+/**
  * Section 10.11. An attachment belongs to one intent and one screenshot question; at
  * finalization it is bound to the resulting submission (FR-067).
  *

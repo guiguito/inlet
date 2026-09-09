@@ -246,7 +246,7 @@ test.describe('sharing a form as a link', () => {
     // --- The operator finds it among the responses --------------------------
     await page.goto(`/databases/${f.databaseId}`);
     await expect(page.getByText('easier to send round')).toBeVisible();
-    await page.getByRole('row', { name: /easier to send round/ }).getByRole('link').first().click();
+    await page.getByRole('link', { name: /easier to send round/ }).click();
     await expect(page.getByText('respondent@example.com')).toBeVisible();
     await expect(page.getByText('release-email')).toBeVisible();
     await expect(page.locator('img[alt*="creenshot"], img[src*="/v1/attachments/"]').first()).toBeVisible();

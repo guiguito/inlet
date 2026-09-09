@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, lt, sql } from 'drizzle-orm';
 import type { FormDefinition, StoredAnswers } from '@inlet/shared';
 import type { AppContext } from '../context.js';
 import {
@@ -6,6 +6,7 @@ import {
   formVersions,
   submissionIntents,
   submissions,
+  submissionViews,
   type AttachmentRow,
   type SubmissionRow,
 } from '../db/schema.js';
@@ -27,16 +28,34 @@ export type SubmissionSummary = {
   answers: StoredAnswers;
   clientContext: unknown;
   attachmentCount: number;
+  /**
+   * FR-175: the screenshot the responses list shows as a thumbnail, or null when
+   * there is none. One ID rather than the whole attachment row: the list needs a URL, and the
+   * rest of an attachment's metadata belongs to the detail view.
+   */
+  firstAttachmentId: string | null;
+};
+
+/** FR-183, FR-184: what the responses list can be narrowed to. */
+export type SubmissionFilters = {
+  /** Only submissions that arrived after this instant. */
+  since?: Date | undefined;
+  /** Only submissions that carry at least one screenshot. */
+  withAttachments?: boolean | undefined;
+  /** Only submissions made against this published version. */
+  formVersion?: number | undefined;
 };
 
 export type SubmissionListPage = {
   submissions: SubmissionSummary[];
   /** Cursor for the next page, or null at the end of the list. */
   nextCursor: string | null;
+  /** How many submissions match the filters, not how many the feedback database holds. */
   total: number;
 };
 
-export type SubmissionDetail = SubmissionSummary & {
+/** The detail hands back every attachment, so it has no use for the list's thumbnail ID. */
+export type SubmissionDetail = Omit<SubmissionSummary, 'firstAttachmentId'> & {
   /**
    * FR-065: the definition of the version this submission was made against, so a
    * reader sees the labels and option labels the respondent actually saw, even after
@@ -54,18 +73,19 @@ export type SubmissionDetail = SubmissionSummary & {
 export async function listSubmissions(
   ctx: AppContext,
   databaseId: string,
-  options: { limit: number; cursor?: string | undefined },
+  options: { limit: number; cursor?: string | undefined; filters?: SubmissionFilters },
 ): Promise<SubmissionListPage> {
   const cursor = decodeCursor(options.cursor);
+  const matches = filterConditions(databaseId, options.filters);
   const where = cursor
     ? and(
-        eq(submissions.feedbackDatabaseId, databaseId),
+        ...matches,
         lt(
           sql`(${submissions.createdAt}, ${submissions.id})`,
           sql`(${cursor.createdAt.toISOString()}::timestamptz, ${cursor.id})`,
         ),
       )
-    : eq(submissions.feedbackDatabaseId, databaseId);
+    : and(...matches);
 
   const rows = await ctx.db
     .select()
@@ -74,10 +94,12 @@ export async function listSubmissions(
     .orderBy(desc(submissions.createdAt), desc(submissions.id))
     .limit(options.limit + 1);
 
+  // The total counts what the filters match, so the list can say "12 unread" without
+  // a second endpoint. Unfiltered, it is still the feedback database's whole count.
   const totals = await ctx.db
     .select({ count: sql<number>`count(*)::int` })
     .from(submissions)
-    .where(eq(submissions.feedbackDatabaseId, databaseId));
+    .where(and(...matches));
 
   const page = rows.slice(0, options.limit);
   const attachmentsBySubmission = await attachmentsForSubmissions(
@@ -87,13 +109,111 @@ export async function listSubmissions(
   const last = page.at(-1);
 
   return {
-    submissions: page.map((row) => ({
-      ...toSummary(row),
-      attachmentCount: attachmentsBySubmission.get(row.id)?.length ?? 0,
-    })),
+    submissions: page.map((row) => {
+      const files = attachmentsBySubmission.get(row.id) ?? [];
+      return {
+        ...toSummary(row),
+        attachmentCount: files.length,
+        firstAttachmentId: files[0]?.id ?? null,
+      };
+    }),
     nextCursor: rows.length > options.limit && last ? encodeCursor(last) : null,
     total: totals[0]?.count ?? 0,
   };
+}
+
+/**
+ * Every filter rides the existing `submissions_db_created_idx`, so narrowing the list
+ * costs no new index. `withAttachments` is a correlated `exists` rather than a join,
+ * which keeps one row per submission however many screenshots it carries.
+ */
+function filterConditions(databaseId: string, filters: SubmissionFilters = {}) {
+  return [
+    eq(submissions.feedbackDatabaseId, databaseId),
+    ...(filters.since ? [gt(submissions.createdAt, filters.since)] : []),
+    ...(filters.formVersion === undefined
+      ? []
+      : [eq(submissions.formVersion, filters.formVersion)]),
+    ...(filters.withAttachments
+      ? [
+          sql`exists (select 1 from ${attachments} where ${attachments.submissionId} = ${submissions.id})`,
+        ]
+      : []),
+  ];
+}
+
+/**
+ * FR-180, FR-181: reads a reader's marker, which is what the list compares against
+ * to decide what is unread. A first visit starts the marker at now and reports nothing
+ * unread, so opening a feedback database with a year of history does not present a
+ * wall of dots.
+ *
+ * Reading deliberately does not move the marker. If it did, the second page of an
+ * unread-filtered list would be measured from a boundary the first page had already
+ * moved, and a background refetch would silently clear dots the reader is looking at.
+ * Moving it is `markSubmissionsSeen`, which the reader's client calls once it has the
+ * list in hand.
+ */
+export async function readSubmissionView(
+  ctx: AppContext,
+  userId: string,
+  databaseId: string,
+): Promise<{ seenAt: Date; firstVisit: boolean }> {
+  const existing = await ctx.db
+    .select({ seenAt: submissionViews.seenAt })
+    .from(submissionViews)
+    .where(
+      and(
+        eq(submissionViews.userId, userId),
+        eq(submissionViews.feedbackDatabaseId, databaseId),
+      ),
+    )
+    .limit(1);
+  if (existing[0]) return { seenAt: existing[0].seenAt, firstVisit: false };
+
+  const seenAt = new Date();
+  await ctx.db
+    .insert(submissionViews)
+    .values({ userId, feedbackDatabaseId: databaseId, seenAt })
+    // Two first visits at once: whichever lands first sets the marker, and both
+    // readers correctly see nothing unread.
+    .onConflictDoNothing();
+
+  // A first visit still has a boundary — this instant — so an unread-filtered list
+  // correctly matches nothing. It is only *reported* as null, because there is no
+  // earlier visit to describe.
+  return { seenAt, firstVisit: true };
+}
+
+/** FR-181: moves a reader's marker to now. The only thing that ever moves it. */
+export async function markSubmissionsSeen(
+  ctx: AppContext,
+  userId: string,
+  databaseId: string,
+): Promise<Date> {
+  const seenAt = new Date();
+  await ctx.db
+    .insert(submissionViews)
+    .values({ userId, feedbackDatabaseId: databaseId, seenAt })
+    .onConflictDoUpdate({
+      target: [submissionViews.userId, submissionViews.feedbackDatabaseId],
+      set: { seenAt, updatedAt: seenAt },
+    });
+  return seenAt;
+}
+
+/** How many submissions arrived after a reader last looked. */
+export async function countSince(
+  ctx: AppContext,
+  databaseId: string,
+  since: Date | null,
+): Promise<number> {
+  if (!since) return 0;
+  const rows = await ctx.db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(submissions)
+    .where(and(eq(submissions.feedbackDatabaseId, databaseId), gt(submissions.createdAt, since)));
+  return rows[0]?.count ?? 0;
 }
 
 /** FR-064, FR-065. */
@@ -116,7 +236,8 @@ export async function getSubmission(
   const files = await ctx.db
     .select()
     .from(attachments)
-    .where(eq(attachments.submissionId, submissionId));
+    .where(eq(attachments.submissionId, submissionId))
+    .orderBy(attachments.createdAt, attachments.id);
 
   return {
     ...toSummary(found.submission),
@@ -244,7 +365,7 @@ export async function definitionsForVersions(
   return map;
 }
 
-function toSummary(row: SubmissionRow): Omit<SubmissionSummary, 'attachmentCount'> {
+function toSummary(row: SubmissionRow): Omit<SubmissionSummary, 'attachmentCount' | 'firstAttachmentId'> {
   return {
     id: row.id,
     formVersion: row.formVersion,

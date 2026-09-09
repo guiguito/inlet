@@ -287,11 +287,17 @@ Stored screenshots are served from a stable URL:
 
 ```
 GET /v1/attachments/{attachmentId}
+GET /v1/attachments/{attachmentId}?width=88
 ```
 
 The URL never changes, and every request is authorized afresh against the attachment's
 feedback database. It needs a management session or a secret server key with at least
 Viewer access. A publishable client key cannot read one, not even one it uploaded.
+
+`width` (16 to 512) resizes on the way out, for a list thumbnail. Only one object is
+ever stored, so nothing extra has to be kept in step with the original or purged with
+it. A width at or above the stored width hands back the stored bytes untouched rather
+than upscaling them.
 
 Warn your respondents not to include sensitive personal data in screenshots. Inlet
 stores what it is given.
@@ -301,15 +307,47 @@ stores what it is given.
 These need a secret server key or a signed-in user.
 
 ```
-GET /v1/feedback-databases/{databaseId}/submissions?limit=50&cursor=…
-GET /v1/feedback-databases/{databaseId}/submissions/{submissionId}
+GET  /v1/feedback-databases/{databaseId}/submissions?limit=50&cursor=…
+GET  /v1/feedback-databases/{databaseId}/submissions/{submissionId}
+POST /v1/feedback-databases/{databaseId}/submissions/seen
 DELETE /v1/feedback-databases/{databaseId}/submissions/{submissionId}
-GET /v1/feedback-databases/{databaseId}/submissions/export?format=json
-GET /v1/feedback-databases/{databaseId}/submissions/export?format=csv
+GET  /v1/feedback-databases/{databaseId}/submissions/export?format=json
+GET  /v1/feedback-databases/{databaseId}/submissions/export?format=csv
 ```
 
 The list is newest first and keyset-paginated, so a page stays stable while new
 feedback arrives. Follow `nextCursor` until it is null.
+
+### Narrowing the list
+
+| Parameter | Effect |
+| --- | --- |
+| `filter=screenshots` | Only responses carrying at least one screenshot. |
+| `filter=unread` | Only responses that arrived after the signed-in reader last marked the list read. A no-op for a secret server key. |
+| `formVersion=3` | Only responses answered against that published version. |
+
+`total` counts what the filters match, not what the feedback database holds. Each row
+carries `firstAttachmentId`, which is the screenshot a list view shows as a thumbnail,
+or null.
+
+### Unread
+
+Every response in the list belongs to the feedback database, not to a reader, so
+"unread" is per reader and lives outside the submission. The list returns:
+
+```json
+{ "unread": { "since": "2026-09-09T08:12:44.019Z", "count": 12 } }
+```
+
+`since` is null on a reader's first visit, which reports nothing unread rather than
+presenting a year of history as new. It is also null for a secret server key: a key is
+a program, not a reader.
+
+Reading the list never moves the marker. `POST …/submissions/seen` does, and needs a
+session — so a client can draw the list, keep the boundary it was given, and mark it
+read when the reader is done with it. If reading moved the marker, the second page of
+an unread-filtered list would be measured against a boundary the first page had already
+moved.
 
 A submission detail includes the definition of the version it was answered against, so
 you can render the labels and option labels the respondent actually saw even after a
@@ -900,6 +938,7 @@ The codes you are most likely to handle:
 | Image source file | 10 MB |
 | Stored image, after re-encoding | 2 MB, re-encoded down to fit rather than refused |
 | Screenshot decoded size | 25 megapixels |
+| Thumbnail width on read | 16 to 512 pixels |
 | Free-text answer | The question's own limit, at most 10,000 characters |
 | Submission intent lifetime | 30 minutes by default |
 | Pending upload lifetime | 1 day, enforced by the object store |
@@ -928,6 +967,7 @@ carry their own limits, applied per requesting address and per slug. A throttled
 | Upload a screenshot under an intent | Yes | Yes | Not applicable |
 | Finalize a submission | Yes | Yes | Not applicable |
 | List and read submissions | No | Yes | Viewer or above |
+| Mark the responses list read | No | No | Viewer or above |
 | View or download a screenshot | No | Yes | Viewer or above |
 | Export CSV or JSON | No | Yes | Viewer or above |
 | Delete a submission | No | Yes | Admin |

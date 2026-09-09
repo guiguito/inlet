@@ -117,39 +117,61 @@ function AnswerValue({
 }
 
 /**
- * A one-line preview of a submission for the list view.
+ * FR-173, FR-174: a submission split into the two things a list row shows — the
+ * rating it chose, and what it typed.
  *
- * Free text first, whatever its position in the form: a column of "Love it, Fine,
- * Love it" tells a reader nothing, while the comments are what they are scanning for.
- * Choices are the fallback for a form that asks no open question.
+ * Free text is what a reader is scanning for — a column of "Love it, Fine, Love it"
+ * tells them nothing — so it takes the reading position and the choice becomes a chip
+ * beside it. Both come from the version the submission was answered against (FR-065),
+ * so a renamed question or option never rewrites history.
  */
-export function answerPreview(
+export type AnswerSummary = {
+  /** The first choice answer, as the respondent saw it. Null when the form asks none. */
+  chip: { emoji: string | null; label: string } | null;
+  /** The first non-empty free-text answer. Empty when the form asks none. */
+  text: string;
+};
+
+export function answerSummary(
   definition: FormDefinition | undefined,
   answers: Record<string, StoredAnswer>,
-): string {
+): AnswerSummary {
   const questions = definition ? listQuestions(definition) : [];
+  let chip: AnswerSummary['chip'] = null;
+  let text = '';
 
   for (const question of questions) {
     const answer = answers[question.id];
-    if (answer?.type === 'text' && answer.value.trim() !== '') return answer.value;
+    if (!answer) continue;
+
+    if (!text && answer.type === 'text' && answer.value.trim() !== '') {
+      text = answer.value;
+      continue;
+    }
+    if (chip || answer.type !== 'choice' || question.type !== 'choice') continue;
+
+    const optionId = answer.optionIds[0];
+    if (optionId === undefined) continue;
+    const option = question.options.find((candidate) => candidate.id === optionId);
+    chip = {
+      // An emoji only counts when the question was asked as an emoji scale, so a
+      // decorated radio list does not become a chip that reads as a rating.
+      emoji: question.optionKind === 'emoji' ? (option?.emoji ?? null) : null,
+      // An option removed in a later version keeps its raw ID rather than vanishing.
+      label: option?.label ?? optionId,
+    };
   }
 
-  for (const question of questions) {
-    const answer = answers[question.id];
-    if (answer?.type !== 'choice' || question.type !== 'choice') continue;
-    const labels = answer.optionIds.map((id) => {
-      const option = question.options.find((candidate) => candidate.id === id);
-      if (!option) return id;
-      return question.optionKind === 'emoji' && option.emoji
-        ? `${option.emoji} ${option.label}`
-        : option.label;
-    });
-    if (labels.length > 0) return labels.join(', ');
+  // Without the version's definition there are no labels to show, so fall back to the
+  // free text we hold and leave the chip off rather than inventing one.
+  if (!text && !chip) {
+    for (const answer of Object.values(answers)) {
+      if (answer.type === 'text' && answer.value.trim() !== '') {
+        text = answer.value;
+        break;
+      }
+    }
   }
 
-  // Without the version's definition, fall back to any free-text value we hold.
-  for (const answer of Object.values(answers)) {
-    if (answer.type === 'text' && answer.value.trim() !== '') return answer.value;
-  }
-  return '';
+  return { chip, text };
 }
