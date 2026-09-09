@@ -15,6 +15,7 @@
     "test": "vitest run",
     "test:unit": "vitest run test/unit",
     "test:integration": "vitest run test/integration",
+    "test:live": "vitest run test/live",
     "test:watch": "vitest"
   },
   "dependencies": {

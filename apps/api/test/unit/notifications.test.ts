@@ -15,7 +15,18 @@ import { buildSlackMessage, type SlackMessageInput } from '../../src/services/sl
 
 /** Slack notification rendering and validation (FR-159 to FR-166). */
 
-/** Shaped exactly like a Slack webhook, and deliberately not anybody's real one. */
+/**
+ * Shaped exactly like a Slack webhook, and deliberately not anybody's real one.
+ *
+ * The trailing segment carries hyphens on purpose. Secret scanners recognise a Slack
+ * webhook by its shape — roughly 24 alphanumerics in the last path segment — and cannot
+ * tell a fixture from a live URL, so an all-alphanumeric one blocks a push from this
+ * repository and from every fork of it. Hyphens keep the shape the schema cares about
+ * (`[A-Za-z0-9_-]+`) while looking nothing like a live secret.
+ *
+ * To exercise a real webhook, set INLET_TEST_SLACK_WEBHOOK_URL and see
+ * `test/live/slack-delivery.test.ts`. It never belongs in a committed file.
+ */
 const REAL = 'https://hooks.slack.com/services/T00EXAMPLE1/B00EXAMPLE2/example-webhook-secret-9xyz';
 
 describe('the webhook URL', () => {

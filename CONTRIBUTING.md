@@ -35,6 +35,26 @@ npm run test:all
 
 All three pass before a pull request is ready. `test:all` needs the local services up.
 
+### The live Slack test
+
+One suite is opt-in, because it posts a real message to a real Slack channel:
+
+```bash
+INLET_TEST_SLACK_WEBHOOK_URL=https://hooks.slack.com/services/... \
+  npm run test:live -w @inlet/api
+```
+
+With the variable unset it skips, which is why `test:all` stays green without a Slack
+workspace. Put the URL in `.env` — not tracked — and never in a committed file. A
+webhook URL is the whole authorization to post in a workspace.
+
+**Committed test fixtures must not look like real credentials.** The Slack fixture in
+`test/unit/notifications.test.ts` carries hyphens in its last path segment on purpose:
+secret scanners recognise a Slack webhook by its shape and cannot tell a fixture from a
+live URL, so an all-alphanumeric one blocks pushes from this repository *and from every
+fork of it*. If you add a fixture shaped like a credential, break the shape somewhere
+the code under test does not care about.
+
 **Tests are not optional for logic.** The existing suite is 441 unit and integration
 tests plus 58 end-to-end, and it is the reason the project can be changed confidently.
 A behavioural change without a test that fails before it and passes after is not

@@ -179,6 +179,10 @@ npm run test:e2e          # the HTTP contract and the interface in a browser
 npm run test:all
 ```
 
+One suite is opt-in, because it posts a real message to a real Slack channel. Set
+`INLET_TEST_SLACK_WEBHOOK_URL` in `.env` and run `npm run test:live -w @inlet/api`; it
+skips without it. See [CONTRIBUTING.md](CONTRIBUTING.md#the-live-slack-test).
+
 The end-to-end suite builds and starts the server from the same artefacts the Docker
 image ships, so what is tested is what is deployed.
 
