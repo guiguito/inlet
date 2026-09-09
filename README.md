@@ -33,7 +33,8 @@ forms)**, collecting from a shared link with no client code at all.
   screenshot uploads.
 - Autosaved drafts, immutable published versions, rollback and unpublish.
 - A four-call client API with server-issued submission intents, safe retries, and
-  screenshot uploads validated by content and re-encoded to WebP.
+  screenshot uploads validated by content, accepted up to 10 MB, and re-encoded to
+  WebP inside a 2 MB stored ceiling rather than refused for being large.
 - A responses list and detail view that renders each answer with the labels the
   respondent actually saw.
 - JSON and CSV export, and permanent deletion of a response, a feedback database or a

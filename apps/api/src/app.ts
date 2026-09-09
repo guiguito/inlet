@@ -60,7 +60,7 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
       // oversized upload is refused while streaming rather than after buffering.
       files: 1,
       fields: 4,
-      fileSize: LIMITS.attachmentMaxSourceBytes,
+      fileSize: LIMITS.imageMaxSourceBytes,
     },
   });
 
@@ -187,7 +187,7 @@ function mapFrameworkError(
     case 'FST_REQ_FILE_TOO_LARGE':
       return {
         code: 'file_too_large',
-        message: `A screenshot may be at most ${Math.floor(LIMITS.attachmentMaxSourceBytes / (1024 * 1024))} MB.`,
+        message: `A screenshot may be at most ${Math.floor(LIMITS.imageMaxSourceBytes / (1024 * 1024))} MB.`,
       };
     case 'FST_ERR_CTP_INVALID_MEDIA_TYPE':
       return {

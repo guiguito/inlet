@@ -85,7 +85,7 @@ describe('client feedback flow', () => {
     expect(screenshot).toMatchObject({
       maxCount: 3,
       acceptedMediaTypes: ['image/jpeg', 'image/png', 'image/webp'],
-      maxFileBytes: LIMITS.attachmentMaxSourceBytes,
+      maxFileBytes: LIMITS.imageMaxSourceBytes,
     });
   });
 

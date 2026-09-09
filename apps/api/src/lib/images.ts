@@ -1,5 +1,11 @@
 import sharp, { type Metadata, type OutputInfo } from 'sharp';
-import { ACCEPTED_IMAGE_MEDIA_TYPES, LIMITS, STORED_IMAGE_QUALITY } from '@inlet/shared';
+import {
+  ACCEPTED_IMAGE_MEDIA_TYPES,
+  LIMITS,
+  STORED_IMAGE_MIN_QUALITY,
+  STORED_IMAGE_MIN_WIDTH,
+  STORED_IMAGE_QUALITY,
+} from '@inlet/shared';
 import { apiError } from './errors.js';
 
 /**
@@ -37,14 +43,17 @@ const FORMAT_TO_MEDIA_TYPE: Record<string, string> = {
 export type ImageLimits = {
   maxSourceBytes: number;
   maxPixels: number;
+  /** Ceiling for the stored WebP. Anything larger is re-encoded down to fit. */
+  maxStoredBytes: number;
   /** Names the thing in an error message, so a respondent reads about a screenshot. */
   noun?: string;
 };
 
 export function processScreenshot(source: Buffer): Promise<ProcessedImage> {
   return processImage(source, {
-    maxSourceBytes: LIMITS.attachmentMaxSourceBytes,
+    maxSourceBytes: LIMITS.imageMaxSourceBytes,
     maxPixels: LIMITS.attachmentMaxPixels,
+    maxStoredBytes: LIMITS.imageMaxStoredBytes,
     noun: 'screenshot',
   });
 }
@@ -107,12 +116,7 @@ export async function processImage(
 
   let encoded: { data: Buffer; info: OutputInfo };
   try {
-    // .rotate() applies the EXIF orientation before the tag is dropped, so a photo
-    // taken sideways is stored the way the respondent saw it.
-    encoded = await sharp(source, { failOn: 'error' })
-      .rotate()
-      .webp({ quality: STORED_IMAGE_QUALITY })
-      .toBuffer({ resolveWithObject: true });
+    encoded = await encodeWithinBudget(source, limits.maxStoredBytes);
   } catch {
     throw apiError('upload_failed', `That ${noun} could not be converted for storage.`);
   }
@@ -126,6 +130,58 @@ export async function processImage(
     originalBytes: source.length,
     storedBytes: encoded.data.length,
   };
+}
+
+/**
+ * Re-encodes to WebP inside the stored-size budget (section 9.3).
+ *
+ * The product accepts a 10 MB upload because a phone screenshot is routinely that big
+ * and refusing one asks a respondent to go and shrink an image, which is a good way to
+ * lose the feedback. Ten megabytes is still not worth keeping for a bug report, so what
+ * is stored is bounded here instead of at the door.
+ *
+ * Quality is spent before pixels. A slightly softer screenshot still reads, while a
+ * downscaled one loses the small text that is usually the whole point of the
+ * screenshot. Only once quality is exhausted does the image get narrower.
+ *
+ * The common case costs exactly one encode: almost every upload already fits at full
+ * quality, and the loop is never entered.
+ */
+async function encodeWithinBudget(
+  source: Buffer,
+  maxStoredBytes: number,
+): Promise<{ data: Buffer; info: OutputInfo }> {
+  // .rotate() applies the EXIF orientation before the tag is dropped, so a photo taken
+  // sideways is stored the way the respondent saw it.
+  const encode = (quality: number, width?: number) =>
+    sharp(source, { failOn: 'error' })
+      .rotate()
+      .resize(width === undefined ? {} : { width, withoutEnlargement: true })
+      .webp({ quality })
+      .toBuffer({ resolveWithObject: true });
+
+  let best = await encode(STORED_IMAGE_QUALITY);
+  if (best.data.length <= maxStoredBytes) return best;
+
+  best = await encode(STORED_IMAGE_MIN_QUALITY);
+  if (best.data.length <= maxStoredBytes) return best;
+
+  // WebP size tracks pixel count closely, so the overshoot predicts the scale factor:
+  // halving each edge quarters the bytes. The square root of how far over budget we
+  // are is therefore a good first guess, and a few bounded passes correct it.
+  let width = best.info.width;
+  for (let attempt = 0; attempt < 5 && width > STORED_IMAGE_MIN_WIDTH; attempt += 1) {
+    const guess = Math.sqrt(maxStoredBytes / best.data.length) * 0.95;
+    // Capped below 1 so every pass makes progress even when the guess is optimistic.
+    width = Math.max(STORED_IMAGE_MIN_WIDTH, Math.floor(width * Math.min(guess, 0.9)));
+    best = await encode(STORED_IMAGE_MIN_QUALITY, width);
+    if (best.data.length <= maxStoredBytes) return best;
+  }
+
+  // At the floor width and the floor quality, this is as small as the image gets. A
+  // WebP that narrow is far inside the budget in practice, so returning it is honest
+  // rather than refusing an upload we already accepted.
+  return best;
 }
 
 /**

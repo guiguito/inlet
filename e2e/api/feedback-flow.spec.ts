@@ -48,6 +48,20 @@ function png(width = 400, height = 240): Buffer {
   ]);
 }
 
+/**
+ * Incompressible pixels as JPEG, so the encoded size is genuinely large.
+ *
+ * The PNG above is hand-built to keep this suite free of an image library, but a
+ * multi-megabyte JPEG is not something to hand-roll, and sharp is already a dependency
+ * of the server under test.
+ */
+async function heavyJpeg(width: number, height: number, quality: number): Promise<Buffer> {
+  const raw = Buffer.alloc(width * height * 3);
+  for (let i = 0; i < raw.length; i += 1) raw[i] = (i * 2654435761) % 256;
+  const sharp = (await import('sharp')).default;
+  return sharp(raw, { raw: { width, height, channels: 3 } }).jpeg({ quality }).toBuffer();
+}
+
 type Fixture = {
   projectId: string;
   databaseId: string;
@@ -547,5 +561,97 @@ test.describe('the four-call feedback flow', () => {
 
     const docs = await request.get('/docs');
     expect([200, 302]).toContain(docs.status());
+  });
+
+  test('accepts a multi-megabyte screenshot over real HTTP and stores it under 2 MB', async ({
+    request,
+  }) => {
+    const f = await setupForm(request, 'Large upload');
+
+    const intentResponse = await request.post(
+      `/v1/feedback-databases/${f.databaseId}/submission-intents`,
+      { headers: { authorization: `Bearer ${f.publishableKey}` }, data: {} },
+    );
+    const intent = await intentResponse.json();
+
+    // Incompressible pixels, so the source really is several megabytes on the wire.
+    const heavy = await heavyJpeg(3000, 2000, 92);
+    expect(heavy.length).toBeGreaterThan(2 * 1024 * 1024);
+    expect(heavy.length).toBeLessThan(10 * 1024 * 1024);
+
+    const upload = await request.post(
+      `/v1/feedback-databases/${f.databaseId}/submission-intents/${intent.intentId}/attachments`,
+      {
+        headers: {
+          authorization: `Bearer ${f.publishableKey}`,
+          'x-inlet-intent-token': intent.token,
+        },
+        multipart: {
+          questionId: f.q.shot,
+          file: { name: 'photo.jpg', mimeType: 'image/jpeg', buffer: heavy },
+        },
+      },
+    );
+    expect(upload.status()).toBe(201);
+    const uploaded = await upload.json();
+    expect(uploaded.mediaType).toBe('image/webp');
+    // Accepted at 4-plus megabytes, stored inside the 2 MB ceiling, and narrowed to
+    // get there, with the response reporting what was actually stored.
+    expect(uploaded.bytes).toBeLessThanOrEqual(2 * 1024 * 1024);
+    expect(uploaded.width).toBeLessThan(3000);
+
+    const submitted = await request.post(
+      `/v1/feedback-databases/${f.databaseId}/submission-intents/${intent.intentId}/submit`,
+      {
+        headers: {
+          authorization: `Bearer ${f.publishableKey}`,
+          'x-inlet-intent-token': intent.token,
+        },
+        data: {
+          formVersion: 1,
+          answers: {
+            [f.q.mood]: { optionId: f.options.mood[0] },
+            [f.q.detail]: { value: 'Sent a photo straight off a phone.' },
+            [f.q.shot]: { attachmentIds: [uploaded.attachmentId] },
+          },
+        },
+      },
+    );
+    expect(submitted.status()).toBe(201);
+
+    // The stored asset streams back at the size the response promised.
+    const asset = await request.get(`/v1/attachments/${uploaded.attachmentId}`, {
+      headers: { authorization: `Bearer ${f.secretKey}` },
+    });
+    expect(asset.status()).toBe(200);
+    expect((await asset.body()).length).toBe(uploaded.bytes);
+  });
+
+  test('refuses a source file over 10 MB', async ({ request }) => {
+    const f = await setupForm(request, 'Too large upload');
+    const intentResponse = await request.post(
+      `/v1/feedback-databases/${f.databaseId}/submission-intents`,
+      { headers: { authorization: `Bearer ${f.publishableKey}` }, data: {} },
+    );
+    const intent = await intentResponse.json();
+
+    const tooBig = await heavyJpeg(5000, 3500, 90);
+    expect(tooBig.length).toBeGreaterThan(10 * 1024 * 1024);
+
+    const upload = await request.post(
+      `/v1/feedback-databases/${f.databaseId}/submission-intents/${intent.intentId}/attachments`,
+      {
+        headers: {
+          authorization: `Bearer ${f.publishableKey}`,
+          'x-inlet-intent-token': intent.token,
+        },
+        multipart: {
+          questionId: f.q.shot,
+          file: { name: 'huge.jpg', mimeType: 'image/jpeg', buffer: tooBig },
+        },
+      },
+    );
+    expect(upload.status()).toBe(413);
+    expect((await upload.json()).error.code).toBe('file_too_large');
   });
 });

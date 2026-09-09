@@ -16,8 +16,24 @@ export const LIMITS = {
   /** FR-099A: uploads accepted per intent, bounding abuse independently of the above. */
   intentMaxUploads: 10,
 
-  /** Section 9.3: per source file, before WebP re-encoding. */
-  attachmentMaxSourceBytes: 2 * 1024 * 1024,
+  /**
+   * Section 9.3: per uploaded image file, before re-encoding. Screenshots and hosted
+   * form logos alike.
+   *
+   * Generous on the way in because a phone screenshot is routinely several megabytes
+   * and rejecting one asks a respondent to go and shrink an image, which is a good way
+   * to lose the feedback. What gets stored is bounded separately.
+   */
+  imageMaxSourceBytes: 10 * 1024 * 1024,
+
+  /**
+   * Section 9.3: ceiling for a stored image, after re-encoding.
+   *
+   * An upload larger than this is not refused: it is re-encoded down until it fits,
+   * giving up quality before pixels. Ten megabytes is a reasonable thing to accept and
+   * an unreasonable thing to keep, and this is the line between the two.
+   */
+  imageMaxStoredBytes: 2 * 1024 * 1024,
 
   /** FR-099: decoded pixel ceiling (width x height) to bound decode cost. */
   attachmentMaxPixels: 25_000_000,
@@ -50,3 +66,14 @@ export const STORED_IMAGE_MEDIA_TYPE = 'image/webp';
 
 /** WebP quality chosen to keep screen text readable (section 9.3). */
 export const STORED_IMAGE_QUALITY = 82;
+
+/**
+ * How far quality may fall to bring a large image inside the stored-size budget.
+ *
+ * Quality is spent before pixels: a slightly softer screenshot still reads, while a
+ * downscaled one loses the small text that is usually the point of the screenshot.
+ */
+export const STORED_IMAGE_MIN_QUALITY = 60;
+
+/** The narrowest a stored image is downscaled to, once quality has been spent. */
+export const STORED_IMAGE_MIN_WIDTH = 640;

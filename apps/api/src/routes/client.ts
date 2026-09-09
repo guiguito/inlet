@@ -148,7 +148,7 @@ export function clientRoutes(ctx: AppContext): FastifyPluginAsyncZod {
             if (part.file.truncated) {
               throw apiError(
                 'file_too_large',
-                `A screenshot may be at most ${Math.floor(LIMITS.attachmentMaxSourceBytes / (1024 * 1024))} MB.`,
+                `A screenshot may be at most ${Math.floor(LIMITS.imageMaxSourceBytes / (1024 * 1024))} MB.`,
               );
             }
           } else if (part.type === 'file') {

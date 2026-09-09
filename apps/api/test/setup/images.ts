@@ -184,15 +184,35 @@ export async function oversizedPixels(): Promise<Buffer> {
     .toBuffer();
 }
 
-/** Larger than the 2 MB per-file limit. */
+/** Incompressible pixels, so a fixture's encoded size is predictable. */
+function noise(width: number, height: number) {
+  const raw = Buffer.alloc(width * height * 3);
+  for (let i = 0; i < raw.length; i += 1) raw[i] = (i * 2654435761) % 256;
+  return sharp(raw, { raw: { width, height, channels: 3 } });
+}
+
+/** Larger than the 10 MB per-file source limit, and inside the pixel limit. */
 export async function oversizedBytes(): Promise<Buffer> {
-  const noise = Buffer.alloc(2200 * 1100 * 3);
-  for (let i = 0; i < noise.length; i += 1) noise[i] = (i * 2654435761) % 256;
-  return sharp(noise, { raw: { width: 2200, height: 1100, channels: 3 } })
-    .png({ compressionLevel: 0 })
-    .toBuffer();
+  return noise(5000, 3500).jpeg({ quality: 90 }).toBuffer();
+}
+
+/**
+ * A perfectly acceptable upload that is too big to store as it is: roughly 4.5 MB of
+ * source, which re-encodes to well over the 2 MB stored budget at full quality and at
+ * the floor quality, so the downscaling path has to run.
+ */
+export async function overStoredBudget(): Promise<Buffer> {
+  return noise(3000, 2000).jpeg({ quality: 92 }).toBuffer();
 }
 
 export function notAnImage(): Buffer {
   return Buffer.from('This is a text file pretending to be a screenshot.', 'utf8');
+}
+
+/**
+ * Too heavy to store as it is, but inside a logo's 4-megapixel ceiling: a logo that
+ * has to be re-encoded down rather than refused.
+ */
+export async function heavyLogo(): Promise<Buffer> {
+  return noise(1900, 1900).jpeg({ quality: 96 }).toBuffer();
 }

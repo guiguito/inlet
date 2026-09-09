@@ -255,7 +255,7 @@ respondent uniqueness: a client can always request another intent and submit aga
 
 ## Screenshots
 
-Accepted: JPEG, PNG and WebP, up to 2 MB and 25 megapixels per file, five per
+Accepted: JPEG, PNG and WebP, up to 10 MB and 25 megapixels per file, five per
 submission, and at most ten uploads per intent.
 
 Every image is validated by its actual content, not its filename or declared
@@ -263,7 +263,13 @@ content type. Animated images are refused, including an animated PNG that a deco
 reports as a single frame.
 
 Accepted images are re-encoded to WebP for storage at a quality that keeps screen text
-readable. The re-encode is a file-safety control in itself: the stored bytes come from
+readable, and brought inside a 2 MB stored ceiling. A phone screenshot is routinely
+several megabytes, so a large upload is not refused: it is re-encoded down until it
+fits, giving up quality before pixels. The `width`, `height` and `bytes` in the upload
+response describe what was stored, so read them from the response rather than assuming
+the dimensions you sent.
+
+The re-encode is a file-safety control in itself: the stored bytes come from
 Inlet's own encoder, so nothing smuggled inside the source survives, and the conversion
 drops EXIF and other original metadata.
 
@@ -460,8 +466,9 @@ stops working immediately, which is how you revoke a link that spread further th
 meant.
 
 A logo is `multipart/form-data` with a `file` part and an optional `alt` field. It is
-validated by content and re-encoded to WebP exactly as a screenshot is, with a 1 MB
-source ceiling and 4 megapixels.
+validated by content and re-encoded to WebP exactly as a screenshot is, under the same
+10 MB source and 2 MB stored ceilings, with a tighter 4-megapixel decoded limit because
+a logo is a small mark.
 
 ### Branding
 
@@ -762,12 +769,12 @@ The codes you are most likely to handle:
 | `clientContext` | 16 KiB serialized as UTF-8 |
 | Screenshots per submission | 5 |
 | Uploads per intent | 10 |
-| Screenshot source file | 2 MB |
+| Image source file | 10 MB |
+| Stored image, after re-encoding | 2 MB, re-encoded down to fit rather than refused |
 | Screenshot decoded size | 25 megapixels |
 | Free-text answer | The question's own limit, at most 10,000 characters |
 | Submission intent lifetime | 30 minutes by default |
 | Pending upload lifetime | 1 day, enforced by the object store |
-| Hosted form logo source file | 1 MB |
 | Hosted form logo decoded size | 4 megapixels |
 | Hosted form slug | 3 to 64 characters |
 | Embedding origins per hosted form | 20 |

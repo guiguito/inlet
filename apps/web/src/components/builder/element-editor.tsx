@@ -239,7 +239,7 @@ function Fields({
           />
           <p className="text-xs text-muted-foreground">
             JPEG, PNG and WebP up to{' '}
-            {Math.floor(LIMITS.attachmentMaxSourceBytes / (1024 * 1024))} MB each. Everything is
+            {Math.floor(LIMITS.imageMaxSourceBytes / (1024 * 1024))} MB each. Everything is
             converted to WebP for storage, which also drops the original metadata. At most{' '}
             {LIMITS.submissionMaxAttachments} screenshots per response.
           </p>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import sharp from 'sharp';
-import { LIMITS } from '@inlet/shared';
+import { LIMITS, STORED_IMAGE_MIN_WIDTH } from '@inlet/shared';
 import { processImage, processScreenshot } from '../../src/lib/images.js';
 import { ApiError } from '../../src/lib/errors.js';
 import * as fixtures from '../setup/images.js';
@@ -67,8 +67,63 @@ describe('processScreenshot', () => {
 
   it('rejects a source file above the per-file size limit', async () => {
     const big = await fixtures.oversizedBytes();
-    expect(big.length).toBeGreaterThan(LIMITS.attachmentMaxSourceBytes);
+    expect(big.length).toBeGreaterThan(LIMITS.imageMaxSourceBytes);
     expect(await codeFor(big)).toBe('file_too_large');
+  });
+
+  it('accepts a large upload and re-encodes it inside the stored budget', async () => {
+    const source = await fixtures.overStoredBudget();
+    // The point of the fixture: allowed in, too big to keep as it is.
+    expect(source.length).toBeGreaterThan(LIMITS.imageMaxStoredBytes);
+    expect(source.length).toBeLessThan(LIMITS.imageMaxSourceBytes);
+
+    const result = await processScreenshot(source);
+    expect(result.storedMediaType).toBe('image/webp');
+    expect(result.storedBytes).toBeLessThanOrEqual(LIMITS.imageMaxStoredBytes);
+    expect(result.storedBytes).toBe(result.data.length);
+    // Quality alone could not do it, so it was narrowed, and the reported dimensions
+    // are the stored ones rather than the source's.
+    expect(result.width).toBeLessThan(3000);
+    expect(result.width).toBeGreaterThanOrEqual(STORED_IMAGE_MIN_WIDTH);
+    const stored = await sharp(result.data).metadata();
+    expect(stored.width).toBe(result.width);
+    expect(stored.height).toBe(result.height);
+  });
+
+  it('leaves an image that already fits at full size and full quality', async () => {
+    const source = await fixtures.png(1200, 800);
+    const result = await processScreenshot(source);
+    expect(result.storedBytes).toBeLessThanOrEqual(LIMITS.imageMaxStoredBytes);
+    // Untouched dimensions: nothing is downscaled that does not need to be.
+    expect(result.width).toBe(1200);
+    expect(result.height).toBe(800);
+  });
+
+  it('spends quality before pixels', async () => {
+    const source = await fixtures.overStoredBudget();
+    // A budget this image clears at the floor quality alone, so it must not be resized.
+    const generous = await processImage(source, {
+      maxSourceBytes: LIMITS.imageMaxSourceBytes,
+      maxPixels: LIMITS.attachmentMaxPixels,
+      maxStoredBytes: 3 * 1024 * 1024,
+      noun: 'screenshot',
+    });
+    expect(generous.storedBytes).toBeLessThanOrEqual(3 * 1024 * 1024);
+    expect(generous.width).toBe(3000);
+  });
+
+  it('stops narrowing at the floor width rather than looping forever', async () => {
+    const source = await fixtures.overStoredBudget();
+    // A budget no re-encode of this image can meet.
+    const impossible = await processImage(source, {
+      maxSourceBytes: LIMITS.imageMaxSourceBytes,
+      maxPixels: LIMITS.attachmentMaxPixels,
+      maxStoredBytes: 1024,
+      noun: 'screenshot',
+    });
+    // It comes back at the floor rather than failing an upload already accepted.
+    expect(impossible.width).toBe(STORED_IMAGE_MIN_WIDTH);
+    expect(impossible.storedBytes).toBeGreaterThan(0);
   });
 
   it('drops the source metadata, so EXIF does not survive (section 12.2)', async () => {
@@ -81,7 +136,12 @@ describe('processScreenshot', () => {
 
 /** FR-140: a hosted form's logo goes through the same pipeline, with tighter limits. */
 describe('processImage for a logo', () => {
-  const LOGO = { maxSourceBytes: 1024 * 1024, maxPixels: 4_000_000, noun: 'logo' };
+  const LOGO = {
+    maxSourceBytes: LIMITS.imageMaxSourceBytes,
+    maxPixels: 4_000_000,
+    maxStoredBytes: LIMITS.imageMaxStoredBytes,
+    noun: 'logo',
+  };
 
   it('keeps transparency, which a logo on a dark form depends on', async () => {
     const transparent = await sharp({
@@ -119,7 +179,7 @@ describe('processImage for a logo', () => {
   });
 
   it('names the logo in its messages, so an operator is not told about screenshots', async () => {
-    const oversize = Buffer.alloc(2 * 1024 * 1024, 1);
+    const oversize = Buffer.alloc(LIMITS.imageMaxSourceBytes + 1, 1);
     await expect(processImage(oversize, LOGO)).rejects.toMatchObject({
       message: expect.stringContaining('logo'),
     });

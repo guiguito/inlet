@@ -1,6 +1,7 @@
 import { and, eq, ne } from 'drizzle-orm';
 import {
   BRANDING_LIMITS,
+  LIMITS,
   brandingVariables,
   isReservedSlug,
   newId,
@@ -196,8 +197,10 @@ export async function uploadLogo(
   const hosted = await getHostedForm(ctx, databaseId);
 
   const image = await processImage(source, {
-    maxSourceBytes: BRANDING_LIMITS.logoMaxSourceBytes,
+    maxSourceBytes: LIMITS.imageMaxSourceBytes,
     maxPixels: BRANDING_LIMITS.logoMaxPixels,
+    maxStoredBytes: LIMITS.imageMaxStoredBytes,
+    noun: 'logo',
   });
 
   const previousKey = hosted.logoStorageKey;

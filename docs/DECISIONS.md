@@ -232,6 +232,29 @@ original metadata, which is what section 12.2 relies on instead of a separate EX
 step. `.rotate()` runs first so a photo taken sideways is stored upright before the
 orientation tag is dropped.
 
+**The door is generous and the shelf is not.** A source file may be 10 MB; a stored
+image may be 2 MB. The two ceilings are deliberately different, because they answer
+different questions. Refusing a large upload asks a respondent to go away, find an
+image editor and shrink a screenshot, which is a good way to lose the feedback that
+prompted them to open the form. Keeping 10 MB for a bug report is a good way to fill a
+disk. So an oversized upload is accepted and re-encoded down until it fits.
+
+**Quality is spent before pixels.** The encoder tries full quality, then a floor
+quality of 60, and only then starts narrowing the image, five bounded passes with a
+floor of 640 pixels wide. A slightly softer screenshot still reads; a downscaled one
+loses the small text that is usually the entire point of the screenshot. WebP size
+tracks pixel count closely, so the overshoot predicts the scale factor and the square
+root of how far over budget we are is a good first guess.
+
+The common case costs exactly one encode, because almost every upload already fits at
+full quality and the loop is never entered. At the floor of both quality and width the
+image is returned as it is rather than refused: an upload already accepted should not
+fail at the last step, and a 640-pixel WebP is far inside the budget in practice.
+
+The stored `width`, `height` and `bytes` are what the encoder produced, not what was
+uploaded, and the upload response reports those. `originalBytes` keeps the source size,
+so how much was saved stays visible.
+
 **The storage key is fixed at upload and never changes.** `attachments/{attachmentId}.webp`,
 decided before the object is written.
 
@@ -491,7 +514,8 @@ Section 17 lists recommended defaults and hands the final values to technical de
 | --- | --- | --- |
 | `clientContext` ceiling | 16 KiB | As recommended. Measured on the serialized UTF-8 form, which is the only unambiguous way to measure it. |
 | Screenshots per submission | 5 | As recommended. |
-| Screenshot source size | 2 MB | As recommended, and stated in section 9.3. |
+| **Image source size** | **10 MB** | Section 9.3 recommended 2 MB for both the upload and the stored object. Split into two: 10 MB accepted at the door, because a phone screenshot is routinely that big and refusing one loses the feedback. |
+| **Stored image size** | **2 MB** | The recommended figure, kept where it matters. A larger upload is re-encoded down to fit rather than refused. |
 | Decoded pixel limit | 25 megapixels | As recommended. Bounds decode cost. |
 | Uploads per intent | 10 | As recommended. Bounds abuse independently of what a submission may reference. |
 | **Submission intent lifetime** | **30 minutes** | The PRD calls intents "short-lived" but also suggests pending uploads expire 24 hours after intent creation. These are two different clocks and are separated here. Thirty minutes bounds one respondent's form session, which is what the intent authorizes. |
@@ -850,8 +874,10 @@ be cached hard while the configuration route is `no-store`.
 
 **A logo goes through the same image pipeline as a screenshot**, so the same
 content-based format detection, animation rejection and WebP re-encoding apply. The
-limits differ, because a logo is a small mark and not a screenshot: 1 MB and 4
-megapixels. Generalising `processScreenshot` into `processImage(source, limits)` was
+decoded limit differs, because a logo is a small mark and not a screenshot: 4
+megapixels, against a screenshot's 25. The source and stored ceilings are the same 10 MB
+and 2 MB, since the pipeline re-encodes anything large down to fit either way.
+Generalising `processScreenshot` into `processImage(source, limits)` was
 about a dozen lines and meant no second decoder path to audit.
 
 ### 20.8 Prefilling names questions by their own ID

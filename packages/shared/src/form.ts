@@ -189,7 +189,7 @@ export function toClientDefinition(definition: FormDefinition): ClientFormDefini
           ? {
               ...element,
               acceptedMediaTypes: ACCEPTED_IMAGE_MEDIA_TYPES,
-              maxFileBytes: LIMITS.attachmentMaxSourceBytes,
+              maxFileBytes: LIMITS.imageMaxSourceBytes,
             }
           : element,
       ),

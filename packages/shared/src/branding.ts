@@ -45,8 +45,11 @@ export const BRANDING_LIMITS = {
   closedMessageMaxLength: 600,
   logoAltMaxLength: 200,
   allowedOriginsMax: 20,
-  /** A logo is a small mark, not a screenshot, so it gets a tighter ceiling. */
-  logoMaxSourceBytes: 1024 * 1024,
+  /**
+   * A logo is a small mark, not a screenshot, so it gets a tighter decoded ceiling.
+   * Its source and stored ceilings are the platform's image limits, since the pipeline
+   * re-encodes anything large down to fit either way.
+   */
   logoMaxPixels: 4_000_000,
   slugMinLength: 3,
   slugMaxLength: 64,

@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import {
   BRANDING_LIMITS,
   COLOR_SCHEMES,
+  LIMITS,
   CORNER_RADII,
   EMBEDDING_MODES,
   TYPEFACES,
@@ -610,8 +611,8 @@ function LogoField({
         onChange={(event) => onAlt(event.target.value)}
       />
       <p className="text-xs text-muted-foreground">
-        PNG, JPEG or WebP, up to {BRANDING_LIMITS.logoMaxSourceBytes / (1024 * 1024)} MB. Stored
-        as WebP.
+        PNG, JPEG or WebP, up to {LIMITS.imageMaxSourceBytes / (1024 * 1024)} MB. Stored as
+        WebP, resized if it needs to be.
       </p>
     </div>
   );

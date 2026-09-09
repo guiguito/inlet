@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
-import { BRANDING_LIMITS, validateParsedTemplate } from '@inlet/shared';
+import { BRANDING_LIMITS, LIMITS, validateParsedTemplate } from '@inlet/shared';
 import type { AppContext } from '../context.js';
 import type { HostedFormRow } from '../db/schema.js';
 import { apiError } from '../lib/errors.js';
@@ -423,7 +423,7 @@ export function hostedFormRoutes(ctx: AppContext): FastifyPluginAsyncZod {
             if (part.file.truncated) {
               throw apiError(
                 'file_too_large',
-                `A logo may be at most ${Math.floor(BRANDING_LIMITS.logoMaxSourceBytes / 1024)} KB.`,
+                `A logo may be at most ${Math.floor(LIMITS.imageMaxSourceBytes / (1024 * 1024))} MB.`,
               );
             }
           } else if (part.type === 'file') {

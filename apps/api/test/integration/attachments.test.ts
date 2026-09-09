@@ -40,7 +40,12 @@ describe('screenshot attachments', () => {
     [f.detail]: { value: 'See the screenshot.' },
   });
 
-  async function upload(intent: { intentId: string; token: string }, file?: Buffer) {
+  async function upload(
+    intent: { intentId: string; token: string },
+    file?: Buffer,
+    filename?: string,
+    contentType?: string,
+  ) {
     return uploadScreenshot(
       h,
       ctx.publishableKey,
@@ -48,6 +53,8 @@ describe('screenshot attachments', () => {
       intent,
       f.shot,
       file ?? (await fixtures.png()),
+      filename,
+      contentType,
     );
   }
 
@@ -170,14 +177,58 @@ describe('screenshot attachments', () => {
     }
   });
 
-  it('rejects a source file over the 2 MB limit', async () => {
+  it('rejects a source file over the 10 MB limit', async () => {
     const intent = await createIntent(h, ctx.publishableKey, ctx.databaseId);
     const big = await fixtures.oversizedBytes();
-    expect(big.length).toBeGreaterThan(LIMITS.attachmentMaxSourceBytes);
+    expect(big.length).toBeGreaterThan(LIMITS.imageMaxSourceBytes);
 
     const response = await upload(intent, big);
     expect(response.statusCode).toBe(413);
     expect(errorCode(response)).toBe('file_too_large');
+  });
+
+  it('accepts a multi-megabyte upload and stores it inside the 2 MB budget', async () => {
+    const intent = await createIntent(h, ctx.publishableKey, ctx.databaseId);
+    const source = await fixtures.overStoredBudget();
+    expect(source.length).toBeGreaterThan(LIMITS.imageMaxStoredBytes);
+
+    const response = await upload(intent, source, 'photo.jpg', 'image/jpeg');
+    expect(response.statusCode).toBe(201);
+    const uploaded = JSON.parse(response.body) as {
+      attachmentId: string;
+      bytes: number;
+      width: number;
+      height: number;
+      mediaType: string;
+    };
+    expect(uploaded.mediaType).toBe('image/webp');
+    expect(uploaded.bytes).toBeLessThanOrEqual(LIMITS.imageMaxStoredBytes);
+    // Narrowed, and the reported dimensions describe what was stored.
+    expect(uploaded.width).toBeLessThan(3000);
+
+    // The row and the stored object agree with what the client was told.
+    const [row] = await h.ctx.db
+      .select()
+      .from(attachments)
+      .where(eq(attachments.id, uploaded.attachmentId));
+    expect(row?.storedBytes).toBe(uploaded.bytes);
+    expect(row?.width).toBe(uploaded.width);
+    expect(row?.originalBytes).toBe(source.length);
+
+    const object = await h.ctx.storage.get(row?.storageKey ?? '');
+    expect(object?.contentType).toBe('image/webp');
+    // The body has to be consumed, or the open response leaves the storage client
+    // holding a socket that resets when the harness closes.
+    const bytes = await new Promise<number>((resolve, reject) => {
+      let total = 0;
+      object?.stream
+        .on('data', (chunk: Buffer) => {
+          total += chunk.length;
+        })
+        .on('end', () => resolve(total))
+        .on('error', reject);
+    });
+    expect(bytes).toBe(uploaded.bytes);
   });
 
   it('caps uploads per intent independently of what is submitted (FR-099A)', async () => {

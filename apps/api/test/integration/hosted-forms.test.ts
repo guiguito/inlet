@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { LIMITS } from '@inlet/shared';
 import { hostedForms, submissions } from '../../src/db/schema.js';
 import { createHarness, ids, referenceDefinition, referenceAnswers, type Harness } from '../setup/harness.js';
 import {
@@ -17,7 +18,7 @@ import {
   setupPublishedForm,
   uploadLogo,
 } from '../setup/api.js';
-import { animatedPng, notAnImage, oversizedBytes, png } from '../setup/images.js';
+import { animatedPng, heavyLogo, notAnImage, oversizedBytes, overStoredBudget, png } from '../setup/images.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -557,10 +558,31 @@ describe('hosted forms', () => {
     expect(errorCode(await uploadLogo(h, ctx.databaseId, animatedPng()))).toBe(
       'animated_image_rejected',
     );
-    // A logo has its own, tighter ceiling than a screenshot.
     const large = await uploadLogo(h, ctx.databaseId, await oversizedBytes());
     expect(large.statusCode).toBe(413);
     expect(errorCode(large)).toBe('file_too_large');
+    // A logo is a small mark, so its decoded ceiling stays tighter than a screenshot's.
+    expect(errorCode(await uploadLogo(h, ctx.databaseId, await overStoredBudget(), undefined, 'logo.jpg', 'image/jpeg'))).toBe(
+      'image_too_many_pixels',
+    );
+  });
+
+  it('re-encodes a heavy logo down to the stored ceiling instead of refusing it', async () => {
+    // Well over the stored budget as WebP, and inside the logo's pixel ceiling.
+    const heavy = await heavyLogo();
+    expect(heavy.length).toBeGreaterThan(LIMITS.imageMaxStoredBytes);
+    expect(heavy.length).toBeLessThan(LIMITS.imageMaxSourceBytes);
+
+    const uploaded = await uploadLogo(h, ctx.databaseId, heavy, 'Acme', 'logo.jpg', 'image/jpeg');
+    expect(uploaded.statusCode).toBe(200);
+
+    const [row] = await h.ctx.db
+      .select()
+      .from(hostedForms)
+      .where(eq(hostedForms.feedbackDatabaseId, ctx.databaseId));
+    expect(row?.logoMediaType).toBe('image/webp');
+    expect(row?.logoBytes).toBeLessThanOrEqual(LIMITS.imageMaxStoredBytes);
+    expect(row?.logoWidth).toBeGreaterThan(0);
   });
 
   it('purges the logo when the feedback database is deleted (FR-154)', async () => {

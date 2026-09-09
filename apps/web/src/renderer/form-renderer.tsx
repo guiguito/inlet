@@ -341,7 +341,7 @@ function ElementView({
   // Screenshot upload (FR-043 to FR-047).
   const files = answer?.kind === 'screenshot' ? answer.files : [];
   const maxCount = element.maxCount ?? 1;
-  const maxBytes = element.maxFileBytes ?? LIMITS.attachmentMaxSourceBytes;
+  const maxBytes = element.maxFileBytes ?? LIMITS.imageMaxSourceBytes;
 
   return (
     <div className="space-y-2">
