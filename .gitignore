@@ -1,13 +1,45 @@
+# Dependencies and build output
 node_modules/
 dist/
 build/
-*.log
+*.tsbuildinfo
+
+# Secrets. Every .env variant is ignored, because the one that leaks is never the
+# one called ".env" — it is ".env.production", written on a server and swept up by
+# `git add -A`. This file holds the session secret, the database URL, the object
+# store credentials and the bootstrap admin password.
 .env
-.env.local
-.DS_Store
+.env.*
+!.env.example
+
+# Note: .npmrc is deliberately tracked — it holds only `audit=false` and
+# `fund=false`. Ignoring it here would do nothing (git ignores nothing already
+# tracked) while implying protection it cannot give, so never put a token in it.
+
+# Test and tooling output
 coverage/
 playwright-report/
+blob-report/
 test-results/
-apps/api/openapi.json
+playwright/.cache/
 .vite/
+*.log
+
+# Local PostgreSQL and MinIO, created by `npm run services:up`
 .dev/
+
+# Generated: the OpenAPI document is written to docs/openapi.json, which is tracked.
+# This is the older path, kept ignored so a stale copy cannot be committed.
+apps/api/openapi.json
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini
