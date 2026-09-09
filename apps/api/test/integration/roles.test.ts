@@ -311,6 +311,26 @@ describe('roles and scopes', () => {
     expect(projectMembers.map((m) => m.email)).not.toContain('scoped@example.com');
   });
 
+  /**
+   * FR-071: what a project Viewer sees when they list a project's feedback databases.
+   *
+   * A project Admin short-circuits and sees everything, so this is the only role that
+   * reaches `listAccessibleDatabaseIds` — and its three-table branch is the only query
+   * in the codebase that can be written in a join order Postgres refuses outright.
+   */
+  it('lists a project’s feedback databases for a Viewer, not only for an Admin', async () => {
+    await createDatabase(h, projectId, 'First');
+    await createDatabase(h, projectId, 'Second');
+    const viewer = await member('project-viewer@example.com', 'viewer');
+
+    const listed = await as(viewer.cookie)('GET', `/v1/projects/${projectId}/feedback-databases`);
+
+    expect(listed.statusCode).toBe(200);
+    expect(
+      (JSON.parse(listed.body) as { name: string }[]).map((row) => row.name).sort(),
+    ).toEqual(['First', 'Second']);
+  });
+
   it('changes a project role, and the change takes effect at once', async () => {
     const databaseId = await createDatabase(h, projectId, 'Promotion');
     const viewer = await member('viewer@example.com', 'viewer');

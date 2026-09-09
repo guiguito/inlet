@@ -241,19 +241,24 @@ export async function listAccessibleDatabaseIds(db: Db, principal: Principal): P
     )
     .where(eq(projectMemberships.userId, principal.userId));
 
+  // The feedback databases join comes first because the left join's condition reads
+  // `feedback_databases.project_id`, and Postgres only allows a join condition to
+  // reference tables already in scope. Written the other way round, this whole query
+  // fails at runtime with an invalid FROM-clause reference — which is a 500 for every
+  // Creator and Viewer listing a project's feedback databases.
   const viaDatabase = await db
     .select({ id: feedbackDatabaseMemberships.feedbackDatabaseId })
     .from(feedbackDatabaseMemberships)
+    .innerJoin(
+      feedbackDatabases,
+      eq(feedbackDatabases.id, feedbackDatabaseMemberships.feedbackDatabaseId),
+    )
     .leftJoin(
       projectMemberships,
       and(
         eq(projectMemberships.projectId, feedbackDatabases.projectId),
         eq(projectMemberships.userId, principal.userId),
       ),
-    )
-    .innerJoin(
-      feedbackDatabases,
-      eq(feedbackDatabases.id, feedbackDatabaseMemberships.feedbackDatabaseId),
     )
     .where(
       and(
