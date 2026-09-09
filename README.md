@@ -106,7 +106,9 @@ Inlet is then on <http://localhost:3000>, with its API reference at
 
 To turn on malware scanning, set `INLET_CLAMAV_HOST=clamav` in `.env` and start the
 optional service with `docker compose --profile malware-scanning up -d`. ClamAV wants
-roughly 2 GB of memory for its signature database, which is why it is opt-in.
+roughly 2 GB of memory for its signature database, which is why it is opt-in. It ships
+amd64 images only, so on an arm64 host it runs under emulation; a deployment that needs
+scanning natively is better off pointing `INLET_CLAMAV_HOST` at a clamd outside Docker.
 
 PostgreSQL and MinIO data live in named Docker volumes, so restarts and upgrades keep
 everything. Pointing at an external PostgreSQL or S3-compatible provider is a

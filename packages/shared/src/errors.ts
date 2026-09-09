@@ -63,6 +63,13 @@ export const ERROR_STATUS = {
   too_many_attachments: 400,
   attachment_reference_invalid: 400,
   attachment_already_bound: 409,
+  /**
+   * The malware scanner rejected the file. A client error, not a server fault: the
+   * request was understood and refused, and retrying the same bytes cannot help.
+   * `upload_failed` was used here originally, which returned 500 and so told an
+   * integrator to retry something that will never succeed.
+   */
+  malware_detected: 400,
   upload_failed: 500,
 
   // --- Membership (Release 2 surface, codes reserved by the contract) ------

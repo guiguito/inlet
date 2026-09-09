@@ -275,7 +275,7 @@ Inlet's own encoder, so nothing smuggled inside the source survives, and the con
 drops EXIF and other original metadata.
 
 When a deployment configures a ClamAV scanner, the source bytes are also scanned before
-anything decodes them. An infected file is refused with `upload_failed` and never
+anything decodes them. An infected file is refused with `malware_detected` and never
 stored. The upload response reports the outcome as `scanStatus`: `clean` when a scanner
 passed it, `skipped` when none is configured, and `error` when one was configured but
 unreachable and the deployment accepts uploads anyway.
@@ -887,6 +887,7 @@ The codes you are most likely to handle:
 | `invitation_expired` | 410 | Past its seven days. Ask for a new link. |
 | `invitation_already_redeemed` | 409 | The link has been used. |
 | `last_admin_removal` | 409 | A project must keep at least one Admin. |
+| `malware_detected` | 400 | The malware scanner rejected the upload. Retrying the same bytes will not help. |
 | `slack_delivery_failed` | 502 | Slack refused the message. Its own error string is in the message and details. |
 
 ## Limits

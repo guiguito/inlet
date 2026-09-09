@@ -505,6 +505,33 @@ they are part of the API contract and live in `packages/shared/src/limits.ts`.
 **The container runs as `node`, not root**, and carries a health check that the
 compose file waits on.
 
+### 15.1 What building it actually found
+
+The image went unbuilt through three releases, because container registry pulls were
+blocked on the development machine. Every release report said so rather than implying the
+deployment was proven. When pulls started working, building and running the stack found
+three real defects in about ten minutes, none of which any test suite could have caught.
+
+**PostgreSQL 18 refused to start.** The compose file mounted the data volume at
+`/var/lib/postgresql/data`, which is correct for every earlier major version. The 18
+image stores data in a major-version-specific directory under `/var/lib/postgresql` so
+that `pg_upgrade --link` works without crossing a mount boundary, and it refuses to start
+when it finds a volume at the old path. The whole stack was unstartable. The mount point
+now carries a comment saying why it is where it is, because it looks wrong.
+
+**The malware-scanning profile could not start on Apple Silicon.** `clamav/clamav`
+publishes amd64 images only, on every tag, so the pull failed outright with "no matching
+manifest for linux/arm64". Declaring `platform: linux/amd64` runs it under emulation,
+which works and is slow; the comment points an arm64 deployment that genuinely needs
+scanning at a clamd outside Docker instead.
+
+**`INLET_SLACK_WEBHOOK_ORIGINS` was not passed through.** Release 4 added it and the
+compose file did not, so the default worked but a deployment could not point at a
+Slack-compatible relay without editing the file.
+
+The lesson is narrow and worth stating: the tests prove the application, and only running
+the deployment proves the deployment. Two of these three were in files no test imports.
+
 ---
 
 ## 16. Parameters the PRD left open
@@ -583,6 +610,16 @@ for one plugin.
 database's `now()`. With the app clock even slightly behind, a batch was skipped. It
 would have self-corrected on the next tick, which is exactly why it would never have
 been noticed. Both the due-check and the backoff now use the database's clock.
+
+**An infected upload was reported as a server fault.** The malware scanner threw
+`upload_failed`, which maps to 500, so an integrator uploading a file ClamAV rejected was
+told the server had broken and should be retried. Retrying the same bytes can never
+succeed. It now has its own code, `malware_detected`, at 400. The integration test had
+asserted the 500 and so encoded the bug rather than catching it; the test now asserts the
+status class, and the neighbouring case — a *required* scanner that is unreachable —
+deliberately keeps `upload_failed`, because nothing was detected and the scanner being
+down really is a deployment fault the client may retry. Found by running the real scanner
+in the real deployment, which is the only place the two cases sit side by side.
 
 **A native `required` attribute suppressed the renderer's own validation.** The browser
 blocked the submit event, so the component's validation never ran and the respondent

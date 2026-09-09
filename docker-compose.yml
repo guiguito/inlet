@@ -12,7 +12,11 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-inlet}
       POSTGRES_DB: ${POSTGRES_DB:-inlet}
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # Mounted at /var/lib/postgresql, not at its `data` subdirectory. The official
+      # PostgreSQL 18 image stores data in a major-version-specific directory below this
+      # path so that `pg_upgrade --link` works without crossing a mount boundary, and it
+      # refuses to start when a volume is mounted at the old location.
+      - pgdata:/var/lib/postgresql
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-inlet} -d ${POSTGRES_DB:-inlet}']
       interval: 5s
@@ -45,6 +49,12 @@ services:
     image: clamav/clamav:latest
     restart: unless-stopped
     profiles: ['malware-scanning']
+    # ClamAV publishes amd64 images only, on every tag. Declaring the platform lets the
+    # profile start on an arm64 host such as Apple Silicon, under emulation. Without it
+    # the pull fails outright with "no matching manifest for linux/arm64". Emulation is
+    # slow to load signatures; a native arm64 host that needs scanning is better off
+    # pointing INLET_CLAMAV_HOST at a clamd running outside Docker.
+    platform: linux/amd64
     volumes: ['clamavdb:/var/lib/clamav']
     healthcheck:
       test: ['CMD-SHELL', 'clamdcheck.sh || exit 1']
@@ -91,6 +101,11 @@ services:
 
       INLET_INTENT_TTL_MINUTES: ${INLET_INTENT_TTL_MINUTES:-30}
       INLET_PENDING_UPLOAD_EXPIRY_DAYS: ${INLET_PENDING_UPLOAD_EXPIRY_DAYS:-1}
+
+      # FR-163: the only origins a Slack notification may be POSTed to. Slack alone by
+      # default. Widen it only to reach a Slack-compatible relay, and knowingly: every
+      # origin here is somewhere this container can be made to send a request.
+      INLET_SLACK_WEBHOOK_ORIGINS: ${INLET_SLACK_WEBHOOK_ORIGINS:-https://hooks.slack.com}
 
       # Set INLET_CLAMAV_HOST=clamav in .env to turn scanning on, and start the
       # clamav service with its profile.
