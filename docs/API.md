@@ -14,6 +14,7 @@ Everything is under `/v1`. Requests and responses are JSON unless stated otherwi
 - [Screenshots](#screenshots)
 - [Reading and exporting feedback](#reading-and-exporting-feedback)
 - [Managing forms](#managing-forms)
+- [Access: members and invitations](#access-members-and-invitations)
 - [Errors](#errors)
 - [Limits](#limits)
 - [What each credential may do](#what-each-credential-may-do)
@@ -150,7 +151,8 @@ Two parts: a `questionId` field naming the screenshot question, and a `file` par
   "width": 1200,
   "height": 700,
   "bytes": 15732,
-  "originalBytes": 23357
+  "originalBytes": 23357,
+  "scanStatus": "clean"
 }
 ```
 
@@ -256,9 +258,15 @@ content type. Animated images are refused, including an animated PNG that a deco
 reports as a single frame.
 
 Accepted images are re-encoded to WebP for storage at a quality that keeps screen text
-readable. The re-encode is also the file-safety control: the stored bytes come from
+readable. The re-encode is a file-safety control in itself: the stored bytes come from
 Inlet's own encoder, so nothing smuggled inside the source survives, and the conversion
 drops EXIF and other original metadata.
+
+When a deployment configures a ClamAV scanner, the source bytes are also scanned before
+anything decodes them. An infected file is refused with `upload_failed` and never
+stored. The upload response reports the outcome as `scanStatus`: `clean` when a scanner
+passed it, `skipped` when none is configured, and `error` when one was configured but
+unreachable and the deployment accepts uploads anyway.
 
 An upload that is never referenced at finalization stays pending and is removed by an
 object-storage lifecycle rule. Nothing needs cleaning up by hand.
@@ -389,6 +397,126 @@ draft moved since you loaded it.
 Unpublishing blocks client retrieval and new intents without deleting anything. Rolling
 back reactivates an earlier version. Neither affects intents already issued.
 
+## Access: members and invitations
+
+These need a secret server key or a signed-in Admin of the scope.
+
+```
+GET    /v1/projects/{projectId}/members
+PATCH  /v1/projects/{projectId}/members/{userId}
+DELETE /v1/projects/{projectId}/members/{userId}
+
+GET    /v1/feedback-databases/{databaseId}/members
+PUT    /v1/feedback-databases/{databaseId}/members/{userId}
+DELETE /v1/feedback-databases/{databaseId}/members/{userId}
+
+GET    /v1/projects/{projectId}/invitations
+POST   /v1/projects/{projectId}/invitations
+POST   /v1/projects/{projectId}/invitations/{invitationId}/revoke
+
+GET    /v1/feedback-databases/{databaseId}/invitations
+POST   /v1/feedback-databases/{databaseId}/invitations
+POST   /v1/feedback-databases/{databaseId}/invitations/{invitationId}/revoke
+```
+
+### Roles
+
+Three roles, at two scopes.
+
+| Role | May |
+| --- | --- |
+| `admin` | Manage access, credentials and deletion, and everything a Creator may. |
+| `creator` | Create and edit feedback databases, build and publish forms, read responses. |
+| `viewer` | Read responses. Change nothing. |
+
+A **project role** applies to every feedback database in the project. A
+**feedback-database assignment** overrides it for that one database, so someone can be
+a Creator on the project and a Viewer on one form, or a Viewer on the project and a
+Creator on one form.
+
+Two rules constrain that:
+
+- A **project Admin** keeps full authority over every feedback database in the project.
+  An assignment cannot narrow them, and one is refused with `403 forbidden`. Promoting
+  someone to project Admin clears any assignment they had.
+- A **project always keeps at least one Admin**. Downgrading or removing the last one
+  returns `409 last_admin_removal`.
+
+A member listing reports both roles, so you can tell where access came from:
+
+```json
+[
+  {
+    "userId": "usr_bz33m9801wz9",
+    "email": "robin@example.com",
+    "displayName": "Robin",
+    "role": "viewer",
+    "effectiveRole": "viewer",
+    "inherited": false,
+    "createdAt": "2026-09-09T09:12:00.000Z"
+  }
+]
+```
+
+`role` is what is assigned at the scope you asked about. `effectiveRole` is what
+actually applies. `inherited` is true when the role comes from the project rather than
+from an assignment on this feedback database.
+
+Clearing a feedback-database assignment removes the override, not the person's access:
+they fall back to their project role.
+
+### Invitations
+
+There is no registration endpoint. An account exists only because the deployment
+bootstrapped it or because someone redeemed an invitation.
+
+```
+POST /v1/projects/{projectId}/invitations
+{ "role": "creator" }
+```
+
+```json
+{
+  "id": "inv_9m2k4x7qw1zv",
+  "role": "creator",
+  "scope": "project",
+  "scopeName": "Deblock Mobile",
+  "status": "pending",
+  "expiresAt": "2026-09-16T09:12:00.000Z",
+  "token": "kQ8x…",
+  "url": "https://inlet.example.com/invitations/kQ8x…"
+}
+```
+
+The `token` and `url` are returned once, at creation. Inlet sends no email: pass the
+link on yourself. Only the token's hash is stored.
+
+Each link works once, expires after seven days, and can be revoked before it is
+redeemed. `status` is one of `pending`, `redeemed`, `revoked` or `expired`.
+
+Two endpoints are reachable without an account, because for most invitees this is the
+first Inlet page they see:
+
+```
+GET  /v1/invitations/{token}
+POST /v1/invitations/{token}/redeem
+```
+
+The first says what the link grants, so nobody has to accept to find out. It reveals
+only the role and the name of the scope, never who else has access.
+
+The second redeems it. With no session, send an email and a password of at least twelve
+characters and the account is created and signed in. With a session, send no body and
+the invitation attaches to that account.
+
+Sending a body that names a *different* address while signed in is refused with
+`invitation_invalid`, naming the account you are actually signed in as. Silently
+granting the access to the current session would give it to the wrong person.
+
+The role and scope recorded on the invitation are what get granted, whatever address
+the redeemer uses. An invitation is not proof of control over an address, so it cannot
+be used to set the password of an account that already exists.
+
 ## Errors
 
 Every failure returns the same shape:
@@ -431,6 +559,10 @@ The codes you are most likely to handle:
 | `too_many_uploads` | 429 | Over ten uploads on one intent. |
 | `attachment_reference_invalid` | 400 | The screenshot does not belong to this intent and question. |
 | `rate_limit_exceeded` | 429 | Back off and retry. |
+| `invitation_invalid` | 400 | The link is unknown, revoked, or points at a different account than your session. |
+| `invitation_expired` | 410 | Past its seven days. Ask for a new link. |
+| `invitation_already_redeemed` | 409 | The link has been used. |
+| `last_admin_removal` | 409 | A project must keep at least one Admin. |
 
 ## Limits
 
@@ -471,3 +603,6 @@ creation, uploads and finalization are all throttled. A throttled request return
 | Create a project | No | No | Any signed-in user |
 | Rename or delete a project | No | Yes | Project Admin |
 | Manage project credentials | No | No | Project Admin |
+| List who has access | No | Yes | Viewer or above |
+| Invite, change a role, remove access | No | Yes | Admin of the scope |
+| Read or redeem an invitation link | Not applicable | Not applicable | Anyone holding the link |

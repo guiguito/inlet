@@ -6,6 +6,7 @@ import { buildApp } from '../../src/app.js';
 import type { AppContext } from '../../src/context.js';
 import { createDb, type DbHandle } from '../../src/db/index.js';
 import { loadEnv } from '../../src/env.js';
+import { MalwareScanner } from '../../src/lib/malware.js';
 import { Storage } from '../../src/lib/storage.js';
 import { bootstrapAdmin } from '../../src/services/bootstrap.js';
 import { ADMIN_EMAIL, ADMIN_PASSWORD, TEST_ENV } from './config.js';
@@ -46,7 +47,14 @@ export async function createHarness(overrides: Record<string, string> = {}): Pro
   const env = loadEnv({ ...process.env, ...TEST_ENV, ...overrides });
   const handle = createDb(env.INLET_DATABASE_URL);
   const storage = new Storage(env);
-  const ctx: AppContext = { env, db: handle.db, storage, log: pino({ level: 'silent' }) };
+  const scanner = new MalwareScanner(env);
+  const ctx: AppContext = {
+    env,
+    db: handle.db,
+    storage,
+    scanner,
+    log: pino({ level: 'silent' }),
+  };
 
   await storage.ensureBucket(true);
   await storage.ensureLifecycleRule();

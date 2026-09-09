@@ -4,7 +4,7 @@
     "title": "Inlet API",
     "version": "1.0.0",
     "summary": "The self-hosted feedback collector.",
-    "description": "Inlet separates form definition from form rendering and response storage. Your\napplication fetches a published form definition, renders it however it likes, and\nposts the answers back in one call.\n\n## Collecting feedback in four calls\n\n```bash\nBASE=http://localhost:3000\nKEY=ipk_your_publishable_client_key\nDB=fdb_your_feedback_database_id\n\n# 1. Read the published form\ncurl -s \"$BASE/v1/feedback-databases/$DB/form\" -H \"Authorization: Bearer $KEY\"\n\n# 2. Open a submission intent\ncurl -s -X POST \"$BASE/v1/feedback-databases/$DB/submission-intents\" \\\n  -H \"Authorization: Bearer $KEY\"\n\n# 3. Optionally attach a screenshot\ncurl -s -X POST \"$BASE/v1/feedback-databases/$DB/submission-intents/$INTENT/attachments\" \\\n  -H \"Authorization: Bearer $KEY\" -H \"X-Inlet-Intent-Token: $TOKEN\" \\\n  -F questionId=el_xxxxxxxxxxxx -F file=@screenshot.png\n\n# 4. Submit everything at once\ncurl -s -X POST \"$BASE/v1/feedback-databases/$DB/submission-intents/$INTENT/submit\" \\\n  -H \"Authorization: Bearer $KEY\" -H \"X-Inlet-Intent-Token: $TOKEN\" \\\n  -H 'content-type: application/json' \\\n  -d '{\"formVersion\":1,\"answers\":{\"el_xxxxxxxxxxxx\":{\"value\":\"It works\"}}}'\n```\n\n## Two kinds of key\n\nA **publishable client key** (`ipk_…`) is safe to embed in a browser or mobile\napp. It authorizes only the four calls above.\n\nA **secret server key** (`isk_…`) carries project Admin authority: it can read\nand export submissions, manage forms, and delete data within its own project.\nKeep it on a server. It is shown once, when you create it.\n\nSend either as `Authorization: Bearer <key>`. The management interface uses a\nsession cookie instead, obtained from `POST /v1/auth/sign-in`.\n\n## Answers\n\nAnswers are keyed by stable question ID. The shape follows the question type in\nthe pinned form version, so you never repeat the type:\n\n| Question type | Answer |\n| --- | --- |\n| single-select choice | `{\"optionId\": \"op_…\"}` |\n| multi-select choice | `{\"optionIds\": [\"op_…\", \"op_…\"]}` |\n| single- or multi-line text | `{\"value\": \"…\"}` |\n| email | `{\"value\": \"someone@example.com\"}` |\n| screenshot upload | `{\"attachmentIds\": [\"att_…\"]}` |\n\nOmit a question entirely to leave an optional question unanswered. An empty\nstring never satisfies a required question.\n\n## Retrying safely\n\nEvery submission starts with a server-issued intent, which makes retries safe.\nRepeating a finalization with the same payload returns the original result;\nrepeating it with a different payload is a conflict and stores nothing; and a\nvalidation failure leaves the intent usable so you can correct and resend.\n\n## Limits\n\n- `clientContext`: 16384 bytes serialized as UTF-8.\n- Screenshots: JPEG, PNG or WebP, 2 MB and 25 megapixels per file, 5 per submission, 10 uploads per intent. Animated images are rejected and every accepted image is re-encoded to WebP.\n- Security rate limits apply to sign-in, intent creation, uploads and\n  finalization. They are not configurable.\n\n## Errors\n\nEvery failure returns `{\"error\":{\"code\",\"message\",\"details?\"}}`. The `code` is\nstable and safe to branch on; `details` carries `questionId` for answer problems\nand `path` for request-shape problems.",
+    "description": "Inlet separates form definition from form rendering and response storage. Your\napplication fetches a published form definition, renders it however it likes, and\nposts the answers back in one call.\n\n## Collecting feedback in four calls\n\n```bash\nBASE=http://192.168.0.19:3000\nKEY=ipk_your_publishable_client_key\nDB=fdb_your_feedback_database_id\n\n# 1. Read the published form\ncurl -s \"$BASE/v1/feedback-databases/$DB/form\" -H \"Authorization: Bearer $KEY\"\n\n# 2. Open a submission intent\ncurl -s -X POST \"$BASE/v1/feedback-databases/$DB/submission-intents\" \\\n  -H \"Authorization: Bearer $KEY\"\n\n# 3. Optionally attach a screenshot\ncurl -s -X POST \"$BASE/v1/feedback-databases/$DB/submission-intents/$INTENT/attachments\" \\\n  -H \"Authorization: Bearer $KEY\" -H \"X-Inlet-Intent-Token: $TOKEN\" \\\n  -F questionId=el_xxxxxxxxxxxx -F file=@screenshot.png\n\n# 4. Submit everything at once\ncurl -s -X POST \"$BASE/v1/feedback-databases/$DB/submission-intents/$INTENT/submit\" \\\n  -H \"Authorization: Bearer $KEY\" -H \"X-Inlet-Intent-Token: $TOKEN\" \\\n  -H 'content-type: application/json' \\\n  -d '{\"formVersion\":1,\"answers\":{\"el_xxxxxxxxxxxx\":{\"value\":\"It works\"}}}'\n```\n\n## Two kinds of key\n\nA **publishable client key** (`ipk_…`) is safe to embed in a browser or mobile\napp. It authorizes only the four calls above.\n\nA **secret server key** (`isk_…`) carries project Admin authority: it can read\nand export submissions, manage forms, and delete data within its own project.\nKeep it on a server. It is shown once, when you create it.\n\nSend either as `Authorization: Bearer <key>`. The management interface uses a\nsession cookie instead, obtained from `POST /v1/auth/sign-in`.\n\n## Answers\n\nAnswers are keyed by stable question ID. The shape follows the question type in\nthe pinned form version, so you never repeat the type:\n\n| Question type | Answer |\n| --- | --- |\n| single-select choice | `{\"optionId\": \"op_…\"}` |\n| multi-select choice | `{\"optionIds\": [\"op_…\", \"op_…\"]}` |\n| single- or multi-line text | `{\"value\": \"…\"}` |\n| email | `{\"value\": \"someone@example.com\"}` |\n| screenshot upload | `{\"attachmentIds\": [\"att_…\"]}` |\n\nOmit a question entirely to leave an optional question unanswered. An empty\nstring never satisfies a required question.\n\n## Retrying safely\n\nEvery submission starts with a server-issued intent, which makes retries safe.\nRepeating a finalization with the same payload returns the original result;\nrepeating it with a different payload is a conflict and stores nothing; and a\nvalidation failure leaves the intent usable so you can correct and resend.\n\n## Limits\n\n- `clientContext`: 16384 bytes serialized as UTF-8.\n- Screenshots: JPEG, PNG or WebP, 2 MB and 25 megapixels per file, 5 per submission, 10 uploads per intent. Animated images are rejected and every accepted image is re-encoded to WebP.\n- Security rate limits apply to sign-in, intent creation, uploads and\n  finalization. They are not configurable.\n\n## Errors\n\nEvery failure returns `{\"error\":{\"code\",\"message\",\"details?\"}}`. The `code` is\nstable and safe to branch on; `details` carries `questionId` for answer problems\nand `path` for request-shape problems.",
     "license": {
       "name": "MIT"
     }
@@ -893,6 +893,15 @@
             "type": "integer",
             "minimum": -9007199254740991,
             "maximum": 9007199254740991
+          },
+          "scanStatus": {
+            "type": "string",
+            "enum": [
+              "skipped",
+              "clean",
+              "error"
+            ],
+            "description": "The malware scan outcome. \"skipped\" when no scanner is configured, \"error\" when one was configured but unreachable and the deployment accepts uploads anyway. An infected file is refused and never reaches this response."
           }
         },
         "required": [
@@ -903,7 +912,8 @@
           "width",
           "height",
           "bytes",
-          "originalBytes"
+          "originalBytes",
+          "scanStatus"
         ]
       },
       "SubmissionSummaryInput": {
@@ -1265,6 +1275,177 @@
           "submissions",
           "attachments",
           "notice"
+        ]
+      },
+      "MemberInput": {
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "admin",
+              "creator",
+              "viewer"
+            ],
+            "description": "The role assigned at this scope."
+          },
+          "effectiveRole": {
+            "type": "string",
+            "enum": [
+              "admin",
+              "creator",
+              "viewer"
+            ],
+            "description": "The role that actually applies, after the override rules of FR-071."
+          },
+          "inherited": {
+            "type": "boolean",
+            "description": "True when the role comes from the project rather than this feedback database."
+          },
+          "createdAt": {}
+        },
+        "required": [
+          "userId",
+          "email",
+          "displayName",
+          "role",
+          "effectiveRole",
+          "inherited",
+          "createdAt"
+        ]
+      },
+      "InvitationInput": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "admin",
+              "creator",
+              "viewer"
+            ]
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "project",
+              "feedback_database"
+            ]
+          },
+          "projectId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "feedbackDatabaseId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scopeName": {
+            "type": "string",
+            "description": "The name of what the invitation grants access to."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "redeemed",
+              "revoked",
+              "expired"
+            ]
+          },
+          "createdAt": {},
+          "expiresAt": {},
+          "redeemedAt": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "redeemedByEmail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revokedAt": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "role",
+          "scope",
+          "projectId",
+          "feedbackDatabaseId",
+          "scopeName",
+          "status",
+          "createdAt",
+          "expiresAt",
+          "redeemedAt",
+          "redeemedByEmail",
+          "revokedAt"
+        ]
+      },
+      "InvitationPreviewInput": {
+        "type": "object",
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": [
+              "admin",
+              "creator",
+              "viewer"
+            ]
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "project",
+              "feedback_database"
+            ]
+          },
+          "scopeName": {
+            "type": "string"
+          },
+          "projectName": {
+            "type": "string"
+          },
+          "expiresAt": {},
+          "requiresAccount": {
+            "type": "boolean",
+            "description": "False when the caller is already signed in, so no password is needed."
+          }
+        },
+        "required": [
+          "role",
+          "scope",
+          "scopeName",
+          "projectName",
+          "expiresAt",
+          "requiresAccount"
         ]
       },
       "FormDefinition": {
@@ -2188,6 +2369,15 @@
             "type": "integer",
             "minimum": -9007199254740991,
             "maximum": 9007199254740991
+          },
+          "scanStatus": {
+            "type": "string",
+            "enum": [
+              "skipped",
+              "clean",
+              "error"
+            ],
+            "description": "The malware scan outcome. \"skipped\" when no scanner is configured, \"error\" when one was configured but unreachable and the deployment accepts uploads anyway. An infected file is refused and never reaches this response."
           }
         },
         "required": [
@@ -2198,7 +2388,8 @@
           "width",
           "height",
           "bytes",
-          "originalBytes"
+          "originalBytes",
+          "scanStatus"
         ],
         "additionalProperties": false
       },
@@ -2582,6 +2773,198 @@
           "submissions",
           "attachments",
           "notice"
+        ],
+        "additionalProperties": false
+      },
+      "Member": {
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "admin",
+              "creator",
+              "viewer"
+            ],
+            "description": "The role assigned at this scope."
+          },
+          "effectiveRole": {
+            "type": "string",
+            "enum": [
+              "admin",
+              "creator",
+              "viewer"
+            ],
+            "description": "The role that actually applies, after the override rules of FR-071."
+          },
+          "inherited": {
+            "type": "boolean",
+            "description": "True when the role comes from the project rather than this feedback database."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "userId",
+          "email",
+          "displayName",
+          "role",
+          "effectiveRole",
+          "inherited",
+          "createdAt"
+        ],
+        "additionalProperties": false
+      },
+      "Invitation": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "admin",
+              "creator",
+              "viewer"
+            ]
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "project",
+              "feedback_database"
+            ]
+          },
+          "projectId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "feedbackDatabaseId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scopeName": {
+            "type": "string",
+            "description": "The name of what the invitation grants access to."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "redeemed",
+              "revoked",
+              "expired"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "redeemedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "redeemedByEmail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revokedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "role",
+          "scope",
+          "projectId",
+          "feedbackDatabaseId",
+          "scopeName",
+          "status",
+          "createdAt",
+          "expiresAt",
+          "redeemedAt",
+          "redeemedByEmail",
+          "revokedAt"
+        ],
+        "additionalProperties": false
+      },
+      "InvitationPreview": {
+        "type": "object",
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": [
+              "admin",
+              "creator",
+              "viewer"
+            ]
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "project",
+              "feedback_database"
+            ]
+          },
+          "scopeName": {
+            "type": "string"
+          },
+          "projectName": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "requiresAccount": {
+            "type": "boolean",
+            "description": "False when the caller is already signed in, so no password is needed."
+          }
+        },
+        "required": [
+          "role",
+          "scope",
+          "scopeName",
+          "projectName",
+          "expiresAt",
+          "requiresAccount"
         ],
         "additionalProperties": false
       }
@@ -5582,11 +5965,1421 @@
           }
         }
       }
+    },
+    "/v1/projects/{projectId}/members": {
+      "get": {
+        "summary": "List the people with access to a project",
+        "tags": [
+          "Access"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Member"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{projectId}/members/{userId}": {
+      "patch": {
+        "summary": "Change someone’s project role",
+        "tags": [
+          "Access"
+        ],
+        "description": "Downgrading the last Admin is rejected with 409 `last_admin_removal` (FR-014). Promoting someone to Admin clears any feedback-database override, which could only narrow access an Admin must keep (FR-071A).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "admin",
+                      "creator",
+                      "viewer"
+                    ]
+                  }
+                },
+                "required": [
+                  "role"
+                ]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "userId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Member"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Remove someone from a project",
+        "tags": [
+          "Access"
+        ],
+        "description": "Removing the last Admin is rejected (FR-014). Their feedback-database assignments inside the project go with them.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "userId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/feedback-databases/{databaseId}/members": {
+      "get": {
+        "summary": "List who can reach one feedback database",
+        "tags": [
+          "Access"
+        ],
+        "description": "Includes people who reach it through the project and people with an assignment on it, with the effective role of FR-071 resolved for each.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Member"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/feedback-databases/{databaseId}/members/{userId}": {
+      "put": {
+        "summary": "Assign a role on one feedback database",
+        "tags": [
+          "Access"
+        ],
+        "description": "Overrides the project role for this database only (FR-071). Refused for a project Admin, whose access cannot be narrowed (FR-071A).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "admin",
+                      "creator",
+                      "viewer"
+                    ]
+                  }
+                },
+                "required": [
+                  "role"
+                ]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "userId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Member"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Clear a feedback-database assignment",
+        "tags": [
+          "Access"
+        ],
+        "description": "The person keeps whatever their project role gives them. This removes the override, not their access.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "userId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{projectId}/invitations": {
+      "get": {
+        "summary": "List a project’s invitations",
+        "tags": [
+          "Access"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Invitation"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Invite someone to a project",
+        "tags": [
+          "Access"
+        ],
+        "description": "Returns a single-use link that expires. Send it through your own channel; Inlet sends no email. The link is shown once.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "admin",
+                      "creator",
+                      "viewer"
+                    ]
+                  }
+                },
+                "required": [
+                  "role"
+                ]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "role": {
+                      "type": "string",
+                      "enum": [
+                        "admin",
+                        "creator",
+                        "viewer"
+                      ]
+                    },
+                    "scope": {
+                      "type": "string",
+                      "enum": [
+                        "project",
+                        "feedback_database"
+                      ]
+                    },
+                    "projectId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "feedbackDatabaseId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "scopeName": {
+                      "type": "string",
+                      "description": "The name of what the invitation grants access to."
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "redeemed",
+                        "revoked",
+                        "expired"
+                      ]
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "expiresAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "redeemedAt": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "redeemedByEmail": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "revokedAt": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "token": {
+                      "type": "string",
+                      "description": "The single-use token. Returned once, at creation."
+                    },
+                    "url": {
+                      "type": "string",
+                      "description": "The link to send. Built from INLET_PUBLIC_URL."
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "role",
+                    "scope",
+                    "projectId",
+                    "feedbackDatabaseId",
+                    "scopeName",
+                    "status",
+                    "createdAt",
+                    "expiresAt",
+                    "redeemedAt",
+                    "redeemedByEmail",
+                    "revokedAt",
+                    "token",
+                    "url"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{projectId}/invitations/{invitationId}/revoke": {
+      "post": {
+        "summary": "Revoke an unredeemed project invitation",
+        "tags": [
+          "Access"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "invitationId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invitation"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/feedback-databases/{databaseId}/invitations": {
+      "get": {
+        "summary": "List a feedback database’s invitations",
+        "tags": [
+          "Access"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Invitation"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Invite someone to one feedback database",
+        "tags": [
+          "Access"
+        ],
+        "description": "The role applies to this feedback database only. Use a project invitation to grant access across a whole project.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "admin",
+                      "creator",
+                      "viewer"
+                    ]
+                  }
+                },
+                "required": [
+                  "role"
+                ]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "role": {
+                      "type": "string",
+                      "enum": [
+                        "admin",
+                        "creator",
+                        "viewer"
+                      ]
+                    },
+                    "scope": {
+                      "type": "string",
+                      "enum": [
+                        "project",
+                        "feedback_database"
+                      ]
+                    },
+                    "projectId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "feedbackDatabaseId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "scopeName": {
+                      "type": "string",
+                      "description": "The name of what the invitation grants access to."
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "redeemed",
+                        "revoked",
+                        "expired"
+                      ]
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "expiresAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "redeemedAt": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "redeemedByEmail": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "revokedAt": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "token": {
+                      "type": "string",
+                      "description": "The single-use token. Returned once, at creation."
+                    },
+                    "url": {
+                      "type": "string",
+                      "description": "The link to send. Built from INLET_PUBLIC_URL."
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "role",
+                    "scope",
+                    "projectId",
+                    "feedbackDatabaseId",
+                    "scopeName",
+                    "status",
+                    "createdAt",
+                    "expiresAt",
+                    "redeemedAt",
+                    "redeemedByEmail",
+                    "revokedAt",
+                    "token",
+                    "url"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/feedback-databases/{databaseId}/invitations/{invitationId}/revoke": {
+      "post": {
+        "summary": "Revoke an unredeemed feedback-database invitation",
+        "tags": [
+          "Access"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "invitationId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invitation"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/invitations/{token}": {
+      "get": {
+        "summary": "Read what an invitation grants",
+        "tags": [
+          "Access"
+        ],
+        "description": "Public, so someone can see what they are accepting before they accept it. Reveals only the role and the scope’s name.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "token",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitationPreview"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/invitations/{token}/redeem": {
+      "post": {
+        "summary": "Redeem an invitation",
+        "tags": [
+          "Access"
+        ],
+        "description": "Grants exactly the role and scope recorded on the invitation, whatever address the redeemer uses (FR-007), and consumes it.\n\nSigned in already: send no body and the invitation attaches to that account.\nNo account yet: send an email and a password, and the account is created.\n\nA second use, an expiry or a revocation all fail, each with its own code.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "email": {
+                        "type": "string",
+                        "minLength": 3,
+                        "maxLength": 320
+                      },
+                      "password": {
+                        "type": "string",
+                        "minLength": 12,
+                        "maxLength": 1024
+                      },
+                      "displayName": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200
+                      }
+                    }
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "token",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    },
+                    "displayName": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "email",
+                    "displayName"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "servers": [
     {
-      "url": "http://localhost:3000",
+      "url": "http://192.168.0.19:3000",
       "description": "This deployment"
     }
   ],

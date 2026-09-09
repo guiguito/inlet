@@ -19,7 +19,9 @@ storage.
 
 ## What this release does
 
-This is **Release 1, the solo release**: one operator, running their own deployment.
+Both releases of the PRD are implemented: **Release 1 (Solo)**, one operator running
+their own deployment, and **Release 2 (Team)**, a second person invited with a limited
+role and an AI agent able to operate the project.
 
 - Email-and-password sign-in for a single Admin account provisioned from configuration.
 - Projects, each holding feedback databases and project-owned API keys.
@@ -37,9 +39,21 @@ This is **Release 1, the solo release**: one operator, running their own deploym
 - An OpenAPI 3.1 reference at `/docs`, generated from the schemas the server validates
   against.
 
-Not in this release: invitations and additional users, Creator and Viewer roles, MCP
-access, and malware scanning of uploads. See [`docs/DECISIONS.md`](docs/DECISIONS.md)
-for the full boundary and why each line falls where it does.
+And from Release 2:
+
+- Invitation links: an Admin generates a single-use expiring link for a role and a
+  scope, and whoever opens it gets an account and exactly that access. Inlet sends no
+  email; you pass the link on yourself.
+- Admin, Creator and Viewer roles, at project or feedback-database scope, with a
+  database assignment overriding the project role. A project Admin keeps full
+  authority and a project always keeps at least one Admin.
+- `inlet-mcp`, so an AI agent can operate one project: read and export feedback, build
+  and publish forms, and manage access. See [`docs/MCP.md`](docs/MCP.md).
+- Optional malware scanning of uploads through ClamAV, alongside the WebP re-encoding
+  that always runs.
+
+See [`docs/DECISIONS.md`](docs/DECISIONS.md) for every technical choice and its
+reasoning.
 
 ## Run it
 
@@ -54,6 +68,10 @@ docker compose up -d --build
 
 Inlet is then on <http://localhost:3000>, with its API reference at
 <http://localhost:3000/docs>. Sign in with the admin email and password you set.
+
+To turn on malware scanning, set `INLET_CLAMAV_HOST=clamav` in `.env` and start the
+optional service with `docker compose --profile malware-scanning up -d`. ClamAV wants
+roughly 2 GB of memory for its signature database, which is why it is opt-in.
 
 PostgreSQL and MinIO data live in named Docker volumes, so restarts and upgrades keep
 everything. Pointing at an external PostgreSQL or S3-compatible provider is a
@@ -117,9 +135,10 @@ the browser tests drive. It ships unbranded and themeable.
 | --- | --- |
 | `packages/shared` | The form definition, answer validation, limits and error codes. Shared by the API and the web app so the contract cannot drift. |
 | `apps/api` | Fastify server, Drizzle schema and migrations, services, routes, tests. |
+| `apps/mcp` | `inlet-mcp`, the MCP server. A thin layer over the HTTP API. |
 | `apps/web` | React management interface, form builder and reference renderer. |
 | `e2e` | Playwright suites: the HTTP contract, and the interface in a browser. |
-| `docs` | API guide, technical decisions, generated OpenAPI document. |
+| `docs` | API guide, MCP guide, technical decisions, generated OpenAPI document. |
 | `scripts` | Local PostgreSQL and MinIO, and the end-to-end server. |
 
 ## Tests
@@ -149,6 +168,8 @@ these are the ones that matter most.
 | `INLET_TRUSTED_PROXIES` | `false`, a hop count, or a comma-separated list of proxy addresses. Decides how the request IP is resolved. |
 | `INLET_S3_*` | Endpoint, region, bucket and credentials for object storage. |
 | `INLET_INTENT_TTL_MINUTES` | How long a submission intent stays usable. Default 30. |
+| `INLET_CLAMAV_HOST` | A ClamAV clamd host enables malware scanning of uploads. Unset disables it. |
+| `INLET_MALWARE_SCAN_REQUIRED` | Whether an unreachable scanner blocks uploads. Off by default. |
 
 Product limits are not configurable: they are part of the API contract and live in
 `packages/shared/src/limits.ts`. Security rate limits are not configurable either.

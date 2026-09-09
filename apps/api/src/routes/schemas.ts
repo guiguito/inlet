@@ -208,6 +208,69 @@ export const credentialWithSecretSchema = credentialSchema.extend({
     .describe('The full key. A secret server key is shown here once and never again (FR-084).'),
 });
 
+// --- Access: members and invitations ----------------------------------------
+
+export const setRoleBodySchema = z.object({ role: z.enum(ROLES) });
+
+export const memberSchema = z.object({
+  userId: z.string(),
+  email: z.string(),
+  displayName: z.string(),
+  role: z.enum(ROLES).describe('The role assigned at this scope.'),
+  effectiveRole: z
+    .enum(ROLES)
+    .describe('The role that actually applies, after the override rules of FR-071.'),
+  inherited: z
+    .boolean()
+    .describe('True when the role comes from the project rather than this feedback database.'),
+  createdAt: z.date(),
+});
+
+export const createInvitationBodySchema = z.object({ role: z.enum(ROLES) });
+
+export const invitationSchema = z.object({
+  id: z.string(),
+  role: z.enum(ROLES),
+  scope: z.enum(['project', 'feedback_database']),
+  projectId: z.string().nullable(),
+  feedbackDatabaseId: z.string().nullable(),
+  scopeName: z.string().describe('The name of what the invitation grants access to.'),
+  status: z.enum(['pending', 'redeemed', 'revoked', 'expired']),
+  createdAt: z.date(),
+  expiresAt: z.date(),
+  redeemedAt: z.date().nullable(),
+  redeemedByEmail: z.string().nullable(),
+  revokedAt: z.date().nullable(),
+});
+
+export const invitationWithLinkSchema = invitationSchema.extend({
+  token: z.string().describe('The single-use token. Returned once, at creation.'),
+  url: z.string().describe('The link to send. Built from INLET_PUBLIC_URL.'),
+});
+
+export const invitationPreviewSchema = z.object({
+  role: z.enum(ROLES),
+  scope: z.enum(['project', 'feedback_database']),
+  scopeName: z.string(),
+  projectName: z.string(),
+  expiresAt: z.date(),
+  requiresAccount: z
+    .boolean()
+    .describe('False when the caller is already signed in, so no password is needed.'),
+});
+
+/**
+ * Nullish, because a signed-in redeemer sends no body at all: the invitation attaches
+ * to the account they are already using.
+ */
+export const redeemInvitationBodySchema = z
+  .object({
+    email: z.string().trim().min(3).max(320).optional(),
+    password: z.string().min(12).max(1024).optional(),
+    displayName: z.string().trim().min(1).max(200).optional(),
+  })
+  .nullish();
+
 // --- Client feedback flow ---------------------------------------------------
 
 const clientElementSchema = z.looseObject({
@@ -274,6 +337,11 @@ export const uploadResultSchema = z.object({
   height: z.int(),
   bytes: z.int(),
   originalBytes: z.int(),
+  scanStatus: z
+    .enum(['skipped', 'clean', 'error'])
+    .describe(
+      'The malware scan outcome. "skipped" when no scanner is configured, "error" when one was configured but unreachable and the deployment accepts uploads anyway. An infected file is refused and never reaches this response.',
+    ),
 });
 
 // --- Submissions ------------------------------------------------------------
@@ -356,6 +424,9 @@ for (const [id, schema] of Object.entries({
   SubmissionDetail: submissionDetailSchema,
   SubmissionList: submissionListSchema,
   DeletionImpact: deletionImpactSchema,
+  Member: memberSchema,
+  Invitation: invitationSchema,
+  InvitationPreview: invitationPreviewSchema,
 })) {
   register(schema, id);
 }

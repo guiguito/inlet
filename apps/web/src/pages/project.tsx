@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { api, ApiError, type Credential, type CurrentUser } from '@/lib/api';
+import { AccessPanel } from '@/components/access-panel';
 import { AppShell, PageHeader } from '@/components/app-shell';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { CopyField } from '@/components/copy-field';
@@ -81,6 +82,7 @@ export function ProjectPage({ user }: { user: CurrentUser }) {
             <TabsList>
               <TabsTrigger value="databases">Feedback databases</TabsTrigger>
               <TabsTrigger value="keys">API keys</TabsTrigger>
+              <TabsTrigger value="access">Access</TabsTrigger>
               <TabsTrigger value="settings">Settings</TabsTrigger>
             </TabsList>
 
@@ -89,6 +91,12 @@ export function ProjectPage({ user }: { user: CurrentUser }) {
             </TabsContent>
             <TabsContent value="keys">
               <CredentialsTab projectId={projectId} />
+            </TabsContent>
+            <TabsContent value="access">
+              <AccessPanel
+                scope={{ kind: 'project', projectId, name: project.data.name }}
+                currentUserId={user.id}
+              />
             </TabsContent>
             <TabsContent value="settings">
               <SettingsTab projectId={projectId} name={project.data.name} />

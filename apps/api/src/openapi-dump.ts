@@ -7,6 +7,7 @@ import { buildApp } from './app.js';
 import type { AppContext } from './context.js';
 import { createDb } from './db/index.js';
 import { loadEnv } from './env.js';
+import { MalwareScanner } from './lib/malware.js';
 import { Storage } from './lib/storage.js';
 
 const env = loadEnv({
@@ -20,7 +21,8 @@ const env = loadEnv({
 
 const { db, pool } = createDb(env.INLET_DATABASE_URL);
 const storage = new Storage(env);
-const ctx: AppContext = { env, db, storage, log: pino({ level: 'silent' }) };
+const scanner = new MalwareScanner(env);
+const ctx: AppContext = { env, db, storage, scanner, log: pino({ level: 'silent' }) };
 
 const app = await buildApp(ctx);
 await app.ready();

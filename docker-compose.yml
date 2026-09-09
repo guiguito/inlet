@@ -37,6 +37,22 @@ services:
       timeout: 5s
       retries: 30
 
+  # Optional malware scanning of uploads (PRD section 21.2). Start it with
+  # `docker compose --profile malware-scanning up -d`, and set INLET_CLAMAV_HOST=clamav
+  # in .env. ClamAV wants about 2 GB of memory for its signature database, which is why
+  # it is opt-in rather than always on.
+  clamav:
+    image: clamav/clamav:latest
+    restart: unless-stopped
+    profiles: ['malware-scanning']
+    volumes: ['clamavdb:/var/lib/clamav']
+    healthcheck:
+      test: ['CMD-SHELL', 'clamdcheck.sh || exit 1']
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 300s
+
   inlet:
     build: .
     restart: unless-stopped
@@ -76,6 +92,13 @@ services:
       INLET_INTENT_TTL_MINUTES: ${INLET_INTENT_TTL_MINUTES:-30}
       INLET_PENDING_UPLOAD_EXPIRY_DAYS: ${INLET_PENDING_UPLOAD_EXPIRY_DAYS:-1}
 
+      # Set INLET_CLAMAV_HOST=clamav in .env to turn scanning on, and start the
+      # clamav service with its profile.
+      INLET_CLAMAV_HOST: ${INLET_CLAMAV_HOST:-}
+      INLET_CLAMAV_PORT: ${INLET_CLAMAV_PORT:-3310}
+      INLET_MALWARE_SCAN_REQUIRED: ${INLET_MALWARE_SCAN_REQUIRED:-false}
+
 volumes:
   pgdata:
   miniodata:
+  clamavdb:

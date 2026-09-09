@@ -1,6 +1,7 @@
 import type { FastifyBaseLogger } from 'fastify';
 import type { Db } from './db/index.js';
 import type { Env } from './env.js';
+import type { MalwareScanner } from './lib/malware.js';
 import type { Storage } from './lib/storage.js';
 
 /**
@@ -12,5 +13,6 @@ export type AppContext = {
   env: Env;
   db: Db;
   storage: Storage;
+  scanner: MalwareScanner;
   log: FastifyBaseLogger;
 };

@@ -1,7 +1,8 @@
 # Technical decisions
 
-Every choice made building Release 1 of Inlet that a future maintainer would otherwise
-have to reverse-engineer, with the reasoning and the alternatives that were rejected.
+Every choice made building Inlet that a future maintainer would otherwise have to
+reverse-engineer, with the reasoning and the alternatives that were rejected. Sections
+1 to 18 cover Release 1; section 19 covers Release 2.
 
 The product requirements live in the PRD. This document is about *how*, and about the
 places where the PRD deliberately left the decision to technical design.
@@ -26,10 +27,16 @@ places where the PRD deliberately left the decision to technical design.
 16. [Parameters the PRD left open](#16-parameters-the-prd-left-open)
 17. [Known ceilings](#17-known-ceilings)
 18. [Bugs found by the tests](#18-bugs-found-by-the-tests)
+19. [Release 2: team, MCP and scanning](#19-release-2-team-mcp-and-scanning)
 
 ---
 
 ## 1. Scope boundary
+
+Release 1 shipped first, deliberately narrow. Release 2 followed and closed the gap;
+section 19 records its decisions. This section is the boundary as it stood when
+Release 1 shipped, kept because it explains why several things were built the way they
+were.
 
 **Decision.** Build PRD section 21.1 (Release 1, Solo) completely, plus three items
 from Release 2 that cost almost nothing and are listed in section 13's target scope.
@@ -551,3 +558,163 @@ question they were on. It now names the question.
 
 **An optional-question marker ran into its label.** "Email for follow-upoptional" as a
 single accessible name. Now separated.
+
+---
+
+## 19. Release 2: team, MCP and scanning
+
+Everything Release 1 deferred is now built. The three items pulled forward then
+(unpublish and rollback, CSV export, the stale-draft check) were already done, so
+Release 2 was invitations, roles, MCP and malware scanning.
+
+The bet Release 1 made paid off: the `invitations` and `feedback_database_memberships`
+tables already existed, and `effectiveRole` was already written and unit-tested for all
+three roles at both scopes. Release 2 added rows and routes, and changed no
+authorization logic at all.
+
+### 19.1 Invitations
+
+**One table, three separate facts.** Redemption, revocation and expiry are three
+columns rather than one status enum, because an Admin needs to see *which* happened to
+a link that no longer works, and a single status would have to be derived anyway.
+`invitationStatus` computes the four presentable states from those columns and the
+clock.
+
+**Redemption is one locked transaction.** `select … for update` on the invitation row
+before deciding anything, exactly as finalization does. Two people opening the same
+link at the same moment cannot both redeem it; one wins and the other is told the link
+has been used. A test fires two concurrent redemptions and asserts one account is
+created.
+
+**An invitation cannot set the password of an existing account.** If the address already
+has one, redemption is refused and the person is told to sign in first. FR-007 says the
+grant does not depend on the address, but a link plus an address is not proof of control
+*over* that address, and allowing it would turn any invitation into an account takeover.
+
+**Redeeming while signed in as someone else is refused.** Journey 7.4 says a signed-in
+redeemer gets the invitation attached to their account, which is what happens when no
+body is sent. But a body naming a different address means the caller expected the grant
+to go elsewhere, and silently sending it to the current session would give access to the
+wrong person. The refusal names the account actually in play. This was found by a test:
+the fixture was signed in as the operator while trying to create a colleague's account,
+and the grant went to the operator.
+
+**No email, by design.** Section 4 puts email delivery outside the MVP, so an Admin gets
+a link and passes it on. That also means no delivery failures, no bounce handling, and no
+SMTP configuration in a self-hosted product.
+
+**The preview endpoint is public.** Someone should not have to accept an invitation to
+find out what it grants. It reveals the role and the name of the scope, and nothing about
+who invited them or who else has access; a test pins the exact key set of the response so
+that cannot drift.
+
+### 19.2 Roles and scopes
+
+**No new authorization logic.** Every route still resolves access through
+`services/access.ts`, and `effectiveRole` was already correct. What Release 2 added is
+the routes that *write* memberships, and two invariants enforced in the service layer so
+no caller can skip them:
+
+- FR-014, the last Admin, checked before any downgrade or removal.
+- FR-071A, a project Admin's access, checked before any database assignment.
+
+**Promoting someone to project Admin clears their database overrides.** An override on a
+project Admin can only narrow access they must keep, so leaving one in place would be a
+row that means nothing and confuses the next reader. Removing someone from a project
+clears them too, so no orphaned grant survives.
+
+**A member listing reports both roles.** `role` is what is assigned at the scope asked
+about; `effectiveRole` is what applies; `inherited` says which of the two it came from.
+Without all three, a reader looking at a feedback database cannot tell whether someone is
+a Viewer because the project says so or because this database says so, and those have
+different consequences when the project role changes.
+
+**Listing members needs Viewer, not Admin.** Section 9.6 marks *invite, change role and
+remove* as Admin operations and says nothing about listing. Letting a Creator see who
+else has access is useful and harmless. Invitations are Admin-only, because a pending
+link is closer to a credential than to a fact about the team.
+
+**The interface reads its own role out of the member list.** Rather than adding an
+endpoint for "what may I do here", the access panel finds the current user's row in the
+list it already fetched and hides what an Admin-only call would refuse. This came out of
+a test: a Creator was shown role dropdowns that failed on use and an invitations section
+that looked empty rather than restricted.
+
+### 19.3 MCP
+
+**A separate process over stdio, not an HTTP endpoint on the API.** Section 21.2 asks for
+MCP "built as a thin layer over the Release 1 API", and `apps/mcp` is literally that:
+every tool becomes one authenticated HTTP request. Nothing in it touches the database or
+the object store. So MCP cannot acquire an authority the API does not already grant a
+secret server key, and FR-123 holds by construction rather than by discipline. It also
+means the MCP surface can change without redeploying the API.
+
+Rejected: mounting a streamable-HTTP MCP transport inside the API. It would have shared
+the process, which sounds simpler, but it would also have made it possible to reach past
+the HTTP layer into the services, and the guarantee above is worth more than one fewer
+process.
+
+**Thirty tools, bounded by the matrix.** FR-121 is an upper bound: exactly the section
+9.6 rows marked for a secret server key. So there is deliberately no tool to create a
+project or manage credentials, and none to edit a submission. A test asserts the full
+tool list and separately asserts the absence of each forbidden name, so adding one by
+accident fails the suite.
+
+Screenshot *upload* is the one permitted row not exposed, because it needs a binary body
+that MCP is a poor fit for. The tool description points at the HTTP endpoint instead.
+
+**Destructive writes require the name to be echoed.** Section 19 of the PRD asks for
+safeguards on destructive writes. Annotating them `destructiveHint` tells a client to
+flag them, but a hint is not a safeguard. So each destructive tool reads the resource
+first and refuses unless the caller passes its exact name: the project's name, the
+feedback database's name, the member's email, the submission's ID. An agent following a
+vague instruction cannot delete a project without having read it, and a mistyped
+identifier fails closed rather than deleting the wrong thing.
+
+Rejected: a global `--allow-destructive` flag. It is a single decision taken once, far
+from the action, and it protects nothing on the call that matters.
+
+**Errors carry the stable code.** A tool failure puts `form_not_published` or
+`stale_draft_revision` in the message, because an agent that sees the code can act on it,
+where "the request failed" leaves it guessing.
+
+**A publishable key is refused at startup.** It would otherwise fail on the first call
+with `insufficient_scope`, which is a confusing way to learn you pasted the wrong key.
+
+### 19.4 Malware scanning
+
+**ClamAV over its own protocol, no client library.** clamd's INSTREAM command is a dozen
+lines: the command, length-prefixed chunks, a zero length to end. A self-hosted product
+should not carry a dependency to write them, and the protocol is stable.
+
+**The source bytes are scanned, before anything decodes them.** WebP re-encoding remains
+the control that stops a payload smuggled inside an image reaching storage, and it still
+runs. Scanning adds what re-encoding cannot do: catch a file that is malicious in its own
+right, and catch anything aimed at the decoder itself. A test asserts the scanner receives
+the uploaded JPEG rather than the WebP it becomes.
+
+**An outage is a configuration decision, not a code decision.** An infected file is always
+refused. An *unreachable* scanner is refused only when the deployment sets
+`INLET_MALWARE_SCAN_REQUIRED`, because whether a scanner outage should stop a product
+collecting feedback genuinely differs between deployments. The default accepts the upload
+and records `scanStatus: "error"`, so the gap is visible rather than silent.
+
+**An unrecognised reply is treated as a failure, not a pass.** If clamd answers something
+the client does not understand, the upload is not waved through. That is the direction to
+fail in.
+
+**Opt-in in the deployment.** ClamAV wants roughly 2 GB for its signature database, which
+is a lot to impose on a personal deployment that may not want scanning. It is a Compose
+profile, off unless asked for.
+
+**Tested against a fake clamd that speaks the real protocol.** Stubbing our own function
+would have proved nothing about whether the chunks are framed correctly, so the test
+starts a TCP server that reassembles the stream and asserts the bytes arrive intact,
+including a payload larger than one 64 KiB frame.
+
+### 19.5 Bugs Release 2's tests found
+
+| Bug | Consequence had it shipped |
+| --- | --- |
+| **Redeeming while signed in silently granted the access to the wrong account.** Journey 7.4's behaviour is right, but a body naming a different address was ignored rather than questioned. | An Admin pasting a colleague's link into their own browser would have given themselves the role and consumed the link, with nothing to say so. |
+| **A Creator saw an Access tab they could not use.** Role dropdowns that failed on use, and an invitations list that rendered empty because the request was refused. | Someone would reasonably conclude there were no invitations, when in fact they were not allowed to see them. |

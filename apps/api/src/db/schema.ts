@@ -30,6 +30,7 @@ export const roleEnum = pgEnum('inlet_role', ['admin', 'creator', 'viewer']);
 export const credentialTypeEnum = pgEnum('inlet_credential_type', ['publishable', 'secret']);
 export const intentStatusEnum = pgEnum('inlet_intent_status', ['active', 'finalized']);
 export const purgeStatusEnum = pgEnum('inlet_purge_status', ['pending', 'failed']);
+export const scanStatusEnum = pgEnum('inlet_scan_status', ['skipped', 'clean', 'error']);
 
 const createdAt = timestamp('created_at', { withTimezone: true }).notNull().defaultNow();
 const updatedAt = timestamp('updated_at', { withTimezone: true }).notNull().defaultNow();
@@ -302,6 +303,13 @@ export const attachments = pgTable(
     width: integer('width').notNull(),
     height: integer('height').notNull(),
     bound: boolean('bound').notNull().default(false),
+    /**
+     * Section 10.11: the upload's scan outcome. An infected upload is refused and
+     * never stored, so only the accepted outcomes appear here: "clean" when a scanner
+     * passed it, "skipped" when none is configured, and "error" when a scanner was
+     * configured but unreachable and the deployment allows uploads through anyway.
+     */
+    scanStatus: scanStatusEnum('scan_status').notNull().default('skipped'),
     createdAt,
   },
   (table) => [
@@ -330,8 +338,13 @@ export const storagePurgeQueue = pgTable(
 );
 
 /**
- * Section 10.2. The table exists in Release 1 so Release 2 adds rows rather than
- * tables (PRD section 21.1); no Release 1 route writes to it.
+ * Section 10.2: invitations (FR-006, FR-007).
+ *
+ * Exactly one of `projectId` or `feedbackDatabaseId` is set, which is the invitation's
+ * scope. Only the token's SHA-256 is stored, so the link in someone's inbox is the
+ * only copy of it (section 12.1). Redemption, revocation and expiry are three
+ * separate facts rather than one status column, because an Admin needs to see which
+ * of them happened.
  */
 export const invitations = pgTable(
   'invitations',
@@ -362,3 +375,6 @@ export type ProjectCredentialRow = typeof projectCredentials.$inferSelect;
 export type SubmissionIntentRow = typeof submissionIntents.$inferSelect;
 export type SubmissionRow = typeof submissions.$inferSelect;
 export type AttachmentRow = typeof attachments.$inferSelect;
+export type InvitationRow = typeof invitations.$inferSelect;
+export type ProjectMembershipRow = typeof projectMemberships.$inferSelect;
+export type FeedbackDatabaseMembershipRow = typeof feedbackDatabaseMemberships.$inferSelect;

@@ -164,6 +164,42 @@ export type SubmissionList = {
 
 export type DeletionImpact = { submissions: number; attachments: number; notice: string };
 
+export type Member = {
+  userId: string;
+  email: string;
+  displayName: string;
+  role: Role;
+  effectiveRole: Role;
+  inherited: boolean;
+  createdAt: string;
+};
+
+export type Invitation = {
+  id: string;
+  role: Role;
+  scope: 'project' | 'feedback_database';
+  projectId: string | null;
+  feedbackDatabaseId: string | null;
+  scopeName: string;
+  status: 'pending' | 'redeemed' | 'revoked' | 'expired';
+  createdAt: string;
+  expiresAt: string;
+  redeemedAt: string | null;
+  redeemedByEmail: string | null;
+  revokedAt: string | null;
+};
+
+export type InvitationWithLink = Invitation & { token: string; url: string };
+
+export type InvitationPreview = {
+  role: Role;
+  scope: 'project' | 'feedback_database';
+  scopeName: string;
+  projectName: string;
+  expiresAt: string;
+  requiresAccount: boolean;
+};
+
 export type ClientForm = {
   feedbackDatabaseId: string;
   formVersionId: string;
@@ -299,6 +335,66 @@ export const api = {
     ),
   exportUrl: (databaseId: string, format: 'json' | 'csv') =>
     `/v1/feedback-databases/${databaseId}/submissions/export?format=${format}`,
+
+  // --- Access: members and invitations --------------------------------------
+
+  listProjectMembers: (projectId: string) =>
+    request<Member[]>(`/v1/projects/${projectId}/members`),
+  setProjectRole: (projectId: string, userId: string, role: Role) =>
+    request<Member>(`/v1/projects/${projectId}/members/${userId}`, {
+      method: 'PATCH',
+      body: { role },
+    }),
+  removeProjectMember: (projectId: string, userId: string) =>
+    request<{ ok: true }>(`/v1/projects/${projectId}/members/${userId}`, { method: 'DELETE' }),
+
+  listDatabaseMembers: (databaseId: string) =>
+    request<Member[]>(`/v1/feedback-databases/${databaseId}/members`),
+  setDatabaseRole: (databaseId: string, userId: string, role: Role) =>
+    request<Member>(`/v1/feedback-databases/${databaseId}/members/${userId}`, {
+      method: 'PUT',
+      body: { role },
+    }),
+  clearDatabaseRole: (databaseId: string, userId: string) =>
+    request<{ ok: true }>(`/v1/feedback-databases/${databaseId}/members/${userId}`, {
+      method: 'DELETE',
+    }),
+
+  listProjectInvitations: (projectId: string) =>
+    request<Invitation[]>(`/v1/projects/${projectId}/invitations`),
+  inviteToProject: (projectId: string, role: Role) =>
+    request<InvitationWithLink>(`/v1/projects/${projectId}/invitations`, {
+      method: 'POST',
+      body: { role },
+    }),
+  revokeProjectInvitation: (projectId: string, invitationId: string) =>
+    request<Invitation>(`/v1/projects/${projectId}/invitations/${invitationId}/revoke`, {
+      method: 'POST',
+    }),
+
+  listDatabaseInvitations: (databaseId: string) =>
+    request<Invitation[]>(`/v1/feedback-databases/${databaseId}/invitations`),
+  inviteToDatabase: (databaseId: string, role: Role) =>
+    request<InvitationWithLink>(`/v1/feedback-databases/${databaseId}/invitations`, {
+      method: 'POST',
+      body: { role },
+    }),
+  revokeDatabaseInvitation: (databaseId: string, invitationId: string) =>
+    request<Invitation>(
+      `/v1/feedback-databases/${databaseId}/invitations/${invitationId}/revoke`,
+      { method: 'POST' },
+    ),
+
+  previewInvitation: (token: string) =>
+    request<InvitationPreview>(`/v1/invitations/${encodeURIComponent(token)}`),
+  redeemInvitation: (
+    token: string,
+    account?: { email: string; password: string; displayName?: string },
+  ) =>
+    request<CurrentUser>(`/v1/invitations/${encodeURIComponent(token)}/redeem`, {
+      method: 'POST',
+      ...(account ? { body: account } : { body: {} }),
+    }),
 
   /**
    * The same-origin path for an attachment.

@@ -8,6 +8,7 @@ import { ProjectPage } from '@/pages/project';
 import { DatabasePage } from '@/pages/database';
 import { SubmissionPage } from '@/pages/submission';
 import { BuilderPage } from '@/pages/builder';
+import { InvitationPage } from '@/pages/invitation';
 import { NotFoundPage } from '@/pages/not-found';
 import { RendererPage } from '@/renderer/renderer-page';
 
@@ -22,6 +23,9 @@ export function App() {
     <Routes>
       <Route path="/sign-in" element={<SignInGate />} />
       <Route path="/render/:databaseId" element={<RendererPage />} />
+      {/* Journey 7.4: reachable without an account, since for most invitees this is
+          the first Inlet page they see. */}
+      <Route path="/invitations/:token" element={<InvitationPage />} />
       <Route path="/*" element={<AuthenticatedRoutes />} />
     </Routes>
   );

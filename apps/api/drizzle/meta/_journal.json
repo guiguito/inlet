@@ -8,6 +8,13 @@
       "when": 1788904793000,
       "tag": "0000_majestic_hannibal_king",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1788925028440,
+      "tag": "0001_release_2_scan_status",
+      "breakpoints": true
     }
   ]
 }

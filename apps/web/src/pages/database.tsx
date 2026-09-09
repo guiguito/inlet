@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { api, ApiError, type CurrentUser, type FormVersion } from '@/lib/api';
+import { AccessPanel } from '@/components/access-panel';
 import { AppShell, PageHeader } from '@/components/app-shell';
 import { answerPreview } from '@/components/answer-view';
 import { ConfirmDialog } from '@/components/confirm-dialog';
@@ -113,6 +114,7 @@ export function DatabasePage({ user }: { user: CurrentUser }) {
               <TabsTrigger value="responses">Responses</TabsTrigger>
               <TabsTrigger value="integrate">Integrate</TabsTrigger>
               <TabsTrigger value="versions">Versions</TabsTrigger>
+              <TabsTrigger value="access">Access</TabsTrigger>
               <TabsTrigger value="settings">Settings</TabsTrigger>
             </TabsList>
 
@@ -124,6 +126,16 @@ export function DatabasePage({ user }: { user: CurrentUser }) {
             </TabsContent>
             <TabsContent value="versions">
               <VersionsTab databaseId={databaseId} />
+            </TabsContent>
+            <TabsContent value="access">
+              <AccessPanel
+                scope={{
+                  kind: 'feedbackDatabase',
+                  databaseId,
+                  name: database.data.name,
+                }}
+                currentUserId={user.id}
+              />
             </TabsContent>
             <TabsContent value="settings">
               <SettingsTab

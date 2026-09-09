@@ -4,6 +4,7 @@ import type { AppContext } from './context.js';
 import { createDb } from './db/index.js';
 import { runMigrations } from './db/migrate.js';
 import { loadEnv } from './env.js';
+import { MalwareScanner } from './lib/malware.js';
 import { Storage } from './lib/storage.js';
 import { deleteExpiredSessions } from './lib/session.js';
 import { bootstrapAdmin } from './services/bootstrap.js';
@@ -27,7 +28,8 @@ const log = pino({
 
 const { db, pool } = createDb(env.INLET_DATABASE_URL);
 const storage = new Storage(env);
-const ctx: AppContext = { env, db, storage, log };
+const scanner = new MalwareScanner(env);
+const ctx: AppContext = { env, db, storage, scanner, log };
 
 if (env.INLET_MIGRATE_ON_START) {
   await runMigrations(db);
@@ -38,6 +40,16 @@ await storage.ensureBucket(env.INLET_S3_CREATE_BUCKET);
 if (!(await storage.ensureLifecycleRule())) {
   log.warn(
     'The object store rejected the pending-upload expiry rule. Unreferenced screenshot uploads will not expire on their own.',
+  );
+}
+
+// Report an unreachable scanner at startup rather than on the first upload.
+if (scanner.configured && !(await scanner.ping(log))) {
+  log.warn(
+    { required: env.INLET_MALWARE_SCAN_REQUIRED },
+    env.INLET_MALWARE_SCAN_REQUIRED
+      ? 'The malware scanner is unreachable and scanning is required, so uploads will be refused.'
+      : 'The malware scanner is unreachable. Uploads will be accepted and recorded as unscanned.',
   );
 }
 

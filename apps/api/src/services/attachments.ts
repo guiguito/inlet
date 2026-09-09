@@ -29,6 +29,7 @@ export type UploadedAttachment = {
   height: number;
   bytes: number;
   originalBytes: number;
+  scanStatus: 'skipped' | 'clean' | 'error';
 };
 
 /**
@@ -58,6 +59,11 @@ export async function uploadAttachment(
 
   await reserveUploadSlot(ctx.db, intent.id);
 
+  // Scan the source bytes before anything decodes them. Re-encoding remains the
+  // control that stops a smuggled payload reaching storage; this catches a file that
+  // is malicious in its own right, and anything aimed at the decoder itself.
+  const scan = await ctx.scanner.scan(source, ctx.log);
+
   const image = await processScreenshot(source);
   const attachmentId = newId('attachment');
   const storageKey = Storage.keyFor(attachmentId);
@@ -76,6 +82,7 @@ export async function uploadAttachment(
     storedBytes: image.storedBytes,
     width: image.width,
     height: image.height,
+    scanStatus: scan.status,
   });
 
   return {
@@ -87,6 +94,7 @@ export async function uploadAttachment(
     height: image.height,
     bytes: image.storedBytes,
     originalBytes: image.originalBytes,
+    scanStatus: scan.status,
   };
 }
 

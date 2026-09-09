@@ -12,12 +12,14 @@ ENV npm_config_update_notifier=false
 COPY package.json package-lock.json ./
 COPY packages/shared/package.json packages/shared/
 COPY apps/api/package.json apps/api/
+COPY apps/mcp/package.json apps/mcp/
 COPY apps/web/package.json apps/web/
 RUN npm ci
 
 COPY tsconfig*.json ./
 COPY packages/shared packages/shared
 COPY apps/api apps/api
+COPY apps/mcp apps/mcp
 COPY apps/web apps/web
 RUN npm run build
 
@@ -45,6 +47,8 @@ COPY --from=build /app/packages/shared/dist packages/shared/dist
 COPY --from=build /app/apps/api/package.json apps/api/package.json
 COPY --from=build /app/apps/api/dist apps/api/dist
 COPY --from=build /app/apps/api/drizzle apps/api/drizzle
+COPY --from=build /app/apps/mcp/package.json apps/mcp/package.json
+COPY --from=build /app/apps/mcp/dist apps/mcp/dist
 COPY --from=build /app/apps/web/dist apps/web/dist
 
 # Never run as root.

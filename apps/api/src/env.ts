@@ -69,6 +69,20 @@ const envSchema = z.object({
    */
   INLET_PENDING_UPLOAD_EXPIRY_DAYS: z.coerce.number().int().min(1).max(30).default(1),
 
+  /**
+   * Malware scanning of uploads (PRD section 21.2). Unset disables it; a ClamAV
+   * clamd host and port enable it.
+   */
+  INLET_CLAMAV_HOST: z.string().optional(),
+  INLET_CLAMAV_PORT: z.coerce.number().int().min(1).max(65535).default(3310),
+  /**
+   * Whether an unreachable scanner blocks uploads. Off by default, so a scanner
+   * outage degrades to "accepted and recorded as unscanned" rather than stopping the
+   * product from collecting feedback. A deployment that would rather refuse the
+   * upload sets this.
+   */
+  INLET_MALWARE_SCAN_REQUIRED: bool.default(false),
+
   /** Directory holding the built management interface. Empty disables SPA serving. */
   INLET_WEB_DIST: z.string().default(''),
 

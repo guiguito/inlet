@@ -1,0 +1,2 @@
+CREATE TYPE "public"."inlet_scan_status" AS ENUM('skipped', 'clean', 'error');--> statement-breakpoint
+ALTER TABLE "attachments" ADD COLUMN "scan_status" "inlet_scan_status" DEFAULT 'skipped' NOT NULL;
