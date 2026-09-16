@@ -206,7 +206,7 @@ image ships, so what is tested is what is deployed.
 | [DEPLOYMENT.md](docs/DEPLOYMENT.md) | Configuration, reverse proxies, managed PostgreSQL and S3, backups, upgrades. |
 | [API.md](docs/API.md) | The integration guide, with the retry contract in full. |
 | [MCP.md](docs/MCP.md) | Every MCP tool and what it may do. |
-| [PRD.md](docs/PRD.md) | The product requirements, cited by ID throughout the source. |
+| [PRD.md](docs/PRD.md) | The product requirements, split into [Foundations](docs/prd/foundations.md), [Feedback Collection](docs/prd/feedback-collection.md), [Crash Reports](docs/prd/crash-reports.md) and [UX Analytics](docs/prd/ux-analytics.md); cited by ID throughout the source. |
 | [DECISIONS.md](docs/DECISIONS.md) | Every technical choice, its reasoning, and the rejected alternatives. |
 
 ## Built with
