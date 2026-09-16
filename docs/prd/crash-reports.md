@@ -64,7 +64,7 @@ The first consumer, the HappyVibe desktop application, measured the gap directly
 
 ### 5.2 Triage a New Group
 1. Slack announces a new group: kind, error type, top frame or faulting module, release, and a link.
-2. The developer opens the group: count, first and last seen, releases and systems affected, users affected, a 30-day sparkline, and the latest reports.
+2. The developer opens the group: count, first and last seen, releases and systems affected, users affected, its timeline with release markers, and the latest reports.
 3. They read one report's frames and context, fix the bug, and mark the group **resolved in release 1.4.0**.
 4. Reports from releases up to 1.4.0 continue to count against the resolved group silently. A report from 1.4.1 reopens it as **regressed** and Slack says so once.
 
@@ -100,7 +100,7 @@ The first consumer, the HappyVibe desktop application, measured the gap directly
 - **CR-022:** A client-supplied `fingerprint` array shall replace the computed fingerprint. The literal element `{{ default }}` shall be substituted with the computed fingerprint so that clients can refine rather than replace grouping.
 - **CR-023:** Every crash database shall record a `groupingVersion`. A change to the grouping rule shall apply only to databases created after it, or to a database whose Admin opts in, so that existing groups never split on upgrade.
 - **CR-024:** A group shall be `(crash database, fingerprint)`. The server shall maintain on the group: report count, first seen, last seen, first release, last release, affected-user count, the set of releases seen with per-release counts, the set of operating systems seen with counts, and a reference to the latest report.
-- **CR-025:** The server shall maintain a daily rollup per group and per release so that sparklines and breakdowns are served without scanning reports, and survive report eviction.
+- **CR-025:** The server shall maintain a daily rollup per group and per release so that timelines, sparklines and breakdowns are served without scanning reports, and survive report eviction.
 - **CR-026:** A group shall have a state: `open`, `resolved` or `ignored`, and a `regressed` flag. A new group is `open`.
 - **CR-027:** A Creator or Admin shall be able to resolve a group, optionally naming the release it is resolved in; ignore a group; and reopen a group. State changes record who and when.
 - **CR-028:** A report arriving for a `resolved` group from a release whose order is greater than the resolving release's order shall set the group to `open` with `regressed` true and shall be reported as a regression exactly once until the group is resolved again. A report from the resolving release or an earlier one shall count silently. A resolved group without a named release regresses on any new report.
@@ -109,13 +109,15 @@ The first consumer, the HappyVibe desktop application, measured the gap directly
 
 ### 6.4 Reading
 - **CR-040:** A Viewer or above shall be able to list groups in a crash database, filtered by state, kind, release, operating system, architecture, environment, user ID, time range and a text query over exception type and message, and sorted by last seen, first seen, count or affected users. The list shall report the total matching the filters.
-- **CR-041:** A Viewer or above shall be able to open a group and see its aggregates, its release and system breakdowns, a 30-day sparkline, and its most recent reports, with the same filters as the list.
+- **CR-041:** A Viewer or above shall be able to open a group and see its aggregates, its release and system breakdowns, its timeline (CR-049), and its most recent reports, with the same filters as the list.
 - **CR-042:** A Viewer or above shall be able to open a report and see its envelope rendered readably: frames as a stack, context as structured data, and the raw JSON on request.
 - **CR-043:** The interface shall present a crash database in at most four groups of work and settings, following FR-186: Groups, Releases, Collect, and Settings.
 - **CR-044:** The Groups tab shall support selecting several groups and resolving or ignoring them together.
 - **CR-045:** The Releases tab shall list releases in order with first seen, report count, group count and new-group count.
 - **CR-046:** A Viewer or above shall be able to read statistics for a crash database: reports and new groups per day for a time range, and per release or per operating system.
 - **CR-047:** An Admin shall be able to delete a group, which deletes its reports, rollups and user associations. Individual reports are not deletable; they expire under retention.
+- **CR-048:** The Groups tab shall open with a timeline chart of the crash database: reports per day and new groups per day as two series over a selectable range of 7, 30 or 90 days, with a vertical marker on the day each release was first seen. The chart shall honour the list's filters, so narrowing to a release, system, environment, kind or state reshapes it. It is served from the daily rollup and never scans reports.
+- **CR-049:** The group detail shall show the same timeline for that group alone, with the same range control and release markers, in place of a fixed sparkline. Rows in the Groups list keep a small sparkline of the last 30 days.
 
 ### 6.5 Notifications
 - **CR-050:** A crash database's notification settings shall announce a new group and a regression, and nothing else. There is no content level.
@@ -164,14 +166,14 @@ Endpoint paths are proposals; the flows are requirements.
 
 ### 7.2 Reading
 - `GET /v1/crash-databases/{id}/groups?state&kind&release&os&arch&environment&userId&since&until&q&sort&cursor&limit`
-- `GET /v1/crash-databases/{id}/groups/{groupId}` including breakdowns and the 30-day sparkline
+- `GET /v1/crash-databases/{id}/groups/{groupId}` including breakdowns and its daily timeline for the requested range
 - `GET /v1/crash-databases/{id}/groups/{groupId}/reports?...` with the list filters
 - `GET /v1/crash-databases/{id}/reports/{reportId}`
 - `POST /v1/crash-databases/{id}/groups/{groupId}/state` with `{state: "resolved", resolvedInRelease?}` or `{state: "ignored"}` or `{state: "open"}`
 - `POST /v1/crash-databases/{id}/groups/state` for a bulk change with a list of group IDs
 - `DELETE /v1/crash-databases/{id}/groups/{groupId}`
 - `GET /v1/crash-databases/{id}/releases`
-- `GET /v1/crash-databases/{id}/stats?by=day|release|os&since&until`
+- `GET /v1/crash-databases/{id}/stats?by=day|release|os&since&until`, accepting the list filters; this serves the Groups tab timeline (CR-048)
 - `GET /v1/crash-databases/{id}/groups/export?format=json|csv` and `GET /v1/crash-databases/{id}/reports/export?format=ndjson`
 - `GET|PATCH /v1/crash-databases/{id}/retention`
 - Database management, memberships, invitations and notification settings follow the shared routes with `crash-databases` in place of `feedback-databases`.
@@ -190,8 +192,8 @@ Endpoint paths are proposals; the flows are requirements.
 
 ## 8. Interfaces
 ### 8.1 Management Interface
-- **Groups tab.** The work. A list where each row is a group: exception type and top frame or module as the title, kind and release badges, state, count, affected users, first and last seen, a small sparkline. Filter chips for state and kind; selects for release, operating system, environment; a text query; sort control. Multi-select with resolve and ignore. Empty state explains the SDK in one sentence and links to Collect.
-- **Group detail.** Header with title, state control (resolve in release, ignore, reopen), delete for Admins. Aggregates row. A 30-day sparkline. Two breakdown tables: by release and by operating system. Recent reports list; opening one shows frames as a stack, tags and context as key-value pairs, and a raw JSON toggle. The message is shown with a note when the SDK redacted it.
+- **Groups tab.** The work. A timeline chart across the top (CR-048): reports per day and new groups per day, 7, 30 or 90 days, release markers, reshaped by the active filters. Below it, a list where each row is a group: exception type and top frame or module as the title, kind and release badges, state, count, affected users, first and last seen, a small sparkline. Filter chips for state and kind; selects for release, operating system, environment; a text query; sort control. Multi-select with resolve and ignore. Empty state explains the SDK in one sentence and links to Collect.
+- **Group detail.** Header with title, state control (resolve in release, ignore, reopen), delete for Admins. Aggregates row. The group's timeline with range control and release markers (CR-049). Two breakdown tables: by release and by operating system. Recent reports list; opening one shows frames as a stack, tags and context as key-value pairs, and a raw JSON toggle. The message is shown with a note when the SDK redacted it.
 - **Releases tab.** Releases in order with first seen, reports, groups, new groups, and a link that filters the Groups tab to that release.
 - **Collect tab.** Database ID, the project's publishable keys, and an install snippet per adapter (Node, browser, Electron main and renderer) with the base URL and key filled in. A "send a test report" button that posts one envelope of kind `message` and shows the result.
 - **Settings tab.** Panels: General (rename, delete with impact), Retention (cap and age with the platform bounds shown), Notifications (shared panel; the content-level control is hidden for crash databases), Access (shared panel).
@@ -268,7 +270,7 @@ Indexes: unique `(database_id, fingerprint)` on groups; `(database_id, state, la
 - **Security:** ingest validates the envelope against a schema shared between the API and the SDK (`@inlet/shared`), so the two cannot drift. The envelope is never rendered as HTML; frames and context are displayed as text.
 - **Reliability:** ingest is idempotent by event ID; notification enqueue is in the ingest transaction; eviction is inline and bounded per request so a spike cannot stall ingest.
 - **Performance:** ingest p95 under 50 ms server-side; groups list under 200 ms for a database at its cap; 100 reports per second sustained.
-- **Accessibility:** as Foundations 12.5; sparklines carry a text alternative with the numbers.
+- **Accessibility:** as Foundations 12.5; timelines and sparklines carry a text alternative with the numbers.
 
 ## 12. Acceptance Criteria
 - A crash database is created in a project holding a feedback database; the project's existing publishable key ingests a report into it without any new credential.
@@ -284,7 +286,9 @@ Indexes: unique `(database_id, fingerprint)` on groups; `(database_id, state, la
 - An ignored group receiving a thousand reports produces no message.
 - Filtering groups by release, operating system, environment, state, kind, user ID and text query each narrow the list and report the matching total.
 - Ten reports carrying six distinct user IDs show an affected-user count of six; ten reports with no user ID show zero.
-- The group detail shows a sparkline whose daily totals equal the reports received per day, and a release breakdown whose counts sum to the group count.
+- The group detail shows a timeline whose daily totals equal the reports received per day, and a release breakdown whose counts sum to the group count.
+- The Groups tab timeline shows, for each day in the selected range, the number of reports and of new groups received that day, matching the list's totals for that day; filtering to one release reshapes it, and each release first seen in the range is marked on the day it appeared.
+- Switching the timeline range between 7, 30 and 90 days changes the span without changing any daily value.
 - A database with a cap of 1,000 receives 1,500 reports; 1,000 remain, every group keeps at least one report, and every group's count and timeline are unchanged.
 - A report older than the maximum age is evicted by the daily pass without any new ingest.
 - Deleting a group removes its reports and rollups; deleting the crash database removes everything and reports the impact as groups and reports.
@@ -342,7 +346,7 @@ Indexes: unique `(database_id, fingerprint)` on groups; `(database_id, state, la
 ## 15. Release Plan
 **Release 6 — Crash Reports.** Goal: HappyVibe reports every failure class to its own Inlet, the developer triages from Slack, the interface or an agent, and a second application can integrate with the SDK in an afternoon.
 - Foundations changes: FD-001 to FD-009 (typed databases, third scope, delivery kind, retention setting), FD-010 to FD-014 (SDK packaging), FD-020 to FD-031 (MCP and rate-limit conventions made explicit).
-- Crash: CR-001 to CR-004, CR-010 to CR-017, CR-020 to CR-030, CR-040 to CR-047, CR-050 to CR-053, CR-060 and CR-061, CR-070 and CR-071, CR-080 to CR-082, CR-090 to CR-103.
+- Crash: CR-001 to CR-004, CR-010 to CR-017, CR-020 to CR-030, CR-040 to CR-049, CR-050 to CR-053, CR-060 and CR-061, CR-070 and CR-071, CR-080 to CR-082, CR-090 to CR-103.
 - SDK: `@inlet/sdk/crash` with node, browser and electron adapters; the feedback module of `@inlet/sdk` may ship as a thin wrapper over the existing client API in the same release if cheap, otherwise Release 7.
 - HappyVibe integration: Appendix B.
 
