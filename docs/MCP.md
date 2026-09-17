@@ -153,6 +153,7 @@ reports from an application, groups them by fingerprint into **groups**, and tra
 | `get_crash_group` | One group: state, breakdowns by release and OS, and its daily timeline with release markers. |
 | `list_crash_reports`, `get_crash_report` | The retained reports of a group, newest first, and one report with its envelope. `context` is whatever the integrator sent. |
 | `list_crash_releases` | Releases in first-seen order with reports, groups and new groups. |
+| `list_crash_filters` | The kinds, operating systems and environments this database has seen, so a filter you pass can actually match. Cheap; use `get_crash_stats` with `by` when you want them counted. |
 | `get_crash_stats` | Reports and new groups per day over 7, 30 or 90 days, honouring the list filters; `by=release`, `os`, `environment` or `kind` adds the range broken down by that dimension. |
 | `export_crash_groups`, `export_crash_reports` | Groups as JSON or CSV; reports as newline-delimited JSON. Both follow the filters. |
 | `get_crash_retention` | The report cap and maximum age, with the platform bounds. |

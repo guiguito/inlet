@@ -1786,3 +1786,60 @@ block the first for ever.
 The test that pins it (`e2e/api/sdk-browser.spec.ts`) fails a single `indexedDB.open` — the one
 the client constructor's queue read consumes — and asserts the report still reaches IndexedDB.
 It was run against the old implementation and confirmed red before being kept.
+
+### 24.14 What measuring the database at its cap found
+
+Section 9.3 of the PRD set targets and section 11 repeated them, but nothing had been
+measured against a database at the platform's ceiling. Seeding one — 100,000 reports, 5,000
+groups, 150,000 rollup rows — and reading the plan for every query the interface issues found
+one defect and three missing indexes.
+
+**Three indexes were missing, and each covered a sequential scan of the groups table.** Sorting
+by first seen, sorting by affected users, filtering by user ID, and the "new groups per day"
+series of the CR-048 timeline all scanned every group in the database. At 5,000 groups that is
+0.6 to 3.2 ms, which is why review missed it: the numbers look fine and grow linearly. Measured
+after adding `(crash_database_id, first_seen_at)`, `(crash_database_id, affected_users)` and
+`crash_group_users (user_id)`: 0.1, 0.3, 0.0 and 2.1 ms, all index scans. Migration 0006.
+
+**The Groups tab was spending about 900 ms in the database before it could paint.** Its three
+filter selects each called `stats?by=`, which computes `count(distinct crash_group_id)` over the
+rollup: 303 ms each, against 23 ms for the same query without that one aggregate. The count is
+the expensive half and a dropdown never shows it. `GET /crash-databases/{id}/filters` now returns
+distinct values only, two queries, about 12 ms in total — the same page load is roughly
+seventy-five times cheaper. `stats?by=` keeps its counts, because CR-046 asks for them and an
+explicit analytics call can afford them; nothing in the interface calls it any more.
+
+*Rejected:* dropping `count(distinct)` from `stats?by=` itself, which would have made the cheap
+path the only path and taken a number CR-046 requires with it.
+
+**Two costs are inherent and were left alone.** The CR-048 timeline is about 20 ms, because it
+aggregates the rollup over a range and no index removes an aggregate. The release filter is
+about 14 ms, thirty times the other filters, because the `EXISTS` scans the rollup and hashes
+it; rewriting it as `IN` measured worse, at 25 ms.
+
+**One number in the PRD is not validated by this.** Section 9.3 budgets 12 KB per report, which
+would be about 1.2 GB at the cap. The synthetic envelopes here are roughly 300 bytes, giving
+68 MB. Use the PRD's figure for capacity planning: a real envelope with thirty frames and a
+context object is far closer to it.
+
+### 24.15 The crash queue could corrupt itself
+
+`FileStore.set` wrote the queue twice — once to a `.tmp` path, then over the real file — under a
+comment claiming it renamed. It never renamed, and `writeFile` truncates on open, so two
+concurrent writes of different lengths interleaved: both truncated, the longer one wrote its
+bytes, the shorter one overwrote only the first few, and the file was left as the short value
+followed by the tail of the long one. That is not valid JSON, and `Transport.load` treats an
+unparseable queue as an empty one, so the result was a queue of crash reports discarded in
+silence — the exact failure CR-097 exists to prevent.
+
+It was reachable in ordinary use, not only in theory: the queue is written from `enqueue` and
+again after every answered batch, so any application capturing more than one report at a time
+could hit it. The Electron suite hit it, in a full run rather than in isolation, which is the
+kind of failure it is tempting to rerun until it goes away.
+
+Writes are now serialized per store and land by `rename`, which is atomic: a reader, or a
+process that dies mid-write, sees the whole previous file rather than a half-written one. The
+regression test writes twenty alternating long and short values concurrently, ten times over,
+and was confirmed to fail against the old implementation with exactly the corruption seen in
+the wild. One pair of concurrent writes was not enough to reproduce it reliably on a fast disk,
+which is worth remembering: the first version of that test passed against the bug.

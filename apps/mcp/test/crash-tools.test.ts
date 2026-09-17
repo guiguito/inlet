@@ -34,7 +34,7 @@ describe('crash tools', () => {
     const handlers = register([]);
     for (const name of [
       'list_crash_databases', 'get_crash_database', 'list_crash_groups', 'get_crash_group', 'list_crash_reports', 'get_crash_report',
-      'list_crash_releases', 'get_crash_stats', 'export_crash_groups', 'export_crash_reports', 'get_crash_retention',
+      'list_crash_releases', 'list_crash_filters', 'get_crash_stats', 'export_crash_groups', 'export_crash_reports', 'get_crash_retention',
       'create_crash_database', 'rename_crash_database', 'update_crash_group_state', 'update_crash_retention', 'send_crash_test_report',
       'delete_crash_database', 'delete_crash_group',
     ]) expect(handlers.has(name), name).toBe(true);

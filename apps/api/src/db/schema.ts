@@ -693,6 +693,11 @@ export const crashGroups = pgTable(
     index('crash_groups_state_last_seen_idx').on(table.crashDatabaseId, table.state, table.lastSeenAt),
     index('crash_groups_last_seen_idx').on(table.crashDatabaseId, table.lastSeenAt),
     index('crash_groups_count_idx').on(table.crashDatabaseId, table.count),
+    // One index per sort the list offers, because a sort without one is a scan of every
+    // group in the database. It also serves the "new groups per day" series of the CR-048
+    // timeline, which reads first_seen_at over a range on every Groups tab load.
+    index('crash_groups_first_seen_idx').on(table.crashDatabaseId, table.firstSeenAt),
+    index('crash_groups_affected_users_idx').on(table.crashDatabaseId, table.affectedUsers),
   ],
 );
 
@@ -705,7 +710,12 @@ export const crashGroupUsers = pgTable(
       .references(() => crashGroups.id, { onDelete: 'cascade' }),
     userId: text('user_id').notNull(),
   },
-  (table) => [primaryKey({ columns: [table.crashGroupId, table.userId] })],
+  (table) => [
+    primaryKey({ columns: [table.crashGroupId, table.userId] }),
+    // The primary key answers "which users did this group hit". CR-040's filter asks the
+    // opposite, "which groups hit this user", and without this index that reads every group.
+    index('crash_group_users_user_idx').on(table.userId),
+  ],
 );
 
 /**

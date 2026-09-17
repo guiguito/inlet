@@ -77,6 +77,18 @@ const breakdownSchema = z.object({
 
 const statsSchema = timelineSchema.extend({ breakdown: breakdownSchema.optional() });
 
+/**
+ * The values the Groups tab's selects offer (section 8.1). Deliberately not the `stats`
+ * breakdown: that carries a group count per value, and `count(distinct crash_group_id)` over
+ * the rollup measured 296 ms at the platform's report cap against 23 ms without it — thirteen
+ * times the cost of a number a dropdown never shows, paid three times on every page load.
+ */
+const crashFiltersSchema = z.object({
+  kinds: z.array(z.string()),
+  operatingSystems: z.array(z.string()),
+  environments: z.array(z.string()),
+});
+
 const groupDetailSchema = groupSchema.omit({ sparkline: true }).extend({
   byRelease: z.array(z.object({ version: z.string(), count: z.int() })),
   byOs: z.array(z.object({ os: z.string(), count: z.int() })),
@@ -457,6 +469,40 @@ export function crashReadRoutes(ctx: AppContext): FastifyPluginAsyncZod {
             groups: Number(r.groups),
             newGroups: Number(r.new_groups),
           })),
+        };
+      },
+    );
+
+    app.get(
+      '/crash-databases/:databaseId/filters',
+      {
+        schema: {
+          tags: ['Crash groups'],
+          summary: 'The kinds, systems and environments this database has actually seen',
+          description:
+            'What the Groups tab offers in its selects, so a filter never lists a value that would return nothing. Distinct values only; `stats?by=` is the one that counts them.',
+          params: databaseIdParam,
+          response: { 200: crashFiltersSchema, ...errorsFor(401, 403, 404) },
+        },
+      },
+      async (request) => {
+        const principal = await requireManagementPrincipal(ctx, request);
+        const { database } = await requireCrashDatabase(ctx.db, principal, request.params.databaseId, 'viewer');
+        const [kinds, seen] = await Promise.all([
+          ctx.db.execute(sql`select distinct kind from crash_groups where crash_database_id = ${database.id} order by 1`),
+          ctx.db.execute(sql`
+            select distinct os_name, environment from crash_group_daily where crash_database_id = ${database.id}`),
+        ]);
+        const operatingSystems = new Set<string>();
+        const environments = new Set<string>();
+        for (const row of seen.rows as Row[]) {
+          if (row.os_name) operatingSystems.add(String(row.os_name));
+          if (row.environment) environments.add(String(row.environment));
+        }
+        return {
+          kinds: (kinds.rows as Row[]).map((row) => String(row.kind)),
+          operatingSystems: [...operatingSystems].sort(),
+          environments: [...environments].sort(),
         };
       },
     );

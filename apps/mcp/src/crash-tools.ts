@@ -175,6 +175,18 @@ export function registerCrashTools(server: McpServer, client: InletClient): void
   );
 
   server.registerTool(
+    'list_crash_filters',
+    {
+      title: 'The kinds, systems and environments this database has seen',
+      description:
+        'Distinct values only, so a filter you pass to list_crash_groups is one that can actually match. Cheap: use this to discover values, and get_crash_stats with `by` when you want them counted.',
+      inputSchema: { crashDatabaseId },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ crashDatabaseId: id }) => guard(async () => json(await client.request('GET', `/v1/crash-databases/${id}/filters`))),
+  );
+
+  server.registerTool(
     'get_crash_stats',
     {
       title: 'Reports and new groups per day, or per release, OS or environment',

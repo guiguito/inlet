@@ -168,6 +168,7 @@ test.describe('the MCP server', () => {
           'get_crash_stats',
           'list_crash_databases',
           'list_crash_groups',
+          'list_crash_filters',
           'list_crash_releases',
           'list_crash_reports',
           'rename_crash_database',

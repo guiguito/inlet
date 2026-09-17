@@ -978,6 +978,7 @@ GET  /v1/crash-databases/{id}/groups/{groupId}?days=30
 GET  /v1/crash-databases/{id}/groups/{groupId}/reports?release&os&environment&userId&limit
 GET  /v1/crash-databases/{id}/reports/{reportId}
 GET  /v1/crash-databases/{id}/releases
+GET  /v1/crash-databases/{id}/filters
 GET  /v1/crash-databases/{id}/stats?days=30&by=day|release|os|environment|kind (plus the list filters)
 ```
 
@@ -989,6 +990,11 @@ same timeline for the whole database, reshaped by the filters, served from a dai
 and never by scanning reports; with `by=release`, `os`, `environment` or `kind` they also carry
 `breakdown: {by, rows: [{key, reports, groups}]}` for the range. A group detail accepts
 the release, OS and environment filters too, and reshapes its breakdowns and timeline.
+
+`/filters` returns `{kinds, operatingSystems, environments}`: the distinct values this
+database has actually seen, for populating a filter control without offering a value that
+would match nothing. It is the cheap counterpart to `stats?by=`, which also counts the
+groups behind each value and costs an order of magnitude more to compute.
 
 ### State
 
@@ -1143,7 +1149,7 @@ carry their own limits, applied per requesting address and per slug. A throttled
 | Send a Slack test message | No | Yes | Creator or Admin |
 | Open the hosted form and respond | Not applicable | Not applicable | Anyone holding the link |
 | Report a crash, one or a batch | Yes | Yes | Not applicable |
-| List and read crash groups, reports, releases, stats | No | Yes | Viewer or above |
+| List and read crash groups, reports, releases, filters, stats | No | Yes | Viewer or above |
 | Resolve, ignore, reopen crash groups | No | Yes | Creator or Admin |
 | Delete a crash group | No | Yes | Admin |
 | Export crash groups or reports | No | Yes | Viewer or above |

@@ -62,6 +62,30 @@ describe('crash groups, reports, releases and stats', () => {
     expect((await get('/groups?state=resolved')).json().total).toBe(0);
   });
 
+  it('offers exactly the filter values the database has seen (section 8.1)', async () => {
+    await seed();
+    const filters = await get('/filters');
+    expect(filters.statusCode).toBe(200);
+    expect(filters.json()).toEqual({
+      kinds: ['exception'],
+      operatingSystems: ['Windows', 'macOS'],
+      environments: ['development', 'production'],
+    });
+
+    // A value that has never been seen is not offered, which is the point: a select that
+    // lists it would hand the reader a filter guaranteed to return nothing.
+    expect(filters.json().operatingSystems).not.toContain('Linux');
+
+    // An empty database offers nothing rather than failing.
+    const projectId = (await asAdmin(h, 'GET', `/v1/crash-databases/${databaseId}`)).json().projectId;
+    const empty = (await asAdmin(h, 'POST', `/v1/projects/${projectId}/crash-databases`, { name: 'Empty' })).json().id;
+    expect((await asAdmin(h, 'GET', `/v1/crash-databases/${empty}/filters`)).json()).toEqual({
+      kinds: [],
+      operatingSystems: [],
+      environments: [],
+    });
+  });
+
   it('reads a group with breakdowns and a timeline whose totals match', async () => {
     await seed();
     const id = (await get('/groups?sort=count')).json().groups[0].id;

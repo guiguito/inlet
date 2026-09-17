@@ -323,6 +323,25 @@ describe('persistence across restarts (CR-097)', () => {
     expect(JSON.parse(readFileSync(join(dir, 'queue.json'), 'utf8'))).toHaveLength(1);
   });
 
+  it('keeps the queue file parseable when writes overlap', async () => {
+    // The Electron suite caught this for real: writeFile truncates on open, so two
+    // concurrent writes of different lengths left the short value followed by the tail of
+    // the long one. The file then failed to parse, and a queue that fails to parse is a
+    // queue of crash reports thrown away in silence. Many alternating long and short writes,
+    // because one pair races too rarely on a fast disk to be a dependable guard.
+    const dir = mkdtempSync(join(tmpdir(), 'inlet-sdk-'));
+    dirs.push(dir);
+    const store = new FileStore(dir);
+    const long = JSON.stringify(Array.from({ length: 400 }, (_, i) => ({ envelope: { eventId: `e${i}`, padding: 'x'.repeat(400) } })));
+
+    for (let round = 0; round < 10; round += 1) {
+      await Promise.all(Array.from({ length: 20 }, (_, i) => store.set('queue', i % 2 === 0 ? long : '[]')));
+      const onDisk = readFileSync(join(dir, 'queue.json'), 'utf8');
+      expect(() => JSON.parse(onDisk), `round ${round}`).not.toThrow();
+      expect([long, '[]'], `round ${round}`).toContain(onDisk);
+    }
+  });
+
   it('drops the oldest past the queue ceiling', async () => {
     const store = new MemoryStore();
     const { c, debug } = client({ store, queueSize: 3, dedupe: false, fetch: async () => { throw new Error('offline'); } });

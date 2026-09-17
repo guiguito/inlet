@@ -235,12 +235,13 @@ function GroupsTab({ databaseId }: { databaseId: string }) {
     queryFn: () => api.getCrashStats(databaseId, { ...filters, days: range }),
   });
   const releases = useQuery({ queryKey: ['crash-releases', databaseId], queryFn: () => api.listCrashReleases(databaseId) });
-  // Section 8.1: selects for OS and environment, fed by what the database has actually seen.
-  const osSeen = useQuery({ queryKey: ['crash-stats', databaseId, 'os'], queryFn: () => api.getCrashStats(databaseId, { days: 90, by: 'os' }) });
-  const environmentsSeen = useQuery({ queryKey: ['crash-stats', databaseId, 'environment'], queryFn: () => api.getCrashStats(databaseId, { days: 90, by: 'environment' }) });
-  const kindsSeen = useQuery({ queryKey: ['crash-stats', databaseId, 'kind'], queryFn: () => api.getCrashStats(databaseId, { days: 90, by: 'kind' }) });
-  const withCurrent = (rows: { key: string }[] | undefined, current: string | undefined) => {
-    const keys = (rows ?? []).map((row) => row.key).filter(Boolean);
+  // Section 8.1: the selects offer what the database has actually seen. One cheap query for
+  // all three, rather than three `stats` breakdowns whose group counts nothing here displays.
+  const seen = useQuery({ queryKey: ['crash-filters', databaseId], queryFn: () => api.getCrashFilters(databaseId) });
+  // A filter already in the address stays offered even if nothing matches it any more, so a
+  // shared link never renders a select with no selection.
+  const withCurrent = (values: string[] | undefined, current: string | undefined) => {
+    const keys = values ?? [];
     return current && !keys.includes(current) ? [current, ...keys] : keys;
   };
 
@@ -302,7 +303,7 @@ function GroupsTab({ databaseId }: { databaseId: string }) {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ANY}>Any system</SelectItem>
-            {withCurrent(osSeen.data?.breakdown?.rows, filters.os).map((os) => (
+            {withCurrent(seen.data?.operatingSystems, filters.os).map((os) => (
               <SelectItem key={os} value={os}>
                 {os}
               </SelectItem>
@@ -315,7 +316,7 @@ function GroupsTab({ databaseId }: { databaseId: string }) {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ANY}>Any environment</SelectItem>
-            {withCurrent(environmentsSeen.data?.breakdown?.rows, filters.environment).map((environment) => (
+            {withCurrent(seen.data?.environments, filters.environment).map((environment) => (
               <SelectItem key={environment} value={environment}>
                 {environment}
               </SelectItem>
@@ -323,12 +324,12 @@ function GroupsTab({ databaseId }: { databaseId: string }) {
           </SelectContent>
         </Select>
         {/* Section 8.1: chips for the kinds this database has seen. */}
-        {withCurrent(kindsSeen.data?.breakdown?.rows, filters.kind).length > 0 ? (
+        {withCurrent(seen.data?.kinds, filters.kind).length > 0 ? (
           <div className="flex flex-wrap gap-1" role="group" aria-label="Kind">
             <Button size="sm" variant={filters.kind ? 'ghost' : 'secondary'} aria-pressed={!filters.kind} onClick={() => setFilter('kind', undefined)}>
               All kinds
             </Button>
-            {withCurrent(kindsSeen.data?.breakdown?.rows, filters.kind).map((kind) => (
+            {withCurrent(seen.data?.kinds, filters.kind).map((kind) => (
               <Button key={kind} size="sm" variant={filters.kind === kind ? 'secondary' : 'ghost'} aria-pressed={filters.kind === kind} onClick={() => setFilter('kind', kind)}>
                 {kind}
               </Button>

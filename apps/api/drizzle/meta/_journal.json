@@ -43,6 +43,13 @@
       "when": 1789659110672,
       "tag": "0005_crash_reports",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1789679499609,
+      "tag": "0006_crash_list_indexes",
+      "breakpoints": true
     }
   ]
 }

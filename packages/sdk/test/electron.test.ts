@@ -66,9 +66,19 @@ describe('Electron main (CR-100)', () => {
     listeners.get('child-process-gone')!({}, { type: 'Utility', reason: 'killed', exitCode: 9, name: 'pi-engine' });
     ipc.get(IPC_CHANNEL)!({}, { kind: 'render-error', exception: { type: 'TypeError', message: 'x is not a function', handled: true, frames: [{ function: 'Checkout', inApp: true }] } } satisfies CrashReportInput);
     ipc.get(IPC_CHANNEL)!({}, 'not an envelope');
-    // The handlers capture asynchronously (fingerprint, then the store); let them queue.
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    await client.flush(5_000);
+    // The handlers capture asynchronously — fingerprint, then the store — and return no
+    // promise to await, so the test waits on the outcome rather than on a duration. A fixed
+    // sleep here passed alone and failed in a loaded full run, which is the whole argument
+    // against one.
+    await expect
+      .poll(
+        async () => {
+          await client.flush(2_000);
+          return sent.length;
+        },
+        { timeout: 10_000 },
+      )
+      .toBe(3);
 
     expect(sent.map((e) => e.kind).sort()).toEqual(['child-exit', 'render-error', 'renderer-gone']);
     expect(sent.find((e) => e.kind === 'renderer-gone')!.exit).toEqual({ reason: 'crashed', code: 5 });

@@ -529,6 +529,11 @@ export const api = {
     request<CrashReport>(`/v1/crash-databases/${databaseId}/reports/${reportId}`),
   listCrashReleases: (databaseId: string) =>
     request<{ releases: CrashRelease[] }>(`/v1/crash-databases/${databaseId}/releases`),
+  /** Section 8.1: the values the Groups tab's selects offer, without the stats breakdown's cost. */
+  getCrashFilters: (databaseId: string) =>
+    request<{ kinds: string[]; operatingSystems: string[]; environments: string[] }>(
+      `/v1/crash-databases/${databaseId}/filters`,
+    ),
   getCrashStats: (databaseId: string, options: CrashGroupFilters & { days: number; by?: 'day' | 'release' | 'os' | 'environment' | 'kind' }) =>
     request<CrashTimeline>(`/v1/crash-databases/${databaseId}/stats${crashQuery(options)}`),
   crashGroupsExportUrl: (databaseId: string, format: 'json' | 'csv', filters: CrashGroupFilters) =>

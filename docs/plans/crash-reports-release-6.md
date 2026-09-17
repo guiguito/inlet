@@ -160,7 +160,7 @@ Legend: **API** `apps/api/src`, **Web** `apps/web/src`, **MCP** `apps/mcp/src`, 
 | CR-043 four tabs | Web `crash-database.tsx` `TABS` | `e2e/ui/crash` |
 | CR-044 multi-select resolve and ignore | Web Groups tab; API bulk route | `e2e/ui/crash` (bulk ignore); `api/crash-reads` |
 | CR-045 releases tab with counts | Web `ReleasesTab`; API releases | `e2e/ui/crash`; `api/crash-reads` |
-| CR-046 stats per day and per release or OS | API `stats?by=` | `api/crash-reads` (by os, release, environment) |
+| CR-046 stats per day and per release or OS | API `stats?by=`, and `/filters` for the distinct values a select needs | `api/crash-reads` (by os, release, environment, kind; and the filters endpoint) |
 | CR-047 admin deletes a group | `crash-reads.ts` | `api/crash-reads`; `api/crash-roles`; `e2e/api/crash-mcp` |
 | CR-048 database timeline, ranges, markers, follows filters, rollup only | Web `crash-timeline.tsx`; API stats | `e2e/ui/crash` (totals, filter reshapes); `api/crash-reads` (30 days, release filter) |
 | CR-049 group timeline; row sparklines | Web group page; list `sparkline` | `api/crash-reads`; `e2e/ui/crash` |
@@ -252,3 +252,21 @@ only one.
 loopback address space behind a permission prompt no test can answer; in a deployment both the
 integrator's site and Inlet are ordinary public origins, so the gate never applies. The flag
 buys back the ability to ask the production question against a server on 127.0.0.1.
+
+## Measured at the cap, after the fact
+
+Section 11's targets were measured once on the ingest path and not at all on the read path. A
+database seeded to the platform ceiling — 100,000 reports, 5,000 groups, 150,000 rollup rows —
+found three missing indexes and one page-load defect, both now fixed and recorded in
+`docs/DECISIONS.md` sections 24.14 and 24.15.
+
+| Query | Before | After |
+| --- | --- | --- |
+| Groups tab load, filter selects | ~900 ms (three `stats?by=` calls) | ~12 ms (one `/filters` call) |
+| Sort by first seen | 0.8 ms, sequential scan | 0.1 ms, index |
+| Sort by affected users | 0.6 ms, sequential scan | 0.3 ms, index |
+| Filter by user ID | 1.8 ms, sequential scan | 0.0 ms, index |
+| New groups per day | 3.2 ms, sequential scan | 2.1 ms, index |
+
+Left as they are, deliberately: the CR-048 timeline at about 20 ms and the release filter at
+about 14 ms, both inherent to aggregating the rollup rather than to a missing index.
