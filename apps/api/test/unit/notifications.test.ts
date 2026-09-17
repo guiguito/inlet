@@ -50,7 +50,7 @@ describe('the webhook URL', () => {
     }
   });
 
-  it('lets only the configured origins be posted to (FR-163)', () => {
+  it('lets only the configured origins be posted to (FR-157)', () => {
     const allowed = [DEFAULT_SLACK_WEBHOOK_ORIGIN];
     expect(isAllowedWebhookOrigin(REAL, allowed)).toBe(true);
 

@@ -86,7 +86,7 @@ export const slackWebhookUrlSchema = z
   }, 'expected a Slack webhook like https://hooks.slack.com/services/T0.../B0.../xxxx');
 
 /**
- * Whether a URL may be POSTed to (FR-163).
+ * Whether a URL may be POSTed to (FR-157).
  *
  * An exact-origin allowlist is the whole answer to server-side request forgery here,
  * rather than a mitigation of it. There is no private-address denylist to get wrong, no

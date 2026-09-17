@@ -261,7 +261,7 @@ async function registerHostedPage(
           .code(404)
           .header('content-security-policy', "frame-ancestors 'self'")
           .header('x-frame-options', 'SAMEORIGIN')
-          .send(shell.replace('<title>Inlet</title>', '<title>Form not found</title>'));
+          .send(unbranded(shell).replace('<title>Inlet</title>', '<title>Form not found</title>'));
       }
 
       for (const [name, value] of Object.entries(frameHeaders(resolved.hosted))) {
@@ -274,20 +274,55 @@ async function registerHostedPage(
 }
 
 /**
+ * Inlet's own mark and descriptor, removed from a hosted page (FR-144).
+ *
+ * The shell is the management interface's `index.html`, which carries a favicon
+ * pointing at the Inlet mark and a meta description naming the product. Both reach a
+ * respondent — the mark in the browser tab, the descriptor in every chat preview of a
+ * shared link — so neither may survive into a page the operator shares as theirs.
+ *
+ * Matched by pattern rather than by literal because the bundler is free to rewrite an
+ * asset href, and a hosted page that silently regained our favicon would look like a
+ * build artefact rather than the requirement breach it is.
+ */
+function unbranded(shell: string): string {
+  return shell
+    .replace(/\s*<link\b[^>]*\brel="icon"[^>]*>/gi, '')
+    .replace(/\s*<meta\b[^>]*\bname="description"[^>]*>/gi, '');
+}
+
+/**
+ * The tab icon for a hosted page: the operator's logo, or nothing (FR-144).
+ *
+ * There is deliberately no fallback mark. Anything we ship in that slot is our brand
+ * sitting on their form, which is the thing FR-144 forbids; an empty slot leaves the
+ * browser's own blank-page glyph, which belongs to nobody.
+ */
+function hostedIcon(resolved: ResolvedHostedForm): string {
+  if (!resolved.hosted.logoStorageKey) return '';
+  const slug = encodeURIComponent(resolved.hosted.slug);
+  return `<link rel="icon" href="/v1/hosted/${slug}/logo" type="image/webp">`;
+}
+
+/**
  * The hosted page's initial HTML.
  *
- * Three substitutions on the built shell. The title is the feedback database's name,
+ * Four substitutions on the built shell. The title is the feedback database's name,
  * because a shared link shows up in a tab and in a chat preview and should say what it
  * is. The root class swaps the management interface's stored theme for the hosted one,
  * so the page never paints in a theme the respondent's browser happens to remember.
  * The style block carries the branding, so the operator's colours are on the first
- * paint rather than one round trip later (FR-138, FR-144).
+ * paint rather than one round trip later (FR-138). And Inlet's own mark and descriptor
+ * come out, replaced by the operator's logo where they have one (FR-144).
  */
 function hostedShell(shell: string, resolved: ResolvedHostedForm): string {
-  return shell
+  return unbranded(shell)
     .replace('<title>Inlet</title>', `<title>${escapeHtml(resolved.database.name)}</title>`)
     .replace('<html lang="en" class="dark">', '<html lang="en" class="inlet-hosted">')
-    .replace('</head>', `<style>${hostedFormStyle(resolved.hosted)}</style></head>`);
+    .replace(
+      '</head>',
+      `${hostedIcon(resolved)}<style>${hostedFormStyle(resolved.hosted)}</style></head>`,
+    );
 }
 
 /** For the one place a stored name reaches HTML: the hosted page's title. */

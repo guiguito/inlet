@@ -18,7 +18,7 @@ Your database, your object store, your rules.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-C2410C.svg)](LICENSE)
 ![Node 22+](https://img.shields.io/badge/node-%3E%3D22-informational)
-![Tests](https://img.shields.io/badge/tests-441%20unit%20%2B%20integration%2C%2058%20end--to--end-brightgreen)
+![Tests](https://img.shields.io/badge/tests-451%20unit%20%2B%20integration%2C%2058%20end--to--end-brightgreen)
 
 </div>
 

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { LIMITS } from '@inlet/shared';
 import type { AppContext } from '../context.js';
@@ -77,6 +78,46 @@ export function hostedRoutes(ctx: AppContext): FastifyPluginAsyncZod {
       return resolved;
     };
 
+    /**
+     * FR-149: the slug is a limit dimension of its own.
+     *
+     * The global limiter keys on the requesting address, which bounds one caller but
+     * says nothing about one form. A hosted form is a public link, so the shape abuse
+     * actually takes is many addresses against one slug — which an address-keyed limit
+     * does not see at all. This second limiter keys on the slug alone and a request
+     * has to clear both.
+     *
+     * It guards intent creation and finalization, not uploads: an upload needs an
+     * intent, and an intent accepts at most `intentMaxUploads` of them, so bounding
+     * intents per slug already bounds every upload per slug. Counting uploads here
+     * too would only punish a form whose respondents attach a lot of screenshots.
+     *
+     * ponytail: in-memory, per instance, like every other limit here (FD-031).
+     */
+    const perSlug = ctx.env.INLET_DISABLE_RATE_LIMITS
+      ? null
+      : app.createRateLimit({
+          max: 600,
+          timeWindow: '1 hour',
+          keyGenerator: (request: FastifyRequest) =>
+            `slug:${(request.params as { slug?: string }).slug ?? ''}`,
+        });
+
+    const limitPerSlug = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+      if (!perSlug) return;
+      const verdict = await perSlug(request);
+      // `isAllowed` is only ever true for an allow-listed key; an ordinary request
+      // under the limit comes back with `isAllowed: false` and `isExceeded: false`.
+      // Reading the wrong one of those two refuses every request, so both are checked.
+      if (verdict.isAllowed || !verdict.isExceeded) return;
+      // FD-030: a 429 says how long to wait, whichever limiter refused it.
+      reply.header('retry-after', String(verdict.ttlInSeconds));
+      throw apiError(
+        'rate_limit_exceeded',
+        'This form is receiving too many responses right now. Try again shortly.',
+      );
+    };
+
     /** A disabled or unpublished form must not hand out its questions. */
     const requireOpen = (resolved: ResolvedHostedForm): void => {
       if (!resolved.hosted.enabled) {
@@ -142,8 +183,10 @@ export function hostedRoutes(ctx: AppContext): FastifyPluginAsyncZod {
       '/:slug/submission-intents',
       {
         // FR-149: the public operation anyone with the link can call, so it carries
-        // the tightest limit, keyed per address and per slug.
+        // the tightest limit. `config.rateLimit` is the per-address half; `onRequest`
+        // is the per-slug half.
         config: { rateLimit: { max: 60, timeWindow: '1 hour' } },
+        onRequest: limitPerSlug,
         schema: {
           tags: ['Hosted form'],
           summary: 'Open a submission intent on a hosted form',
@@ -271,6 +314,7 @@ export function hostedRoutes(ctx: AppContext): FastifyPluginAsyncZod {
       '/:slug/submission-intents/:intentId/submit',
       {
         config: { rateLimit: { max: 60, timeWindow: '1 hour' } },
+        onRequest: limitPerSlug,
         schema: {
           tags: ['Hosted form'],
           summary: 'Submit a hosted form',

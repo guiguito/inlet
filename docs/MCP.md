@@ -82,7 +82,7 @@ and none to edit a submission, because submissions are immutable.
 | `list_submissions` | Responses, newest first, paginated. Narrow with `formVersion` or `withScreenshots`. |
 | `get_submission` | One response, with the definition of the version it was answered against. |
 | `export_submissions` | Everything as JSON or CSV. |
-| `get_screenshot` | The image itself, as WebP. |
+| `get_screenshot` | The image itself, as WebP. Pass a `width` between 16 and 512 for a thumbnail, resized on the way out from the one stored object; a width at or above the stored width returns the stored image rather than enlarging it. |
 | `get_deletion_impact` | What deleting a feedback database would destroy. |
 | `get_slack_notifications` | Whether a feedback database posts to Slack, and how the message is shaped. The webhook URL comes back masked, never in full. |
 | `get_hosted_form` | The public link for a feedback database, its branding and its embedding rules. Creates a disabled one on first read, so this is how you find out what the address would be. |

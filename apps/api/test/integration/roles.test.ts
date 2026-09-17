@@ -1,11 +1,20 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { feedbackDatabaseMemberships } from '../../src/db/schema.js';
-import { createHarness, ids, referenceDefinition, signIn, type Harness } from '../setup/harness.js';
+import {
+  createHarness,
+  ids,
+  referenceAnswers,
+  referenceDefinition,
+  signIn,
+  type Harness,
+} from '../setup/harness.js';
 import {
   asAdmin,
   createDatabase,
+  createIntent,
   createProject,
   errorCode,
+  finalize,
   setupPublishedForm,
 } from '../setup/api.js';
 
@@ -142,12 +151,61 @@ describe('roles and scopes', () => {
       ['POST', `/v1/projects/${ctx.projectId}/feedback-databases`, { name: 'New' }],
       ['POST', `/v1/projects/${ctx.projectId}/invitations`, { role: 'viewer' }],
       ['GET', `/v1/projects/${ctx.projectId}/credentials`],
+      // 22.7: hosted form settings are the form draft's permissions (FR-151), which
+      // a Viewer does not have. Reading them is refused too, because the settings
+      // carry the address the form collects at.
+      ['GET', `/v1/feedback-databases/${ctx.databaseId}/hosted-form`],
+      ['PATCH', `/v1/feedback-databases/${ctx.databaseId}/hosted-form`, { enabled: true }],
     ];
 
     for (const [method, url, payload] of forbidden) {
       const response = await call(method, url, payload);
       expect(response.statusCode, `${method} ${url}`).toBe(403);
     }
+  });
+
+  it('lets a Creator read and change hosted form settings, as it does the draft (22.7)', async () => {
+    const ctx = await setupPublishedForm(h, referenceDefinition(ids()));
+    const creator = await member('creator@example.com', 'creator', `/v1/projects/${ctx.projectId}`);
+    const call = as(creator.cookie);
+
+    const read = await call('GET', `/v1/feedback-databases/${ctx.databaseId}/hosted-form`);
+    expect(read.statusCode).toBe(200);
+
+    const changed = await call('PATCH', `/v1/feedback-databases/${ctx.databaseId}/hosted-form`, {
+      enabled: true,
+    });
+    expect(changed.statusCode).toBe(200);
+    expect(JSON.parse(changed.body)).toMatchObject({ enabled: true });
+  });
+
+  /**
+   * FR-064A: deleting a response is destructive and irreversible, so it is Admin-only
+   * even though a Creator may build the form the response was made against and a
+   * Viewer may read the response itself.
+   */
+  it('reserves deleting a response to an Admin (FR-064A)', async () => {
+    const f = ids();
+    const ctx = await setupPublishedForm(h, referenceDefinition(f));
+    const intent = await createIntent(h, ctx.publishableKey, ctx.databaseId);
+    const finalized = await finalize(h, ctx.publishableKey, ctx.databaseId, intent, {
+      formVersion: ctx.version,
+      answers: referenceAnswers(f),
+    });
+    if (finalized.statusCode !== 201) throw new Error(`submit failed: ${finalized.body}`);
+    const submissionId = JSON.parse(finalized.body).submissionId as string;
+    const url = `/v1/feedback-databases/${ctx.databaseId}/submissions/${submissionId}`;
+
+    for (const role of ['viewer', 'creator'] as const) {
+      const user = await member(`${role}@example.com`, role, `/v1/projects/${ctx.projectId}`);
+      // They can read it — this is about the destruction, not about the access.
+      expect((await as(user.cookie)('GET', url)).statusCode, role).toBe(200);
+      expect((await as(user.cookie)('DELETE', url)).statusCode, role).toBe(403);
+    }
+
+    // Still there, and an Admin can still remove it.
+    expect((await asAdmin(h, 'GET', url)).statusCode).toBe(200);
+    expect((await asAdmin(h, 'DELETE', url)).statusCode).toBe(200);
   });
 
   it('lets a database assignment override the project role for a Creator (FR-071)', async () => {

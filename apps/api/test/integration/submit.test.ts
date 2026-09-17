@@ -2,7 +2,13 @@ import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { LIMITS } from '@inlet/shared';
 import { submissionIntents, submissions } from '../../src/db/schema.js';
-import { createHarness, ids, referenceDefinition, type Harness } from '../setup/harness.js';
+import {
+  createHarness,
+  ids,
+  referenceAnswers,
+  referenceDefinition,
+  type Harness,
+} from '../setup/harness.js';
 import {
   createIntent,
   errorCode,
@@ -437,5 +443,65 @@ describe('finalizing a submission', () => {
       ).toBe(201);
     }
     expect(await h.ctx.db.select().from(submissions)).toHaveLength(3);
+  });
+});
+
+/**
+ * FR-062C: the observed IP is resolved *after* the deployment's trusted-proxy
+ * configuration, not before it.
+ *
+ * This is the one piece of respondent metadata the platform records without being
+ * asked, so which value lands in the column matters twice over: behind a reverse proxy
+ * the socket address is the proxy and useless, and on a directly exposed listener an
+ * `X-Forwarded-For` header is attacker-controlled and must be ignored. The parser has
+ * unit tests; this covers the wiring, which is what actually decides the stored value.
+ */
+describe('the observed IP and the trusted proxy (FR-062C)', () => {
+  const CLAIMED = '203.0.113.9';
+  const SOCKET = '192.0.2.44';
+
+  /** Submits one response with an `X-Forwarded-For` header and returns what was stored. */
+  async function storedIpFor(h: Harness): Promise<string | null> {
+    await h.reset();
+    const f = ids();
+    const ctx = await setupPublishedForm(h, referenceDefinition(f));
+    const intent = await createIntent(h, ctx.publishableKey, ctx.databaseId);
+
+    const response = await h.app.inject({
+      method: 'POST',
+      url: `/v1/feedback-databases/${ctx.databaseId}/submission-intents/${intent.intentId}/submit`,
+      headers: {
+        authorization: `Bearer ${ctx.publishableKey}`,
+        'x-inlet-intent-token': intent.token,
+        'x-forwarded-for': CLAIMED,
+      },
+      remoteAddress: SOCKET,
+      payload: { formVersion: ctx.version, answers: referenceAnswers(f) },
+    });
+    if (response.statusCode !== 201) throw new Error(`submit failed: ${response.body}`);
+
+    const [row] = await h.ctx.db
+      .select()
+      .from(submissions)
+      .where(eq(submissions.id, JSON.parse(response.body).submissionId as string));
+    return row?.observedIp ?? null;
+  }
+
+  it('ignores a forwarded address when no proxy is trusted', async () => {
+    const h = await createHarness({ INLET_TRUSTED_PROXIES: 'false' });
+    try {
+      expect(await storedIpFor(h)).toBe(SOCKET);
+    } finally {
+      await h.close();
+    }
+  });
+
+  it('honours a forwarded address from a proxy the deployment trusts', async () => {
+    const h = await createHarness({ INLET_TRUSTED_PROXIES: SOCKET });
+    try {
+      expect(await storedIpFor(h)).toBe(CLAIMED);
+    } finally {
+      await h.close();
+    }
   });
 });

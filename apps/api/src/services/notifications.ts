@@ -140,7 +140,7 @@ export async function updateSlackNotifications(
 }
 
 /**
- * FR-163: the origin check, applied when a URL is saved and again before every send.
+ * FR-157: the origin check, applied when a URL is saved and again before every send.
  *
  * Checking twice is not belt and braces for its own sake: the second check is what covers
  * a row written before this validator existed, or edited directly in the database.
@@ -312,11 +312,12 @@ export type BatchOptions = {
 /**
  * Delivers one batch. Returns how many messages Slack accepted.
  *
- * The claim is one atomic statement rather than the purge queue's plain select, because
- * deleting an object twice is a no-op and sending a Slack message twice is not. It also
- * increments `attempts` on claim rather than on failure, so a worker killed mid-send has
- * already spent an attempt and cannot spin, and the sixty-second lease means a dead
- * worker's row simply becomes due again with no sweeper to write.
+ * The claim is one atomic statement that leases the rows it takes, the same shape the
+ * purge queue uses (section 12.3). Here the lease protects the message itself, because
+ * sending a Slack message twice is not the no-op that deleting an object twice is. It
+ * also increments `attempts` on claim rather than on failure, so a worker killed
+ * mid-send has already spent an attempt and cannot spin, and the sixty-second lease
+ * means a dead worker's row simply becomes due again with no sweeper to write.
  */
 export async function runNotificationBatch(
   ctx: AppContext,

@@ -176,7 +176,7 @@ describe('slack notifications', () => {
     expect(errorDetails(response)[0]?.path).toBe('webhookUrl');
   });
 
-  it('refuses a URL outside the allowed origins (FR-163)', async () => {
+  it('refuses a URL outside the allowed origins (FR-157)', async () => {
     for (const bad of [
       'https://hooks.slack.com.evil.example/services/T1/B1/abc',
       'http://169.254.169.254/latest/meta-data/',
@@ -420,6 +420,63 @@ describe('slack notifications', () => {
     });
     await runNotificationBatch(h.ctx, { paceMs: 0 });
     expect(slack.received[0]?.raw).toContain('someone@example.com');
+  });
+
+  /**
+   * FR-171: the IP and the client context never leave for Slack, at any content level.
+   *
+   * Both are the respondent's, not the answer's: the IP is operational metadata the
+   * platform records without being asked, and `clientContext` is whatever the
+   * integrator attached, which the PRD is explicit may hold personal data. A channel
+   * is a wider audience than the responses view, so neither may travel there — and
+   * until now that was guaranteed only by the shape of a TypeScript type, which a
+   * future field would quietly undo.
+   */
+  it('never sends the observed IP or the client context, at any level (FR-171)', async () => {
+    const SOCKET = '198.51.100.23';
+    const SECRET_CONTEXT = 'ctx-must-not-travel';
+
+    for (const contentLevel of ['link_only', 'answers', 'answers_with_email'] as const) {
+      await h.reset();
+      f = ids();
+      ctx = await setupPublishedForm(h, referenceDefinition(f));
+      slack.received.length = 0;
+      await enable({ contentLevel });
+
+      const intent = await createIntent(h, ctx.publishableKey, ctx.databaseId);
+      const response = await h.app.inject({
+        method: 'POST',
+        url: `/v1/feedback-databases/${ctx.databaseId}/submission-intents/${intent.intentId}/submit`,
+        headers: {
+          authorization: `Bearer ${ctx.publishableKey}`,
+          'x-inlet-intent-token': intent.token,
+        },
+        remoteAddress: SOCKET,
+        payload: {
+          formVersion: ctx.version,
+          answers: referenceAnswers(f),
+          clientContext: { appVersion: SECRET_CONTEXT, userId: 'u-42' },
+        },
+      });
+      if (response.statusCode !== 201) throw new Error(`submit failed: ${response.body}`);
+
+      // The submission really does hold both, so the assertions below are about what
+      // was withheld rather than about values that were never recorded.
+      const [stored] = await h.ctx.db
+        .select()
+        .from(submissions)
+        .where(eq(submissions.id, JSON.parse(response.body).submissionId as string));
+      expect(stored?.observedIp, contentLevel).toBe(SOCKET);
+      expect(stored?.clientContext, contentLevel).toMatchObject({ appVersion: SECRET_CONTEXT });
+
+      await runNotificationBatch(h.ctx, { paceMs: 0 });
+      const raw = slack.received[0]?.raw ?? '';
+      expect(raw, contentLevel).not.toBe('');
+      expect(raw, contentLevel).not.toContain(SOCKET);
+      expect(raw, contentLevel).not.toContain(SECRET_CONTEXT);
+      expect(raw, contentLevel).not.toContain('u-42');
+      expect(raw, contentLevel).not.toContain('clientContext');
+    }
   });
 
   it('sends no answer content at the link-only level', async () => {

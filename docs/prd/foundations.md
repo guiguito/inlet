@@ -1,7 +1,7 @@
 # Inlet — Foundations PRD
 
 ## Document Status
-**Status:** Baseline for every Inlet capability — Feedback Collection shipped (Releases 1–4), Crash Reports in design, UX Analytics not started
+**Status:** Baseline for every Inlet capability — Feedback Collection shipped (Releases 1–5), Crash Reports in design, UX Analytics not started
 **Product:** Inlet, the self-hosted place your applications report to
 **Language:** English
 **Notion page:** https://app.notion.com/p/3ddd33dfffca813c87daf018eec9aeb4

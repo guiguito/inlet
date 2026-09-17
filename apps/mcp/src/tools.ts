@@ -268,15 +268,25 @@ export function registerTools(server: McpServer, client: InletClient): void {
     {
       title: 'Download a screenshot',
       description:
-        'The image itself, as WebP. The URL is stable but every request is authorized afresh (FR-069).',
+        'The image itself, as WebP. The URL is stable but every request is authorized afresh (FR-069). Ask for a width to read a smaller copy, resized from the one stored object (FR-177).',
       inputSchema: {
         attachmentId: z.string().describe('The attachment identifier, like att_f28s3688z9b3.'),
+        width: z
+          .number()
+          .int()
+          .min(16)
+          .max(512)
+          .optional()
+          .describe(
+            'Resize to this width on the way out. Omit for the stored image. A width at or above the stored width returns the stored image rather than enlarging it (FR-178).',
+          ),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ attachmentId }) =>
+    async ({ attachmentId, width }) =>
       guard(async () => {
-        const image = await client.bytes(`/v1/attachments/${attachmentId}`);
+        const query = width === undefined ? '' : `?width=${width}`;
+        const image = await client.bytes(`/v1/attachments/${attachmentId}${query}`);
         return {
           content: [
             {

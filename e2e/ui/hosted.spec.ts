@@ -194,6 +194,13 @@ test.describe('sharing a form as a link', () => {
     await expect(visitor.page.locator('img')).toBeVisible();
     await expect(visitor.page.getByRole('link', { name: /Inlet/ })).toHaveCount(0);
     await expect(visitor.page).toHaveTitle('Shared link');
+    // Not in the markup either: the shipped shell carries Inlet's favicon and meta
+    // description, and a hosted page must reach the respondent without them — the
+    // mark shows in the tab and the descriptor in every chat preview of the link.
+    await expect(visitor.page.locator('link[rel="icon"][href*="favicon"]')).toHaveCount(0);
+    await expect(visitor.page.locator('meta[name="description"]')).toHaveCount(0);
+    // The operator uploaded a logo, so the tab carries theirs instead of nothing.
+    await expect(visitor.page.locator('link[rel="icon"][href*="/logo"]')).toHaveCount(1);
 
     // FR-137: it fits a phone without sideways scrolling.
     const overflow = await visitor.page.evaluate(

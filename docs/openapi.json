@@ -1279,7 +1279,7 @@
               "since",
               "count"
             ],
-            "description": "What arrived since the signed-in reader last opened this list (FR-063A)."
+            "description": "What arrived since the signed-in reader last opened this list (FR-179, FR-180)."
           }
         },
         "required": [
@@ -3263,7 +3263,7 @@
               "count"
             ],
             "additionalProperties": false,
-            "description": "What arrived since the signed-in reader last opened this list (FR-063A)."
+            "description": "What arrived since the signed-in reader last opened this list (FR-179, FR-180)."
           }
         },
         "required": [

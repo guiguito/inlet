@@ -20,6 +20,7 @@ import {
 } from '../setup/api.js';
 import { animatedPng, heavyLogo, notAnImage, oversizedBytes, overStoredBudget, png } from '../setup/images.js';
 import path from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 /**
@@ -762,11 +763,57 @@ describe('the hosted form page', () => {
     );
   });
 
+  /**
+   * FR-144: a hosted form is the operator's page, so nothing of Inlet's may reach the
+   * respondent. The shell is the management interface's `index.html`, which carries
+   * our favicon and our meta description; both used to survive into every hosted page
+   * — the mark in the browser tab, the descriptor in every chat preview of the link.
+   */
+  it('shows nothing of Inlet’s to a respondent (FR-144)', async () => {
+    const { slug } = await enableHostedForm(h, ctx.databaseId);
+    const response = await h.app.inject({ url: `/f/${slug}` });
+
+    expect(response.statusCode).toBe(200);
+    // The shell we started from really does carry them, so the assertions below are
+    // about removal rather than about a file that never had them.
+    const shell = await readFile(
+      path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../web/index.html'),
+      'utf8',
+    );
+    expect(shell).toContain('favicon.svg');
+    expect(shell).toContain('self-hosted feedback collector');
+
+    expect(response.body).not.toContain('favicon.svg');
+    expect(response.body).not.toContain('self-hosted feedback collector');
+    expect(response.body).not.toContain('name="description"');
+    // With no logo there is no icon at all: any mark we supplied would be our brand
+    // sitting on their form.
+    expect(response.body).not.toContain('rel="icon"');
+  });
+
+  it('puts the operator’s logo in the tab when they have one (FR-144)', async () => {
+    await uploadLogo(h, ctx.databaseId, await png(400, 120), 'Acme');
+    const { slug } = await enableHostedForm(h, ctx.databaseId);
+
+    const response = await h.app.inject({ url: `/f/${slug}` });
+    expect(response.body).toContain(`<link rel="icon" href="/v1/hosted/${slug}/logo"`);
+    expect(response.body).not.toContain('favicon.svg');
+
+    // And the address in that tag is one a browser can actually fetch.
+    const icon = await h.app.inject({ url: `/v1/hosted/${slug}/logo` });
+    expect(icon.statusCode).toBe(200);
+    expect(icon.headers['content-type']).toBe('image/webp');
+  });
+
   it('renders a civil page for an unknown address rather than a browser error', async () => {
     const response = await h.app.inject({ url: '/f/no-such-form' });
     expect(response.statusCode).toBe(404);
     expect(response.headers['content-type']).toContain('text/html');
     expect(response.body).toContain('<title>Form not found</title>');
+    // It is served from the same shell, so it is de-branded the same way (FR-144):
+    // a mistyped link is still a respondent looking at somebody's form.
+    expect(response.body).not.toContain('favicon.svg');
+    expect(response.body).not.toContain('self-hosted feedback collector');
   });
 
   it('escapes the name it puts in the title', async () => {

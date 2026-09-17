@@ -214,6 +214,52 @@ describe('deleting feedback databases and projects', () => {
     expect(errorCode(response)).toBe('insufficient_scope');
   });
 
+  /**
+   * Section 12.3: both background workers drain their tables with row locks, so a
+   * second instance divides the queue rather than duplicating it.
+   *
+   * The purge queue used to take its batch with a plain select, which two workers
+   * would both satisfy with the same rows — harmless for the bytes, because deleting
+   * an object twice is a no-op, but not for the bookkeeping: both would advance the
+   * same row's attempt counter and backoff for one failure, so a queue under an
+   * outage would exhaust its attempts at twice the rate the backoff intends.
+   */
+  it('leases the rows it claims, so a second worker takes different ones', async () => {
+    const keys = Array.from({ length: 6 }, (_, i) => `attachments/leased-${i}.webp`);
+    await h.ctx.db.insert(storagePurgeQueue).values(keys.map((storageKey) => ({ storageKey })));
+
+    /** A storage that records every key it is asked to remove. */
+    const recording = (seen: string[][]) =>
+      ({
+        ...h.ctx,
+        storage: {
+          ...h.ctx.storage,
+          deleteMany: async (batch: string[]) => {
+            // Long enough that the second worker's claim lands while the first is
+            // still removing bytes. Without this the first batch finishes before the
+            // second starts, and a queue that duplicates work looks like one that
+            // does not.
+            await new Promise((resolve) => setTimeout(resolve, 50));
+            seen.push([...batch]);
+          },
+        } as unknown as typeof h.ctx.storage,
+      }) as typeof h.ctx;
+
+    const seen: string[][] = [];
+    const [first, second] = await Promise.all([
+      runPurgeBatch(recording(seen)),
+      runPurgeBatch(recording(seen)),
+    ]);
+
+    // Between them they did the whole queue, and neither took a row the other had.
+    expect(first + second).toBe(keys.length);
+    const handled = seen.flat();
+    expect(handled).toHaveLength(keys.length);
+    expect(new Set(handled).size).toBe(keys.length);
+    expect([...handled].sort()).toEqual([...keys].sort());
+    expect(await h.ctx.db.select().from(storagePurgeQueue)).toHaveLength(0);
+  });
+
   it('retries a failed purge with backoff rather than losing the key', async () => {
     await h.ctx.db.insert(storagePurgeQueue).values({ storageKey: 'attachments/never.webp' });
 

@@ -85,7 +85,7 @@ const envSchema = z.object({
   INLET_MALWARE_SCAN_REQUIRED: bool.default(false),
 
   /**
-   * Which origins a Slack notification may be POSTed to (FR-163).
+   * Which origins a Slack notification may be POSTed to (FR-157).
    *
    * An exact-origin allowlist is the whole answer to server-side request forgery for
    * this feature rather than a mitigation of it: an operator-supplied URL whose origin

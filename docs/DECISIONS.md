@@ -32,6 +32,7 @@ places where the PRD deliberately left the decision to technical design.
 20. [Release 3: hosted forms](#20-release-3-hosted-forms)
 21. [Release 4: Slack notifications](#21-release-4-slack-notifications)
 22. [The mark, and the responses list](#22-the-mark-and-the-responses-list)
+23. [What the PRD conformance audit found](#23-what-the-prd-conformance-audit-found)
 
 ---
 
@@ -1313,3 +1314,127 @@ their data rather than our interpretation of it, so the chip stays neutral.
 
 **A response volume chart.** It would have been the only number on the page nobody
 asked for.
+
+---
+
+## 23. What the PRD conformance audit found
+
+The PRD was split into a Foundations page and one page per capability in September
+2026, and the shipped code was then read back against the two pages that describe what
+already exists. Almost all of it held. This section records the four places it did not,
+because each one is a small change whose reasoning is worth keeping, and because three
+of the four had passing tests sitting beside the hole.
+
+### 23.1 Hosted forms were serving Inlet's favicon
+
+FR-144 says a hosted form never displays Inlet's own brand to a respondent, and the
+page was built carefully to honour it: the operator's title, the operator's colours in
+the first paint, no Inlet link anywhere in the body.
+
+The page is the management interface's `index.html` with three substitutions applied,
+and that file has a `<link rel="icon">` pointing at the Inlet mark and a
+`<meta name="description">` reading "Inlet, the self-hosted feedback collector." Neither
+is in the body, so neither was substituted. Every hosted form has been showing our mark
+in the browser tab, and handing our descriptor to every chat client that unfurled the
+link.
+
+Two tests covered this requirement and both passed: one asserted the `<title>`, the
+other that no *link element* named `/Inlet/` was rendered. Both were looking at the
+body. The lesson is not that the tests were weak — it is that "no Inlet branding" is a
+claim about the whole document, and the assertions were about the part of it that the
+code under test had been written to change.
+
+The stripping is a regex over `rel="icon"` and `name="description"` rather than a
+literal replace, because the bundler is free to rewrite an asset href and a hosted page
+that quietly regained our favicon would read as a build artefact rather than as the
+requirement breach it is.
+
+What replaces the icon: the operator's logo where they have uploaded one, and nothing
+at all where they have not. A neutral Inlet-supplied mark was rejected — anything we
+ship in that slot is our brand sitting on their form, which is the thing FR-144
+forbids. An empty slot leaves the browser's own blank-page glyph, which belongs to
+nobody.
+
+### 23.2 The hosted form limit counted addresses, not forms
+
+FR-149 asks for limits "per requesting address and per slug". The routes carried tight
+per-route caps and a comment saying they were keyed both ways, but the key generator
+returns `key:<credential>` or `ip:<address>`, and a hosted form sends no credential. So
+the limit was per address only: one caller was bounded and one form was not, which is
+the wrong way round for a public link. A thousand addresses against one slug — the
+shape this abuse actually takes — met no limit at all.
+
+The slug is now a second limiter, keyed on the slug alone, that a request has to clear
+in addition to the address one. It guards intent creation and finalization, not
+uploads: an upload needs an intent and an intent accepts at most ten of them, so
+bounding intents per slug already bounds every upload per slug, and counting uploads
+would only punish a form whose respondents attach a lot of screenshots.
+
+`@fastify/rate-limit` exposes `createRateLimit` for exactly this — a checker callable
+from a hook, so the plugin's store and window logic are reused rather than
+reimplemented. One trap in it cost a debugging round: the returned verdict's
+`isAllowed` is true **only** for an allow-listed key. An ordinary request under the
+limit comes back `isAllowed: false, isExceeded: false`, so reading `isAllowed` alone
+refuses every request. The first version of this did, and the test written alongside it
+caught it on the first run.
+
+### 23.3 The purge worker drained without a lease
+
+Section 12.3 says both background workers drain their tables with row locks. The
+notification worker does. The purge worker took its batch with a plain `select` and a
+comment explaining why that was acceptable: deleting an object twice is a no-op, so two
+workers racing on the same keys harms nothing.
+
+That reasoning is right about the bytes and wrong about the bookkeeping. Two workers
+that claim the same row both advance its attempt counter and both push its backoff, so
+a queue under a storage outage exhausts its ten attempts at twice the rate the backoff
+intends and gives up roughly when it should have been on its fifth try.
+
+It now uses the same atomic claim the notification queue uses — one
+`update … where id in (select … for update skip locked) returning …`, leasing rows for
+sixty seconds by pushing `next_attempt_at` forward. No lock is held across the S3 round
+trip, and a worker killed mid-batch has already spent its attempt, so nothing spins.
+The two queues now differ only in what they do with the rows they claim.
+
+Writing the test for this was more interesting than writing the fix. The obvious version
+— run two batches concurrently, assert no key was handled twice — passed against the
+old plain `select` as well, because with a five-millisecond stub the first batch
+finished before the second one started and there was never any concurrency to observe.
+Raised to fifty milliseconds it fails against the old code with `expected 12 to be 6`
+and passes against the new. A concurrency test that never achieves concurrency is worse
+than no test: it reports a guarantee nobody is providing.
+
+### 23.4 MCP could not ask for a thumbnail
+
+Section 24.6 grants a secret server key a resized screenshot and FD-021 asks for one
+tool per permitted HTTP operation. The HTTP API takes `?width=` bounded to 16–512;
+`get_screenshot` did not expose it, so an agent could only pull full-size images. A
+parameter, not a decision.
+
+The gap is worth noting anyway: it is the shape FD-021 exists to catch, and it appeared
+because the width was added for the responses list — a web concern — and the tool
+surface was not re-read afterwards.
+
+### 23.5 Left alone
+
+**The retention setting.** A row in the 9.6 matrix and FD-004, with no column, service,
+route, tool or interface behind it — the only matrix row with nothing at all. It is a
+feature rather than a defect, and FD-004 defines its per-type defaults and bounds, so it
+belongs with the typed-database work in Release 6 rather than ahead of it.
+
+**Everything numbered FD.** Typed databases, the delivery kind, the third membership
+scope, `@inlet/sdk`. The Foundations page already says these are Release 6, so their
+absence is a plan, not a gap.
+
+### 23.6 Two pieces of wording, corrected in the PRD rather than the code
+
+**FR-163 no longer exists.** The rewrite folded the Slack origin allowlist into FR-157
+and dropped the old number, which five citations in the source and tests still used.
+Re-cited; the requirement is unchanged.
+
+**Pending uploads are tagged, not prefixed.** Section 9.3 said uploads live "under a
+per-intent pending prefix". They do not: they carry an object tag, deliberately, because
+an attachment's storage key is fixed at upload and never changes, which is what makes
+its asset URL stable for life (FR-069). Binding retags in place instead of copying to a
+second prefix, so there is no window in which the bytes live at a key the database does
+not know about. The code was right and the sentence was wrong, so the sentence changed.
