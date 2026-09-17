@@ -14,7 +14,7 @@ Answer "how is the product used" with the same stance as the other capabilities:
 ## What Foundations already provides
 - An `analytics` database type with a `adb_` ID, memberships, notifications, export, retention and deletion (FD-001 to FD-009).
 - The project's publishable and secret keys; no new credential.
-- A slot in `@inlet/sdk` at `@inlet/sdk/analytics` sharing the transport, queue and redaction hook (FD-010 to FD-014).
+- A slot in `inlet-sdk` at `inlet-sdk/analytics` sharing the transport, queue and redaction hook (FD-010 to FD-014).
 - MCP and rate-limit conventions (FD-020 to FD-031).
 
 ## Open questions, to brainstorm before writing this PRD

@@ -6,7 +6,7 @@ import type { CaptureOptions, CrashFrame, CrashReportInput } from './types.js';
  * without React never loads it.
  *
  * `createErrorBoundary(React, capture)` returns a class component. `capture` is what to
- * do with the report: in a browser or Node, `captureReport` from `@inlet/sdk/crash`; in an
+ * do with the report: in a browser or Node, `captureReport` from `inlet-sdk/crash`; in an
  * Electron renderer, `installElectronRenderer().captureReport`. The component stack React
  * gives an error boundary is turned into frames, one per component, marked in-app,
  * which is what makes a render error group by the component that threw rather than by

@@ -86,7 +86,7 @@ npm run openapi
 
 Commit the result alongside a route or schema change.
 
-## Publishing `@inlet/sdk`
+## Publishing `inlet-sdk`
 
 The SDK is the one package in this repository that ships to a registry. It is versioned
 independently of the server, because an integrator upgrades the two on their own schedule;
@@ -94,8 +94,8 @@ the compatibility check is at runtime, where the SDK reads `capabilities` from `
 and warns if a deployment predates the capability it is reporting to.
 
 ```
-npm version <patch|minor|major> -w @inlet/sdk   # tag the SDK, not the repo
-npm publish -w @inlet/sdk                        # prepack rebuilds dist first
+npm version <patch|minor|major> -w inlet-sdk   # tag the SDK, not the repo
+npm publish -w inlet-sdk                        # prepack rebuilds dist first
 ```
 
 `prepack` runs `build:shared` and then the SDK build, so a stale or missing `dist` cannot be
@@ -110,7 +110,7 @@ the SDK ever needs a real dependency, add it to `dependencies` deliberately and 
 Before publishing anything, check the tarball rather than trusting the manifest:
 
 ```
-npm pack -w @inlet/sdk --dry-run
+npm pack -w inlet-sdk --dry-run
 ```
 
 ## Security

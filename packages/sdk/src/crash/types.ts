@@ -1,5 +1,5 @@
 /**
- * Public types of `@inlet/sdk/crash` (Crash Reports PRD CR-090 to CR-103).
+ * Public types of `inlet-sdk/crash` (Crash Reports PRD CR-090 to CR-103).
  *
  * The envelope type mirrors PRD section 9.1 exactly. The server is the authority on the
  * bounds; the SDK enforces the same numbers before queueing so that a report is never

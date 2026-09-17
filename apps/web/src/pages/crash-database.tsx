@@ -455,7 +455,7 @@ function GroupsTab({ databaseId }: { databaseId: string }) {
           description={
             Object.values(filters).some(Boolean)
               ? 'Widen the filters, or wait for the next release.'
-              : 'Install @inlet/sdk/crash in your application with this database ID and your publishable key; the first report appears here within seconds.'
+              : 'Install inlet-sdk/crash in your application with this database ID and your publishable key; the first report appears here within seconds.'
           }
           action={
             Object.values(filters).some(Boolean) ? undefined : (
@@ -610,7 +610,7 @@ function CollectTab({ databaseId, projectId }: { databaseId: string; projectId: 
     onError: (error) => toast.error(error instanceof ApiError ? error.message : 'The test report was not accepted.'),
   });
 
-  const init = `import * as crash from '@inlet/sdk/crash';
+  const init = `import * as crash from 'inlet-sdk/crash';
 
 crash.init({
   baseUrl: '${origin}',
@@ -655,7 +655,7 @@ crash.init({
           ['Node', `${init}\ncrash.installNodeHandlers();`],
           ['Browser', `${init.replace('app.getVersion()', "'1.0.0'")}\ncrash.installBrowserHandlers();`],
           ['Electron main', `${init}\ncrash.installElectronMain({ userDataDir: app.getPath('userData') });`],
-          ['Electron renderer', `import * as crash from '@inlet/sdk/crash';\n\n// Every capture routes through the main process over IPC.\ncrash.installElectronRenderer();`],
+          ['Electron renderer', `import * as crash from 'inlet-sdk/crash';\n\n// Every capture routes through the main process over IPC.\ncrash.installElectronRenderer();`],
         ] as const
       ).map(([label, snippet]) => (
         <Card key={label}>

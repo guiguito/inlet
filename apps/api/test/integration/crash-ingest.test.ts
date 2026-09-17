@@ -47,7 +47,7 @@ describe('crash ingest', () => {
     return crashEnvelopeSchema.parse({
       eventId: crypto.randomUUID(),
       timestamp: new Date().toISOString(),
-      sdk: { name: '@inlet/sdk', version: '0.1.0' },
+      sdk: { name: 'inlet-sdk', version: '0.1.0' },
       kind: 'exception',
       release: { version: '1.4.0' },
       os: { name: 'macOS', version: '15.1', arch: 'arm64' },

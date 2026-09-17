@@ -32,7 +32,7 @@ describe('crash databases and ingest over HTTP', () => {
   const envelope = (overrides: Record<string, unknown> = {}) => ({
     eventId: crypto.randomUUID(),
     timestamp: new Date().toISOString(),
-    sdk: { name: '@inlet/sdk', version: '0.1.0' },
+    sdk: { name: 'inlet-sdk', version: '0.1.0' },
     kind: 'exception',
     release: { version: '1.4.0' },
     exception: { type: 'TypeError', message: 'boom', handled: false, frames: [{ function: 'run', file: 'main.js', inApp: true }] },

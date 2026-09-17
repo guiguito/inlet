@@ -18,7 +18,7 @@ import type {
   QueueStore,
 } from './types.js';
 
-export const SDK_NAME = '@inlet/sdk';
+export const SDK_NAME = 'inlet-sdk';
 export const SDK_VERSION = '0.1.0';
 
 const DEDUPE_KEY = 'dedupe';
@@ -49,13 +49,13 @@ export class CrashClient {
     if (typeof options.publishableKey !== 'string' || !options.publishableKey.startsWith('ipk_')) {
       // CR-102, FD-011: a secret key in an application is a leak, and a key of the wrong
       // shape is a misconfiguration. Both are the integrator's to fix, at startup.
-      throw new Error('@inlet/sdk/crash: init needs a publishable client key (ipk_…). A secret server key must never ship in an application.');
+      throw new Error('inlet-sdk/crash: init needs a publishable client key (ipk_…). A secret server key must never ship in an application.');
     }
     if (typeof options.release !== 'string' || options.release.trim() === '') {
-      throw new Error('@inlet/sdk/crash: init needs the application release; without it nothing can be grouped by version.');
+      throw new Error('inlet-sdk/crash: init needs the application release; without it nothing can be grouped by version.');
     }
     if (!options.baseUrl || !options.crashDatabaseId) {
-      throw new Error('@inlet/sdk/crash: init needs baseUrl and crashDatabaseId.');
+      throw new Error('inlet-sdk/crash: init needs baseUrl and crashDatabaseId.');
     }
     this.options = { ...options, release: options.release.trim() };
     this.debug = options.debug ?? (() => {});

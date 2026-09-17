@@ -30,7 +30,7 @@ Inlet separates the plumbing from the payload. Plumbing is written once and shar
 - Support multiple project-owned API keys and a stable identifier for each feedback database.
 - Provide read-write MCP access for project administrators.
 - Let one project hold databases of different types, and let every type reuse the same accounts, keys, roles, notifications, export, deletion and MCP conventions.
-- Ship one TypeScript SDK, `@inlet/sdk`, with one capability module per database type.
+- Ship one TypeScript SDK, `inlet-sdk`, with one capability module per database type.
 - Stay one container beside PostgreSQL and S3-compatible storage, whatever the number of capabilities.
 
 ## 4. Platform Non-Goals
@@ -75,7 +75,7 @@ A Viewer can:
 - **Database ID:** The stable public identifier a client combines with a project credential to target one database. Prefixed by type (`fdb_`, `cdb_`, `adb_`).
 - **Notification Settings:** Per-database configuration that decides whether, where and how an event in that database is announced. Slack incoming webhooks are the only destination today.
 - **MCP Server:** `inlet-mcp`, a stdio server that authenticates with a secret server key and exposes one tool per permitted HTTP operation.
-- **SDK:** `@inlet/sdk`, the TypeScript client that integrators embed. One package, one transport, one module per capability.
+- **SDK:** `inlet-sdk`, the TypeScript client that integrators embed. One package, one transport, one module per capability.
 
 ## 7. Platform User Journeys
 Journeys 7.1 to 7.3 are on the Feedback Collection page.
@@ -89,7 +89,7 @@ Journeys 7.1 to 7.3 are on the Feedback Collection page.
 1. A Creator or Admin opens a project that already holds a feedback database.
 2. They create a database of another type, for example a crash database.
 3. The project's existing publishable and secret keys work for it immediately; no new credential is needed.
-4. They install the matching `@inlet/sdk` module in their application with the same base URL and publishable key.
+4. They install the matching `inlet-sdk` module in their application with the same base URL and publishable key.
 5. The new database appears in the project page and the database switcher beside the feedback databases, with the same access, notification and deletion settings.
 
 ## 8. Functional Requirements
@@ -315,7 +315,7 @@ Inlet is successful as a platform when a second capability ships without a new c
 - Invitation links expire after 7 days.
 **Decided in the September 16, 2026 split**
 - Inlet is a platform of typed databases; capabilities are database types, not products.
-- One SDK package, `@inlet/sdk`, with one module per capability and platform adapters, replaces per-capability packages.
+- One SDK package, `inlet-sdk`, with one module per capability and platform adapters, replaces per-capability packages.
 - The notification queue is shared across database types through a delivery kind.
 - Retention is a per-database setting with a per-type default and platform bounds.
 - Sentry-protocol compatibility is not a platform goal; capabilities use Inlet-native envelopes.
@@ -471,7 +471,7 @@ Beyond Release 4: notification destinations other than Slack, a digest instead o
 - **FD-009:** A capability shall not introduce a credential type, a role, a notification destination or a deployment service. A need for any of these is a change to this page first.
 
 ## 26. SDK Packaging and Conventions
-- **FD-010:** Inlet shall ship one TypeScript SDK, `@inlet/sdk`, with subpath entries per capability (`@inlet/sdk/crash`, `@inlet/sdk/feedback`, later `@inlet/sdk/analytics`) and per platform adapter (`node`, `browser`, `electron`).
+- **FD-010:** Inlet shall ship one TypeScript SDK, `inlet-sdk`, with subpath entries per capability (`inlet-sdk/crash`, `inlet-sdk/feedback`, later `inlet-sdk/analytics`) and per platform adapter (`node`, `browser`, `electron`).
 - **FD-011:** The SDK shall be configured once with a base URL and a publishable key, and each module shall name the database it targets. A secret key shall be refused by the SDK at initialization.
 - **FD-012:** The SDK shall have one transport shared by every module: a persistent offline queue (disk on Node and Electron, IndexedDB in browsers), replay on start, exponential backoff on transport failure, a hard stop on `429` that honours `Retry-After` before replay resumes, at least 100 ms between replayed events, and no retry of an individual event the server has answered. Size limits are enforced before an event is queued.
 - **FD-013:** The SDK shall have zero runtime dependencies, ship ESM and CommonJS with type declarations, support Node 18 or later and evergreen browsers, and be versioned independently of the server with a minimum-server-version check on first use.
@@ -493,7 +493,7 @@ Beyond Release 4: notification destinations other than Slack, a digest instead o
 | 2 — Team | Foundations + Feedback | Invitations, roles at two scopes, draft revisions, rollback and unpublish, CSV, MCP, malware scanning | Shipped September 2026 |
 | 3 — Shareable | Feedback | Hosted forms with branding, slugs, embedding | Shipped September 2026 |
 | 4 — Notified | Foundations | Slack notifications: settings, queue, retries, test message | Shipped September 2026 |
-| 6 — Crash Reports | Crash | Crash databases, ingest, grouping, groups UI, new-group and regression notifications, MCP, `@inlet/sdk/crash` with node, browser and electron adapters | In design, see the Crash Reports PRD |
+| 6 — Crash Reports | Crash | Crash databases, ingest, grouping, groups UI, new-group and regression notifications, MCP, `inlet-sdk/crash` with node, browser and electron adapters | In design, see the Crash Reports PRD |
 | 7 — UX Analytics | Analytics | To be brainstormed | Not started |
 
 Release 5 — Reviewed (the response as the row, per-reader read markers, four-tab navigation, database switcher) shipped in September 2026 between Releases 4 and 6 and is specified in section 24 of the Feedback Collection PRD.

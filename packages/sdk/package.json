@@ -1,5 +1,5 @@
 {
-  "name": "@inlet/sdk",
+  "name": "inlet-sdk",
   "version": "0.1.0",
   "description": "The Inlet client SDK. Crash Reports module with Node, browser and Electron adapters.",
   "license": "MIT",

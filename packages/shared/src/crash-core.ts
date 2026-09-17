@@ -2,7 +2,7 @@
  * The crash envelope (Crash Reports PRD section 9.1) and the grouping rule
  * (CR-020 to CR-022).
  *
- * This file is the contract shared by the API and `@inlet/sdk/crash` (PRD section
+ * This file is the contract shared by the API and `inlet-sdk/crash` (PRD section
  * 11, Security): the server validates with `crashEnvelopeSchema`, the SDK enforces the
  * same bounds before queueing (CR-096), and both compute the same default fingerprint,
  * so client dedupe (CR-099) and server grouping (CR-024) agree on what "the same

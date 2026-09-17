@@ -5,7 +5,7 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
 import { E2E } from '../env';
 
 /**
- * `@inlet/sdk/crash/browser` in real Chromium, against the real server (CR-093, CR-097,
+ * `inlet-sdk/crash/browser` in real Chromium, against the real server (CR-093, CR-097,
  * CR-100, FD-013).
  *
  * The browser twin of `sdk.spec.ts`. Chromium is the runtime under test, not the interface:

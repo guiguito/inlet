@@ -1424,7 +1424,7 @@ feature rather than a defect, and FD-004 defines its per-type defaults and bound
 belongs with the typed-database work in Release 6 rather than ahead of it.
 
 **Everything numbered FD.** Typed databases, the delivery kind, the third membership
-scope, `@inlet/sdk`. The Foundations page already says these are Release 6, so their
+scope, `inlet-sdk`. The Foundations page already says these are Release 6, so their
 absence is a plan, not a gap.
 
 ### 23.6 Two pieces of wording, corrected in the PRD rather than the code
@@ -1637,7 +1637,7 @@ Choices inside the crash tables:
 - **`@inlet/shared` was split so the SDK can bundle half of it.** `crash-core.ts` holds
   the bounds, kinds, normalizer and fingerprint with no imports; `crash.ts` adds the zod
   schema for the API and re-exports the core. The SDK imports only the core, and esbuild
-  inlines it, so `@inlet/sdk` has zero runtime dependencies (FD-013) while computing the
+  inlines it, so `inlet-sdk` has zero runtime dependencies (FD-013) while computing the
   byte-identical fingerprint the server groups by. A unit test asserts the two agree.
   *Rejected:* the SDK validating with zod, which would make zod a dependency of every
   application, and the SDK carrying its own copy of the normalizer, which would drift.
@@ -1668,7 +1668,7 @@ Choices inside the crash tables:
   isolation and is a fallback, not a recommendation.
 - **The React helper takes `React` as a parameter** rather than importing it, so the
   package has no peer dependency and an application without React never loads it.
-- **Not built in this release: `@inlet/sdk/feedback`.** The PRD allows it to slip to
+- **Not built in this release: `inlet-sdk/feedback`.** The PRD allows it to slip to
   Release 7; the existing client API is documented and small.
 
 ### 24.9 What verification changed
@@ -1710,7 +1710,7 @@ the crash pair the same way. Section 7 calls its names proposals.
 
 Three readings are recorded rather than changed. **CR-081** says a daily pass; the pass runs
 hourly, which honours the age limit at least as well and lets a database far over its
-limit catch up in bounded steps. **CR-090** says no other public surface; `@inlet/sdk/crash`
+limit catch up in bounded steps. **CR-090** says no other public surface; `inlet-sdk/crash`
 also exports `defaultRedaction`, `redactExcept`, `CrashClient`, `MemoryStore` and
 `getClient`. The first two exist so an integrator can *replace* the redaction policy, which
 CR-094 requires; the rest are what a test or an application with two databases needs, and
@@ -1732,7 +1732,7 @@ path stays documented and unbuilt.
 **What changed.** Section 13 recorded that there was no CORS configuration to get wrong.
 That held for five releases because every browser that talked to Inlet was served by Inlet:
 the management interface, the reference renderer, the hosted form inside its iframe.
-`@inlet/sdk/crash/browser` is the first client that is not. It runs on the integrator's own
+`inlet-sdk/crash/browser` is the first client that is not. It runs on the integrator's own
 origin, and its transport sends `authorization` and `content-type: application/json`, both
 non-simple, so a preflight is unavoidable. Without CORS the preflight matched no route,
 answered 404, and the browser never sent the report — browser crash reporting was not merely

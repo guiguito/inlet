@@ -1,7 +1,7 @@
-# @inlet/sdk
+# inlet-sdk
 
 The client SDK for [Inlet](../../README.md), the self-hosted feedback collector. This
-release ships one module, `@inlet/sdk/crash`, which reports application failures to a
+release ships one module, `inlet-sdk/crash`, which reports application failures to a
 crash database on your own Inlet. Zero runtime dependencies, ESM and CommonJS, Node 18 or
 later and evergreen browsers.
 
@@ -15,13 +15,13 @@ the wire format in [docs/API.md](../../docs/API.md#crash-reports).
 ## Install
 
 ```
-npm install @inlet/sdk
+npm install inlet-sdk
 ```
 
 ## Node
 
 ```ts
-import * as crash from '@inlet/sdk/crash/node';
+import * as crash from 'inlet-sdk/crash/node';
 
 crash.init({
   baseUrl: 'https://inlet.example.com',
@@ -41,7 +41,7 @@ have. Pass `{ exitCode: false }` to keep the process alive, if you know what you
 ## Browser
 
 ```ts
-import * as crash from '@inlet/sdk/crash/browser';
+import * as crash from 'inlet-sdk/crash/browser';
 
 crash.init({ baseUrl, publishableKey, crashDatabaseId, release: '1.4.0' });
 crash.installBrowserHandlers();
@@ -61,7 +61,7 @@ queue in memory for the life of the page and says so through `debug` instead of 
 Main process, during `app.whenReady()`:
 
 ```ts
-import { installElectronMain } from '@inlet/sdk/crash/electron';
+import { installElectronMain } from 'inlet-sdk/crash/electron';
 
 await installElectronMain({ baseUrl, publishableKey, crashDatabaseId });
 // release defaults to app.getVersion(), the queue to <userData>/inlet-crash
@@ -83,8 +83,8 @@ contextBridge.exposeInMainWorld('inletCrash', {
 Renderer:
 
 ```ts
-import { installElectronRenderer } from '@inlet/sdk/crash/electron';
-import { createErrorBoundary } from '@inlet/sdk/crash/react';
+import { installElectronRenderer } from 'inlet-sdk/crash/electron';
+import { createErrorBoundary } from 'inlet-sdk/crash/react';
 import React from 'react';
 
 const renderer = installElectronRenderer(); // uses window.inletCrash.send
@@ -118,7 +118,7 @@ safe, pass `redaction: (message) => message`; to allow your own shapes, pass
 ## Capturing by hand
 
 ```ts
-import { captureException, captureMessage, captureReport, setUser, setTags, flush } from '@inlet/sdk/crash';
+import { captureException, captureMessage, captureReport, setUser, setTags, flush } from 'inlet-sdk/crash';
 
 try { risky(); } catch (error) { await captureException(error, { tags: { step: 'import' } }); }
 await captureMessage('Sync took longer than a minute', { kind: 'message' });

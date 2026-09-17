@@ -179,7 +179,7 @@ database ID, your project's publishable key, and an install snippet for Node, br
 Electron's main process and Electron's renderer:
 
 ```ts
-import * as crash from '@inlet/sdk/crash';
+import * as crash from 'inlet-sdk/crash';
 
 crash.init({
   baseUrl: 'https://inlet.example.com',

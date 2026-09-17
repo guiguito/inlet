@@ -2,11 +2,11 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test, type APIRequestContext } from '@playwright/test';
-import { FileStore, init, type CrashClient } from '@inlet/sdk/crash/node';
+import { FileStore, init, type CrashClient } from 'inlet-sdk/crash/node';
 import { E2E } from '../env';
 
 /**
- * `@inlet/sdk/crash` against the real server (CR-097, CR-098, CR-099, section 12).
+ * `inlet-sdk/crash` against the real server (CR-097, CR-098, CR-099, section 12).
  *
  * The built package, the Node adapter, a disk queue, and the deployment the rest of the
  * suite runs against. The walk the acceptance criteria describe: the application crashes
@@ -62,7 +62,7 @@ test('persists a fatal report offline, delivers it on the next start, and dedupe
     const { reports } = (await report.json()) as { reports: { eventId: string; envelope: { exception: { handled: boolean; frames: { inApp: boolean; file?: string }[] }; sdk: { name: string } } }[] };
     expect(reports[0]!.eventId).toBe(eventId);
     expect(reports[0]!.envelope.exception.handled).toBe(false);
-    expect(reports[0]!.envelope.sdk.name).toBe('@inlet/sdk');
+    expect(reports[0]!.envelope.sdk.name).toBe('inlet-sdk');
     // Frames from this test file are in-app; Playwright's and Node's are external.
     expect(reports[0]!.envelope.exception.frames.some((frame) => frame.inApp)).toBe(true);
     expect(reports[0]!.envelope.exception.frames.filter((frame) => !frame.inApp).every((frame) => frame.file === undefined || frame.file === '<external>')).toBe(true);

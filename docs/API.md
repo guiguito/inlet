@@ -943,7 +943,7 @@ curl -s -X POST "$BASE/v1/crash-databases/$DB/reports" \
   -d '{
     "eventId": "3f2c1e0a9b8d4c7e8f1a2b3c4d5e6f70",
     "timestamp": "2026-09-17T10:00:00Z",
-    "sdk": {"name": "@inlet/sdk", "version": "0.1.0"},
+    "sdk": {"name": "inlet-sdk", "version": "0.1.0"},
     "kind": "exception",
     "release": {"version": "1.4.0"},
     "os": {"name": "macOS", "version": "15.1", "arch": "arm64"},

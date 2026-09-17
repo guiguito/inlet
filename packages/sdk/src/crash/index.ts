@@ -2,7 +2,7 @@ import { CrashClient } from './client.js';
 import type { CaptureOptions, CrashInitOptions, CrashReportInput } from './types.js';
 
 /**
- * `@inlet/sdk/crash` (Crash Reports PRD CR-090): `init`, `captureException`,
+ * `inlet-sdk/crash` (Crash Reports PRD CR-090): `init`, `captureException`,
  * `captureMessage`, `captureReport`, `setUser`, `setTag`, `setTags`, `flush`, `close`.
  * The adapters (`./node`, `./browser`, `./electron`) add one handler installer each.
  *

@@ -12,7 +12,7 @@ import { componentStackToFrames } from '../src/crash/react.js';
 import type { CrashEnvelope } from '../src/crash/types.js';
 
 /**
- * `@inlet/sdk/crash` (CR-090 to CR-103), against a recording fetch.
+ * `inlet-sdk/crash` (CR-090 to CR-103), against a recording fetch.
  */
 
 type Sent = { url: string; body: unknown };
@@ -139,7 +139,7 @@ describe('envelopes and bounds (CR-092, CR-096, CR-101)', () => {
       user: { id: 'user-1' },
       tags: { engine: 'pi', window: 'main' },
       context: { pins: 2 },
-      sdk: { name: '@inlet/sdk' },
+      sdk: { name: 'inlet-sdk' },
       exception: {
         type: 'Error',
         message: 'boom <redacted>',

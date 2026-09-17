@@ -6,7 +6,7 @@ import { asAdmin, createCredential, createProject, withKey } from '../setup/api.
 /**
  * The one cross-origin surface (CR-010, FD-013).
  *
- * `@inlet/sdk/crash/browser` runs on the integrator's own origin, so crash ingest and the
+ * `inlet-sdk/crash/browser` runs on the integrator's own origin, so crash ingest and the
  * health probe answer cross-origin and everything else does not. What is worth pinning here
  * is the boundary, in both directions: the three paths that must work from a browser, and a
  * list of near neighbours that must not.
@@ -38,7 +38,7 @@ describe('cross-origin collection', () => {
   const envelope = () => ({
     eventId: crypto.randomUUID(),
     timestamp: new Date().toISOString(),
-    sdk: { name: '@inlet/sdk', version: '0.1.0' },
+    sdk: { name: 'inlet-sdk', version: '0.1.0' },
     kind: 'exception',
     release: { version: '1.4.0' },
     exception: { type: 'TypeError', message: 'boom', handled: false, frames: [{ function: 'run', file: 'main.js', inApp: true }] },

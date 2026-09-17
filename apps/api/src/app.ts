@@ -151,7 +151,7 @@ async function registerDocs(app: FastifyInstance, ctx: AppContext): Promise<void
  *
  * Everything else in Inlet stays same-origin, which is what section 13 of DECISIONS.md
  * describes and why there is no CORS plugin here. This is the one exception, and it is
- * three paths wide: `@inlet/sdk/crash/browser` runs on the integrator's own origin by
+ * three paths wide: `inlet-sdk/crash/browser` runs on the integrator's own origin by
  * definition, and its transport sends `authorization` and `content-type: application/json`,
  * both of which force a preflight. Without this the preflight 404s and the browser never
  * sends the report at all.

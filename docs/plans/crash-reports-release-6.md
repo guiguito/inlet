@@ -65,12 +65,12 @@ Each step is independently testable. Mirror the test files named in PRD Appendix
    and in the switcher, the Notify panel without a content level, the Access panel with a
    crash scope. Driven in a browser by `e2e/ui/crash.spec.ts` and through a real MCP client
    by `e2e/api/crash-mcp.spec.ts`.)*
-10. *(done: `packages/sdk`, `@inlet/sdk/crash` with `node`, `browser`, `electron` and
+10. *(done: `packages/sdk`, `inlet-sdk/crash` with `node`, `browser`, `electron` and
     `react` entries; esbuild bundles ESM and CJS with `@inlet/shared/crash-core` inlined,
     so the package has zero runtime dependencies. 17 unit tests in `packages/sdk/test`;
     `e2e/api/sdk.spec.ts` drives the built Node adapter against the real server: offline
     fatal write, replay on the next start, crash-loop dedupe, server grouping. Not built:
-    the feedback module of `@inlet/sdk`, which the PRD allows to slip to Release 7.
+    the feedback module of `inlet-sdk`, which the PRD allows to slip to Release 7.
     `README.md` in the package is the integrator's guide.)*
 11. *(done: "Crash reports" chapters in `docs/USING-INLET.md` and `docs/API.md`, the
     MCP tables in `docs/MCP.md`, the worker and rate-limit notes in `docs/DEPLOYMENT.md`,
@@ -85,7 +85,7 @@ Each step is independently testable. Mirror the test files named in PRD Appendix
 
 ## Left out, and why
 
-- **`@inlet/sdk/feedback`.** The PRD lets it slip to Release 7 when not cheap; the client
+- **`inlet-sdk/feedback`.** The PRD lets it slip to Release 7 when not cheap; the client
   feedback API is documented and stable, and a wrapper would have been written without a
   consumer.
 - **A Playwright run of the Electron adapter.** Its logic is covered against a fake `electron`

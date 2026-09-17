@@ -1,7 +1,7 @@
 # Inlet — Crash Reports PRD
 
 ## Document Status
-**Status:** Implemented as Release 6 on September 17, 2026: server, interface, MCP tools and `@inlet/sdk/crash` with Node, browser and Electron adapters. Technical choices and rejected alternatives: `docs/DECISIONS.md` section 24. Deferred to Release 7: `@inlet/sdk/feedback`, which section 15 allows.
+**Status:** Implemented as Release 6 on September 17, 2026: server, interface, MCP tools and `inlet-sdk/crash` with Node, browser and Electron adapters. Technical choices and rejected alternatives: `docs/DECISIONS.md` section 24. Deferred to Release 7: `inlet-sdk/feedback`, which section 15 allows.
 **Product:** Inlet — Crash Reports capability
 **Language:** English
 **Foundations:** Accounts, roles, keys, notifications plumbing, export, deletion, deployment, brand, SDK packaging and MCP conventions are on the Foundations PRD and are not repeated here.
@@ -13,7 +13,7 @@
 > **Positioning in one line.** Collect, group, notify, hand off. Inlet tells you that your application broke, how often, on which versions and systems, and for how many users, then hands the developer a content-free report and gets out of the way. It is not Sentry: it never receives a minidump, never symbolicates, never traces, never replays, and never stores a line of your users' content.
 
 ## 1. Summary
-Crash Reports is Inlet's second capability. An application embeds `@inlet/sdk/crash`, or posts a JSON envelope directly, and every failure it observes becomes a **report** in a **crash database**. The server groups reports into **groups** by a fingerprint, keeps counts, first and last seen, releases and systems affected, and how many distinct users were hit, and announces a **new group** or a **regression** in Slack. A developer triages groups in the interface or from an AI agent through MCP, marks a group resolved in a release, and is told when it comes back on a newer one.
+Crash Reports is Inlet's second capability. An application embeds `inlet-sdk/crash`, or posts a JSON envelope directly, and every failure it observes becomes a **report** in a **crash database**. The server groups reports into **groups** by a fingerprint, keeps counts, first and last seen, releases and systems affected, and how many distinct users were hit, and announces a **new group** or a **regression** in Slack. A developer triages groups in the interface or from an AI agent through MCP, marks a group resolved in a release, and is told when it comes back on a newer one.
 
 Everything expensive is already in Inlet: publishable keys that cannot read data, project-level roles, notification delivery, export, deletion with purge, rate limits, MCP. Crash Reports adds a database type, an ingest endpoint, a grouping rule, a reading interface, a handful of tools, and an SDK module.
 
@@ -31,7 +31,7 @@ The first consumer, the HappyVibe desktop application, measured the gap directly
 - Notify on a new group and on a regression, never on an occurrence.
 - Make every reading and state-changing feature available through MCP.
 - Stay within one API container and one PostgreSQL, with a bounded storage footprint per database.
-- Ship `@inlet/sdk/crash` with adapters for Node, browsers and Electron, integrated into HappyVibe first.
+- Ship `inlet-sdk/crash` with adapters for Node, browsers and Electron, integrated into HappyVibe first.
 
 ### 3.2 Non-Goals for Release 6
 - Sentry-protocol compatibility. Decided with the product owner on September 16, 2026; research favours it, so it is recorded as **revisit after Release 6**, not never.
@@ -58,7 +58,7 @@ The first consumer, the HappyVibe desktop application, measured the gap directly
 ## 5. Primary User Journeys
 ### 5.1 Integrate the SDK
 1. A Creator or Admin creates a crash database in an existing project and copies the Collect snippet for their platform.
-2. The developer installs `@inlet/sdk` and calls the crash module's `init` with the base URL, the project's publishable key, the crash database ID and the application's release.
+2. The developer installs `inlet-sdk` and calls the crash module's `init` with the base URL, the project's publishable key, the crash database ID and the application's release.
 3. They install the platform handlers with one call, and optionally call `setUser` when a user signs in.
 4. The first report appears in the Groups tab within seconds; the Slack channel receives one message naming the new group.
 
@@ -138,7 +138,7 @@ The first consumer, the HappyVibe desktop application, measured the gap directly
 - **CR-081:** Reports older than the maximum age shall be evicted at ingest and by a daily pass, so that a database that stops receiving reports still honours the age limit.
 - **CR-082:** Eviction shall never change a group's count, first seen, last seen, releases, systems, affected users or rollups.
 
-### 6.9 SDK — `@inlet/sdk/crash`
+### 6.9 SDK — `inlet-sdk/crash`
 - **CR-090:** The module shall expose `init`, `captureException`, `captureMessage`, `captureReport`, `setUser`, `setTag`, `setTags`, `flush` and `close`, and one handler installer per adapter: `installNodeHandlers`, `installBrowserHandlers`, `installElectronMain`, `installElectronRenderer`. No other public surface in Release 6.
 - **CR-091:** `init` shall take the base URL, the publishable key, the crash database ID, the release, and optionally an environment, a sample rate, a `beforeSend` hook, a queue size, a persistence directory or store, and a redaction policy.
 - **CR-092:** `captureException` shall build an envelope of kind `exception` from an `Error`, with frames parsed from its stack, and accept optional kind, tags, context and fingerprint overrides. `captureMessage` shall build a kind `message` envelope with no frames. `captureReport` shall accept a complete envelope the integrator built, for failure classes the SDK cannot observe itself, such as a parsed native crash summary or an unclean-exit sentinel.
@@ -152,7 +152,7 @@ The first consumer, the HappyVibe desktop application, measured the gap directly
 - **CR-100:** `installNodeHandlers` shall observe `uncaughtException` and `unhandledRejection`. `installBrowserHandlers` shall observe `error` and `unhandledrejection` on `window`. `installElectronMain` shall observe the main-process handlers, `render-process-gone` on every window and `child-process-gone`, shall accept envelopes from renderers over a named IPC channel, and shall keep its queue in the application's user-data directory. `installElectronRenderer` shall route every capture through main and shall export a React error-boundary helper separately.
 - **CR-101:** `setUser(id)` shall attach an opaque user ID of at most 128 characters to subsequent events; `setUser(null)` shall clear it. The SDK shall accept nothing else about the user.
 - **CR-102:** The SDK shall refuse a secret key at `init` and shall refuse to run when the release is empty.
-- **CR-103:** The SDK shall be a module of `@inlet/sdk` under the packaging rules of Foundations FD-010 to FD-014.
+- **CR-103:** The SDK shall be a module of `inlet-sdk` under the packaging rules of Foundations FD-010 to FD-014.
 
 ## 7. API Contract Direction
 Endpoint paths are proposals; the flows are requirements.
@@ -217,7 +217,7 @@ The server accepts exactly these fields and rejects any other top-level key.
 | --- | --- | --- | --- |
 | `eventId` | yes | UUID or 32 hex chars | Client-generated; idempotency key |
 | `timestamp` | yes | RFC 3339 | Client clock; see CR-017 |
-| `sdk` | yes | `{name ≤ 64, version ≤ 32}` | `@inlet/sdk` or the integrator's client name |
+| `sdk` | yes | `{name ≤ 64, version ≤ 32}` | `inlet-sdk` or the integrator's client name |
 | `platform` | no | `node`, `browser`, `electron`, `other` | Defaults from the adapter |
 | `kind` | yes | ≤ 32 chars, lowercase, `-` allowed | Built-in kinds in section 4 or a custom kind |
 | `release` | yes | `{version ≤ 64, build? ≤ 64, channel? ≤ 32}` | Orders releases |
@@ -316,7 +316,7 @@ Indexes: unique `(database_id, fingerprint)` on groups; `(database_id, state, la
 ## 14. Decisions
 **Confirmed with the product owner, September 16, 2026**
 - Inlet-native envelope and SDK only; no Sentry-protocol ingest in Release 6.
-- One SDK package, `@inlet/sdk`, with a crash module and node, browser and electron adapters.
+- One SDK package, `inlet-sdk`, with a crash module and node, browser and electron adapters.
 - Optional integrator-supplied user ID, stored as an opaque string, filterable and counted.
 - Full MCP parity with the interface.
 - Filters by release and operating system at minimum.
@@ -347,7 +347,7 @@ Indexes: unique `(database_id, fingerprint)` on groups; `(database_id, state, la
 **Release 6 — Crash Reports.** Goal: HappyVibe reports every failure class to its own Inlet, the developer triages from Slack, the interface or an agent, and a second application can integrate with the SDK in an afternoon.
 - Foundations changes: FD-001 to FD-009 (typed databases, third scope, delivery kind, retention setting), FD-010 to FD-014 (SDK packaging), FD-020 to FD-031 (MCP and rate-limit conventions made explicit).
 - Crash: CR-001 to CR-004, CR-010 to CR-017, CR-020 to CR-030, CR-040 to CR-049, CR-050 to CR-053, CR-060 and CR-061, CR-070 and CR-071, CR-080 to CR-082, CR-090 to CR-103.
-- SDK: `@inlet/sdk/crash` with node, browser and electron adapters; the feedback module of `@inlet/sdk` may ship as a thin wrapper over the existing client API in the same release if cheap, otherwise Release 7.
+- SDK: `inlet-sdk/crash` with node, browser and electron adapters; the feedback module of `inlet-sdk` may ship as a thin wrapper over the existing client API in the same release if cheap, otherwise Release 7.
 - HappyVibe integration: Appendix B.
 
 **Release 7 — Crash Reports, second pass.** Manual merge, opt-in breadcrumbs, debug-ID symbolication, tag indexing and filtering, object-storage envelope offload, streaming NDJSON export, manual release ordering, and the Sentry-compatibility decision.
