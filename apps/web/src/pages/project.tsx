@@ -80,14 +80,24 @@ export function ProjectPage({ user }: { user: CurrentUser }) {
           <PageHeader title={project.data.name} description={`Project ${project.data.id}`} />
           <Tabs defaultValue="databases">
             <TabsList>
-              <TabsTrigger value="databases">Feedback databases</TabsTrigger>
+              <TabsTrigger value="databases">Databases</TabsTrigger>
               <TabsTrigger value="keys">API keys</TabsTrigger>
               <TabsTrigger value="access">Access</TabsTrigger>
               <TabsTrigger value="settings">Settings</TabsTrigger>
             </TabsList>
 
             <TabsContent value="databases">
-              <DatabasesTab projectId={projectId} />
+              <div className="space-y-10">
+                <section className="space-y-3">
+                  <h2 className="text-base font-semibold">Feedback databases</h2>
+                  <DatabasesTab projectId={projectId} />
+                </section>
+                {/* FD-001, FD-003: a second database type under its own heading. */}
+                <section className="space-y-3">
+                  <h2 className="text-base font-semibold">Crash databases</h2>
+                  <CrashDatabasesSection projectId={projectId} />
+                </section>
+              </div>
             </TabsContent>
             <TabsContent value="keys">
               <CredentialsTab projectId={projectId} />
@@ -183,6 +193,117 @@ function DatabasesTab({ projectId }: { projectId: string }) {
       )}
 
       <CreateDatabaseDialog projectId={projectId} open={creating} onOpenChange={setCreating} />
+    </div>
+  );
+}
+
+/** Release 6: the project's crash databases, listed beside its feedback databases. */
+function CrashDatabasesSection({ projectId }: { projectId: string }) {
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState('');
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const databases = useQuery({
+    queryKey: ['crash-databases', projectId],
+    queryFn: () => api.listCrashDatabases(projectId),
+  });
+  const create = useMutation({
+    mutationFn: () => api.createCrashDatabase(projectId, name.trim()),
+    onSuccess: async (database) => {
+      await queryClient.invalidateQueries({ queryKey: ['crash-databases', projectId] });
+      setName('');
+      setCreating(false);
+      await navigate(`/crash-databases/${database.id}?tab=collect`);
+    },
+    onError: (error) =>
+      toast.error(error instanceof ApiError ? error.message : 'The crash database could not be created.'),
+  });
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm text-muted-foreground">
+          A crash database receives failure reports from one application and groups them, so a
+          crash loop is one line here and one message in Slack.
+        </p>
+        <Button variant="outline" onClick={() => setCreating(true)}>
+          <PlusIcon />
+          New crash database
+        </Button>
+      </div>
+
+      {databases.isLoading ? (
+        <Skeleton className="h-24" />
+      ) : databases.data && databases.data.length > 0 ? (
+        <Card>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead className="text-right">Groups</TableHead>
+                <TableHead className="text-right">Reports kept</TableHead>
+                <TableHead>Created</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {databases.data.map((database) => (
+                <TableRow key={database.id}>
+                  <TableCell>
+                    <Link to={`/crash-databases/${database.id}`} className="font-medium hover:text-primary">
+                      {database.name}
+                    </Link>
+                    <p className="font-mono text-xs text-muted-foreground">{database.id}</p>
+                  </TableCell>
+                  <TableCell className="numeric text-right">{database.groupCount}</TableCell>
+                  <TableCell className="numeric text-right">{database.reportCount}</TableCell>
+                  <TableCell className="numeric text-muted-foreground">{formatRelative(database.createdAt)}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Card>
+      ) : (
+        <p className="text-sm text-muted-foreground">No crash databases yet.</p>
+      )}
+
+      <Dialog open={creating} onOpenChange={setCreating}>
+        <DialogContent>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              create.mutate();
+            }}
+          >
+            <DialogHeader>
+              <DialogTitle>New crash database</DialogTitle>
+              <DialogDescription>
+                One per application. Your project’s publishable key already lets it report; the
+                Collect tab has the snippet.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="my-5 space-y-1.5">
+              <Label htmlFor="crash-database-name">Name</Label>
+              <Input
+                id="crash-database-name"
+                value={name}
+                autoFocus
+                required
+                maxLength={200}
+                placeholder="Desktop app"
+                onChange={(event) => setName(event.target.value)}
+              />
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setCreating(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={create.isPending || name.trim().length === 0}>
+                {create.isPending ? 'Creating' : 'Create'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -214,3 +214,66 @@ function withinSizeBudget(message: SlackMessage): SlackMessage {
     ),
   };
 }
+
+// --- Crash Reports (CR-050 to CR-052, section 8.2) ------------------------------
+
+export type CrashSlackMessageInput = {
+  kind: 'crash_group_opened' | 'crash_group_regressed';
+  databaseName: string;
+  groupUrl: string;
+  group: {
+    kind: string;
+    exceptionType: string | null;
+    topFrame: string | null;
+    module: string | null;
+    count: number;
+    affectedUsers: number;
+    firstSeenAt: Date;
+    lastRelease: string | null;
+    resolvedInRelease: string | null;
+  };
+  settings: {
+    messageTitle: string | null;
+    channel: string | null;
+    username: string | null;
+    iconEmoji: string | null;
+  };
+};
+
+/**
+ * CR-051: `kind · exception type or native fault · top in-app frame or faulting module ·
+ * release`, then count, first seen and affected users, then the link. The message text
+ * from the envelope is never sent: it may contain content. Every envelope-derived field
+ * is escaped; the heading is operator-authored and is not, as for feedback.
+ */
+export function buildCrashSlackMessage(input: CrashSlackMessageInput): SlackMessage {
+  const regression = input.kind === 'crash_group_regressed';
+  const heading = input.settings.messageTitle?.trim() || (regression ? `Crash regression in ${input.databaseName}` : `New crash group in ${input.databaseName}`);
+  const headline = [
+    input.group.kind,
+    input.group.exceptionType,
+    input.group.topFrame ?? input.group.module,
+    input.group.lastRelease,
+  ]
+    .filter((part): part is string => Boolean(part))
+    .map((part) => escapeSlackText(truncateByCodePoint(part, 120)))
+    .join(' · ');
+  const users = input.group.affectedUsers === 1 ? '1 user' : `${input.group.affectedUsers} users`;
+  const meta = `${input.group.count} ${input.group.count === 1 ? 'report' : 'reports'} · first seen ${input.group.firstSeenAt.toISOString().slice(0, 16).replace('T', ' ')} UTC · ${users} affected`;
+  const lines = [`*${heading}*`, headline, meta];
+  if (regression) {
+    lines.push(
+      `resolved in ${escapeSlackText(input.group.resolvedInRelease ?? 'no named release')}, seen again on ${escapeSlackText(input.group.lastRelease ?? '?')}`,
+    );
+  }
+  lines.push(`<${input.groupUrl}|Open in Inlet>`);
+
+  const message: SlackMessage = {
+    text: heading,
+    blocks: [{ type: 'section', text: { type: 'mrkdwn', text: lines.join('\n') } }],
+  };
+  if (input.settings.channel) message.channel = input.settings.channel;
+  if (input.settings.username) message.username = input.settings.username;
+  if (input.settings.iconEmoji) message.icon_emoji = input.settings.iconEmoji;
+  return message;
+}

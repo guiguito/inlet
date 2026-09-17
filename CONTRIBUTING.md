@@ -55,8 +55,8 @@ live URL, so an all-alphanumeric one blocks pushes from this repository *and fro
 fork of it*. If you add a fixture shaped like a credential, break the shape somewhere
 the code under test does not care about.
 
-**Tests are not optional for logic.** The existing suite is 441 unit and integration
-tests plus 58 end-to-end, and it is the reason the project can be changed confidently.
+**Tests are not optional for logic.** The existing suite is 544 unit and integration
+tests plus 69 end-to-end, and it is the reason the project can be changed confidently.
 A behavioural change without a test that fails before it and passes after is not
 finished. Conversely, do not add a test that cannot fail.
 

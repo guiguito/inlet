@@ -137,3 +137,44 @@ name, and a mistyped identifier fails closed rather than deleting the wrong thin
 A failed tool call comes back with the stable error code in its message, so an agent
 can act on it: `form_not_published` means publish the form, `stale_draft_revision`
 means re-read the draft, `last_admin_removal` means promote someone else first.
+
+## Crash Reports tools
+
+Release 6 adds a second database type. A **crash database** (`cdb_…`) receives crash
+reports from an application, groups them by fingerprint into **groups**, and tracks
+**releases**. The tools mirror the HTTP routes one for one (Crash Reports PRD section 8.3).
+
+### Reading
+
+| Tool | What it does |
+| --- | --- |
+| `list_crash_databases`, `get_crash_database` | The crash databases of a project; one of them with its retention, counts and what was dropped in the last 24 hours. |
+| `list_crash_groups` | Groups with aggregates and a sparkline, filtered by state, kind, release, OS, architecture, environment, user ID, time range and text, sorted by last seen, first seen, count or affected users. Returns the total. |
+| `get_crash_group` | One group: state, breakdowns by release and OS, and its daily timeline with release markers. |
+| `list_crash_reports`, `get_crash_report` | The retained reports of a group, newest first, and one report with its envelope. `context` is whatever the integrator sent. |
+| `list_crash_releases` | Releases in first-seen order with reports, groups and new groups. |
+| `get_crash_stats` | Reports and new groups per day over 7, 30 or 90 days, honouring the list filters; `by=release`, `os`, `environment` or `kind` adds the range broken down by that dimension. |
+| `export_crash_groups`, `export_crash_reports` | Groups as JSON or CSV; reports as newline-delimited JSON. Both follow the filters. |
+| `get_crash_retention` | The report cap and maximum age, with the platform bounds. |
+
+### Writing
+
+| Tool | What it does |
+| --- | --- |
+| `create_crash_database`, `rename_crash_database` | A crash database for one application. The project's existing publishable key ingests into it. |
+| `update_crash_group_state` | Resolve one or many groups, optionally in a release; ignore; reopen. A resolved group counts reports from its release or earlier silently and reopens as a regression on a later release. |
+| `update_crash_retention` | Change the cap (1,000 to 100,000) or the age (7 to 365 days, or null for unlimited). |
+| `send_crash_test_report` | Posts one envelope of kind `message` to check the pipeline, including Slack. |
+
+### Destructive
+
+| Tool | What it demands |
+| --- | --- |
+| `delete_crash_group` | The group ID, repeated as `confirm`. |
+| `delete_crash_database` | The database's exact name as `confirm`. |
+
+`list_members`, `invite_member`, `set_member_role`, `remove_member`, `list_invitations`,
+`revoke_invitation`, `get_slack_notifications`, `update_slack_notifications`,
+`send_slack_test_message` and `get_deletion_impact` accept a crash database ID as their
+`databaseId`. There is no tool to edit or delete a single crash report, because the API has
+none: reports are immutable and expire under retention.

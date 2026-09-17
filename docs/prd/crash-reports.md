@@ -1,14 +1,14 @@
 # Inlet — Crash Reports PRD
 
 ## Document Status
-**Status:** Requirements baseline for Release 6 — ready for technical design
+**Status:** Implemented as Release 6 on September 17, 2026: server, interface, MCP tools and `@inlet/sdk/crash` with Node, browser and Electron adapters. Technical choices and rejected alternatives: `docs/DECISIONS.md` section 24. Deferred to Release 7: `@inlet/sdk/feedback`, which section 15 allows.
 **Product:** Inlet — Crash Reports capability
 **Language:** English
 **Foundations:** Accounts, roles, keys, notifications plumbing, export, deletion, deployment, brand, SDK packaging and MCP conventions are on the Foundations PRD and are not repeated here.
 **Sources:** the HappyVibe "Crashreporting?" proposal (revised September 16, 2026), the competitor research in Appendix A, and the Inlet codebase as of Release 5.
 **Notion page:** https://app.notion.com/p/3ddd33dfffca81129df2c8a1e4af25cb
 **Repository mirror:** `docs/prd/crash-reports.md`
-**Last revised:** September 16, 2026
+**Last revised:** September 17, 2026
 
 > **Positioning in one line.** Collect, group, notify, hand off. Inlet tells you that your application broke, how often, on which versions and systems, and for how many users, then hands the developer a content-free report and gets out of the way. It is not Sentry: it never receives a minidump, never symbolicates, never traces, never replays, and never stores a line of your users' content.
 
@@ -235,14 +235,14 @@ The server accepts exactly these fields and rejects any other top-level key.
 Total envelope ≤ 64 KiB. Every HappyVibe §5 field maps onto this table: its `pins` and counts go in `tags` or `context`, its `native` and `exit` blocks map directly, and its `fingerprint` becomes a client-supplied fingerprint.
 
 ### 9.2 Data Model
-- **Crash Database:** ID (`cdb_`), project ID, name, grouping version, retention cap, retention max age, created by, timestamps, dropped counters (rolling 24 h).
+- **Crash Database:** ID (`cdb_`), project ID, name, grouping version, retention cap, retention max age, created by, timestamps. Dropped counters (CR-004) are hourly rows in a side table, summed over the last 24 hours.
 - **Crash Database Membership:** database ID, user ID, role. Same shape as feedback-database membership (Foundations 10.6).
 - **Release:** ID, database ID, version, build, channel, order (per-database sequence), first seen. Unique on `(database, version, build, channel)`.
 - **Group:** ID (`cgr_`), database ID, fingerprint (unique per database), title fields (kind, exception type, top frame, module), state, regressed flag, resolved-in release ID, resolved by, resolved at, count, first seen, last seen, first release ID, last release ID, affected-user count, latest report ID, timestamps.
 - **Group User:** group ID, user ID. Unique pair; its cardinality is the affected-user count.
-- **Group Daily:** group ID, day, release ID, OS name, count. The rollup behind sparklines and breakdowns.
+- **Group Daily:** group ID, day, release ID, OS name, environment, count. The rollup behind sparklines and breakdowns. Environment was added to the key at implementation so the CR-048 timeline can honour the environment filter without scanning reports.
 - **Report:** ID (`crp_`), database ID, group ID, event ID (unique per database), received at, effective at, clock-skew flag, kind, release ID, environment, OS name, OS version, arch, user ID (nullable), credential ID, envelope (`jsonb`, ≤ 64 KiB). Immutable.
-- **Notification Delivery:** shared table with kind `crash_group_opened` or `crash_group_regressed` and a group ID as source (Foundations FD-006).
+- **Notification Delivery:** shared table with kind `crash_group_opened` or `crash_group_regressed` and a group ID as source (Foundations FD-006). The Slack settings row is keyed on the database ID of either type; it carries no foreign key and is removed by the deletion service.
 
 Indexes: unique `(database_id, fingerprint)` on groups; `(database_id, state, last_seen desc)`, `(database_id, last_seen desc)`, `(database_id, count desc)` on groups; unique `(database_id, event_id)` on reports; `(database_id, group_id, received_at desc)`, `(database_id, release_id)`, `(database_id, user_id)` on reports; `(group_id, day)` on the daily rollup. No index on the envelope.
 

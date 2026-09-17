@@ -4,10 +4,10 @@
 
 # Inlet
 
-**The self-hosted feedback collector.**
+**The self-hosted feedback collector, and crash reporter.**
 
-Put a feedback form in any app in an afternoon, then read what comes back.
-Your database, your object store, your rules.
+Put a feedback form in any app in an afternoon, then read what comes back. Collect the
+crashes too, grouped so a crash loop is one line. Your database, your object store, your rules.
 
 [Quick start](#quick-start) ·
 [Using it](docs/USING-INLET.md) ·
@@ -18,7 +18,7 @@ Your database, your object store, your rules.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-C2410C.svg)](LICENSE)
 ![Node 22+](https://img.shields.io/badge/node-%3E%3D22-informational)
-![Tests](https://img.shields.io/badge/tests-451%20unit%20%2B%20integration%2C%2058%20end--to--end-brightgreen)
+![Tests](https://img.shields.io/badge/tests-544%20unit%20%2B%20integration%2C%2069%20end--to--end-brightgreen)
 
 </div>
 
@@ -38,6 +38,13 @@ collect against it two ways:
 Both feed the same place, and a response looks identical whichever way it arrived.
 Responses, screenshots and version history live in your PostgreSQL and your S3 bucket.
 
+It also collects **crash reports**. An application sends a content-free envelope, and Inlet
+groups the reports by fingerprint, counts them, tracks which releases and systems are
+affected and how many users were hit, then announces a new bug or a regression in Slack. One
+crash loop on one machine is one line here and one message there, not a thousand. It is not
+Sentry: it never takes a memory dump, never symbolicates, and stores nothing your code did
+not put in the envelope.
+
 It is deliberately not an analytics product. There are no dashboards, no funnels and no
 sentiment scoring — it collects feedback faithfully, tells you when it arrives, and
 hands it back as JSON or CSV whenever you ask.
@@ -56,8 +63,14 @@ hands it back as JSON or CSV whenever you ask.
   filename-trusted; EXIF dropped; animated images refused; optional ClamAV scanning.
 - **Slack notifications that cannot lose feedback.** The response is stored first and the
   notification queued in the same transaction, then retried with backoff.
-- **It talks to AI agents.** An MCP server with 36 tools, so Claude can summarise your
-  week's feedback in your own words.
+- **Crashes arrive grouped, not in a flood.** Server-side fingerprinting on the failure
+  kind, the normalized message and your own stack frames, with line numbers deliberately
+  ignored. Resolve a bug in a release and Inlet tells you if it comes back on a later one.
+- **One SDK, four adapters.** `@inlet/sdk/crash` for Node, browsers, and Electron's main and
+  renderer processes. Zero runtime dependencies, a queue that survives restarts, messages
+  redacted before they leave, and client-side dedupe so a crash loop sends once.
+- **It talks to AI agents.** An MCP server with 55 tools, so Claude can summarise your
+  week's feedback, or triage a crash group and resolve it in the release that fixes it.
 - **Every choice is written down.** [DECISIONS.md](docs/DECISIONS.md) records what was
   built, why, and what was rejected — including the bugs the tests found.
 
@@ -190,11 +203,12 @@ image ships, so what is tested is what is deployed.
 
 | Path | What lives there |
 | --- | --- |
-| `packages/shared` | Form definitions, answer validation, limits, error codes. Shared by the API and the web app so the contract cannot drift. |
+| `packages/shared` | Form definitions, answer validation, the crash envelope and its fingerprint, limits, error codes. Shared by the API, the web app and the SDK so the contract cannot drift. |
+| `packages/sdk` | `@inlet/sdk`, the client SDK. `crash` with Node, browser and Electron adapters. |
 | `apps/api` | Fastify server, Drizzle schema and migrations, services, routes, tests. |
 | `apps/web` | React management interface, form builder, hosted form page, reference renderer. |
 | `apps/mcp` | `inlet-mcp`, a thin layer over the HTTP API. |
-| `e2e` | Playwright suites: the HTTP contract, and the interface in a browser. |
+| `e2e` | Playwright suites: the HTTP contract, the SDK in Node and in a real browser, and the interface in a browser. |
 | `docs` | PRD, API guide, MCP guide, deployment guide, technical decisions, generated OpenAPI. |
 | `scripts` | Local PostgreSQL and MinIO, and the end-to-end server. |
 
@@ -206,6 +220,7 @@ image ships, so what is tested is what is deployed.
 | [DEPLOYMENT.md](docs/DEPLOYMENT.md) | Configuration, reverse proxies, managed PostgreSQL and S3, backups, upgrades. |
 | [API.md](docs/API.md) | The integration guide, with the retry contract in full. |
 | [MCP.md](docs/MCP.md) | Every MCP tool and what it may do. |
+| [packages/sdk](packages/sdk/README.md) | `@inlet/sdk` for integrators: install, capture, what is sent and what never is. |
 | [PRD.md](docs/PRD.md) | The product requirements, split into [Foundations](docs/prd/foundations.md), [Feedback Collection](docs/prd/feedback-collection.md), [Crash Reports](docs/prd/crash-reports.md) and [UX Analytics](docs/prd/ux-analytics.md); cited by ID throughout the source. |
 | [DECISIONS.md](docs/DECISIONS.md) | Every technical choice, its reasoning, and the rejected alternatives. |
 

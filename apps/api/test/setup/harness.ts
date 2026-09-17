@@ -28,6 +28,14 @@ export type Harness = {
 
 const TABLES = [
   'notification_deliveries',
+  'crash_reports',
+  'crash_group_daily',
+  'crash_group_users',
+  'crash_groups',
+  'crash_releases',
+  'crash_dropped_counts',
+  'crash_database_memberships',
+  'crash_databases',
   'submission_views',
   'slack_notifications',
   'storage_purge_queue',

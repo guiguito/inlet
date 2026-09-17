@@ -18,6 +18,10 @@ export const ID_PREFIXES = {
   credential: 'cred',
   user: 'usr',
   invitation: 'inv',
+  crashDatabase: 'cdb',
+  crashGroup: 'cgr',
+  crashReport: 'crp',
+  crashRelease: 'crl',
 } as const;
 
 export type IdKind = keyof typeof ID_PREFIXES;

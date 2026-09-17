@@ -3,11 +3,14 @@ import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { ROLES } from '@inlet/shared';
 import type { AppContext } from '../context.js';
 import { apiError } from '../lib/errors.js';
-import { requireDatabase, requireProject } from '../services/access.js';
+import { requireCrashDatabase, requireDatabase, requireProject } from '../services/access.js';
 import { requireManagementPrincipal } from '../services/principal.js';
 import {
+  clearCrashDatabaseRole,
   clearDatabaseRole,
+  listCrashDatabaseMembers,
   listDatabaseMembers,
+  setCrashDatabaseRole,
   listProjectMembers,
   removeProjectMember,
   setDatabaseRole,
@@ -311,6 +314,119 @@ export function memberRoutes(ctx: AppContext): FastifyPluginAsyncZod {
           kind: 'feedbackDatabase',
           feedbackDatabaseId: request.params.databaseId,
         });
+      },
+    );
+
+    // --- Crash databases: the third scope (FD-007) --------------------------
+
+    app.get(
+      '/crash-databases/:databaseId/members',
+      {
+        schema: {
+          tags: ['Access'],
+          summary: 'List who can reach one crash database',
+          params: databaseIdParam,
+          response: { 200: z.array(memberSchema), ...errorsFor(401, 403, 404) },
+        },
+      },
+      async (request) => {
+        const principal = await requireManagementPrincipal(ctx, request);
+        await requireCrashDatabase(ctx.db, principal, request.params.databaseId, 'viewer');
+        return listCrashDatabaseMembers(ctx, request.params.databaseId);
+      },
+    );
+
+    app.put(
+      '/crash-databases/:databaseId/members/:userId',
+      {
+        schema: {
+          tags: ['Access'],
+          summary: 'Assign a role on one crash database',
+          params: databaseIdParam.extend({ userId: z.string().min(1) }),
+          body: setRoleBodySchema,
+          response: { 200: memberSchema, ...errorsFor(400, 401, 403, 404) },
+        },
+      },
+      async (request) => {
+        const principal = await requireManagementPrincipal(ctx, request);
+        await requireCrashDatabase(ctx.db, principal, request.params.databaseId, 'admin');
+        return setCrashDatabaseRole(ctx, request.params.databaseId, request.params.userId, request.body.role);
+      },
+    );
+
+    app.delete(
+      '/crash-databases/:databaseId/members/:userId',
+      {
+        schema: {
+          tags: ['Access'],
+          summary: 'Clear a crash-database assignment',
+          params: databaseIdParam.extend({ userId: z.string().min(1) }),
+          response: { 200: okSchema, ...errorsFor(401, 403, 404) },
+        },
+      },
+      async (request) => {
+        const principal = await requireManagementPrincipal(ctx, request);
+        await requireCrashDatabase(ctx.db, principal, request.params.databaseId, 'admin');
+        await clearCrashDatabaseRole(ctx, request.params.databaseId, request.params.userId);
+        return { ok: true as const };
+      },
+    );
+
+    app.get(
+      '/crash-databases/:databaseId/invitations',
+      {
+        schema: {
+          tags: ['Access'],
+          summary: 'List a crash database’s invitations',
+          params: databaseIdParam,
+          response: { 200: z.array(invitationSchema), ...errorsFor(401, 403, 404) },
+        },
+      },
+      async (request) => {
+        const principal = await requireManagementPrincipal(ctx, request);
+        await requireCrashDatabase(ctx.db, principal, request.params.databaseId, 'admin');
+        return listInvitations(ctx, { kind: 'crashDatabase', crashDatabaseId: request.params.databaseId });
+      },
+    );
+
+    app.post(
+      '/crash-databases/:databaseId/invitations',
+      {
+        schema: {
+          tags: ['Access'],
+          summary: 'Invite someone to one crash database',
+          params: databaseIdParam,
+          body: createInvitationBodySchema,
+          response: { 201: invitationWithLinkSchema, ...errorsFor(400, 401, 403, 404) },
+        },
+      },
+      async (request, reply) => {
+        const principal = await requireManagementPrincipal(ctx, request);
+        await requireCrashDatabase(ctx.db, principal, request.params.databaseId, 'admin');
+        const created = await createInvitation(
+          ctx,
+          { kind: 'crashDatabase', crashDatabaseId: request.params.databaseId },
+          request.body.role,
+          principal.kind === 'user' ? principal.userId : null,
+        );
+        return reply.code(201).send({ ...created.invitation, token: created.token, url: invitationUrl(ctx, created.token) });
+      },
+    );
+
+    app.post(
+      '/crash-databases/:databaseId/invitations/:invitationId/revoke',
+      {
+        schema: {
+          tags: ['Access'],
+          summary: 'Revoke an unredeemed crash-database invitation',
+          params: databaseIdParam.extend({ invitationId: z.string().min(1) }),
+          response: { 200: invitationSchema, ...errorsFor(401, 403, 404, 409) },
+        },
+      },
+      async (request) => {
+        const principal = await requireManagementPrincipal(ctx, request);
+        await requireCrashDatabase(ctx.db, principal, request.params.databaseId, 'admin');
+        return revokeInvitation(ctx, request.params.invitationId, { kind: 'crashDatabase', crashDatabaseId: request.params.databaseId });
       },
     );
 

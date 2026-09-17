@@ -2,11 +2,14 @@ import { and, eq, isNull } from 'drizzle-orm';
 import { effectiveRole, roleAtLeast, type Role } from '@inlet/shared';
 import type { Db } from '../db/index.js';
 import {
+  crashDatabaseMemberships,
+  crashDatabases,
   feedbackDatabaseMemberships,
   feedbackDatabases,
   projectCredentials,
   projectMemberships,
   projects,
+  type CrashDatabaseRow,
   type FeedbackDatabaseRow,
   type ProjectCredentialRow,
   type ProjectRow,
@@ -204,6 +207,83 @@ export async function requireClientDatabase(
     );
   }
   return database;
+}
+
+// --- Crash databases (Release 6) ---------------------------------------------
+//
+// The same three questions as for feedback databases, asked of the crash tables. Kept as
+// separate functions rather than one generic pair over a "database type" parameter: the
+// two membership tables have different columns, Drizzle cannot abstract over them without
+// losing the row types, and three short functions read better than a generic that
+// somebody has to decode at three in the morning.
+
+export type CrashDatabaseAccess = { database: CrashDatabaseRow; project: ProjectRow; role: Role };
+
+/** FD-007: project Admin wins, then the crash-database assignment, then the project role. */
+export async function crashDatabaseRoleOf(db: Db, principal: Principal, database: CrashDatabaseRow): Promise<Role | null> {
+  const projectRole = await projectRoleOf(db, principal, database.projectId);
+  if (principal.kind === 'credential') return projectRole;
+  if (projectRole === 'admin') return 'admin';
+
+  const rows = await db
+    .select({ role: crashDatabaseMemberships.role })
+    .from(crashDatabaseMemberships)
+    .where(and(eq(crashDatabaseMemberships.crashDatabaseId, database.id), eq(crashDatabaseMemberships.userId, principal.userId)))
+    .limit(1);
+  return effectiveRole(projectRole, rows[0]?.role ?? null);
+}
+
+/** Section 7.3: reading needs Viewer, state changes Creator, deletion and retention Admin. */
+export async function requireCrashDatabase(db: Db, principal: Principal, databaseId: string, required: Role): Promise<CrashDatabaseAccess> {
+  const [found] = await db
+    .select({ database: crashDatabases, project: projects })
+    .from(crashDatabases)
+    .innerJoin(projects, eq(projects.id, crashDatabases.projectId))
+    .where(eq(crashDatabases.id, databaseId))
+    .limit(1);
+  if (!found) throw apiError('crash_database_not_found', 'That crash database does not exist.');
+
+  const role = await crashDatabaseRoleOf(db, principal, found.database);
+  if (role === null) throw apiError('crash_database_not_found', 'That crash database does not exist.');
+  if (!roleAtLeast(role, required)) {
+    throw errors.forbidden(`This action needs the ${required} role on this crash database.`);
+  }
+  return { database: found.database, project: found.project, role };
+}
+
+/**
+ * CR-010: ingest takes any project credential, publishable or secret, for a crash database
+ * of that credential's project. No role applies; the reporting application is not a member.
+ */
+export async function requireClientCrashDatabase(db: Db, credential: ProjectCredentialRow, databaseId: string): Promise<CrashDatabaseRow> {
+  const [database] = await db
+    .select()
+    .from(crashDatabases)
+    .where(and(eq(crashDatabases.id, databaseId), eq(crashDatabases.projectId, credential.projectId)))
+    .limit(1);
+  if (!database) {
+    throw apiError('crash_database_inaccessible', 'That crash database does not belong to this API key’s project.');
+  }
+  return database;
+}
+
+/** Crash databases the principal can at least view, for listing endpoints. */
+export async function listAccessibleCrashDatabaseIds(db: Db, principal: Principal): Promise<string[]> {
+  if (principal.kind === 'credential') {
+    if (principal.credential.type !== 'secret') return [];
+    const rows = await db.select({ id: crashDatabases.id }).from(crashDatabases).where(eq(crashDatabases.projectId, principal.credential.projectId));
+    return rows.map((row) => row.id);
+  }
+  const viaProject = await db
+    .select({ id: crashDatabases.id })
+    .from(crashDatabases)
+    .innerJoin(projectMemberships, eq(projectMemberships.projectId, crashDatabases.projectId))
+    .where(eq(projectMemberships.userId, principal.userId));
+  const viaDatabase = await db
+    .select({ id: crashDatabaseMemberships.crashDatabaseId })
+    .from(crashDatabaseMemberships)
+    .where(eq(crashDatabaseMemberships.userId, principal.userId));
+  return [...new Set([...viaProject, ...viaDatabase].map((row) => row.id))];
 }
 
 /** FR-082: rejects a publishable key outside the client feedback flow. */

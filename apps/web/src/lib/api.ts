@@ -349,7 +349,216 @@ export type SlackNotificationsPatch = {
 
 // --- Management operations ---------------------------------------------------
 
+/**
+ * FD-002: members, invitations and Slack settings are shared by both database types and
+ * live under each type's own routes. The ID prefix says which.
+ */
+function databaseBase(databaseId: string): string {
+  return databaseId.startsWith('cdb_') ? `/v1/crash-databases/${databaseId}` : `/v1/feedback-databases/${databaseId}`;
+}
+
+// --- Crash Reports (Release 6) -------------------------------------------------
+
+export type CrashDatabase = {
+  id: string;
+  projectId: string;
+  name: string;
+  type: 'crash';
+  groupingVersion: number;
+  retention: { maxReports: number; maxAgeDays: number | null };
+  groupCount: number;
+  reportCount: number;
+  dropped24h: { rateLimited: number; evicted: number };
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CrashGroupState = 'open' | 'resolved' | 'ignored';
+
+export type CrashGroup = {
+  id: string;
+  kind: string;
+  exceptionType: string | null;
+  topFrame: string | null;
+  module: string | null;
+  sampleMessage: string | null;
+  state: CrashGroupState;
+  regressed: boolean;
+  resolvedInRelease: string | null;
+  stateChangedAt: string | null;
+  count: number;
+  affectedUsers: number;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  firstRelease: string | null;
+  lastRelease: string | null;
+  latestReportId: string | null;
+  sparkline: number[];
+};
+
+export type CrashTimeline = {
+  days: { day: string; reports: number; newGroups: number }[];
+  releases: { version: string; day: string }[];
+  /** Present when `by` was release, os or environment (CR-046). */
+  breakdown?: { by: 'release' | 'os' | 'environment' | 'kind'; rows: { key: string; reports: number; groups: number }[] };
+};
+
+export type CrashGroupDetail = Omit<CrashGroup, 'sparkline'> & {
+  byRelease: { version: string; count: number }[];
+  byOs: { os: string; count: number }[];
+  timeline: CrashTimeline;
+};
+
+export type CrashReport = {
+  id: string;
+  groupId: string;
+  eventId: string;
+  receivedAt: string;
+  effectiveAt: string;
+  clockSkew: boolean;
+  kind: string;
+  release: string;
+  environment: string;
+  os: { name: string | null; version: string | null; arch: string | null };
+  userId: string | null;
+  envelope: CrashEnvelopeView;
+};
+
+/** The envelope as the interface reads it. Every field is optional on the way out. */
+export type CrashEnvelopeView = {
+  eventId?: string;
+  timestamp?: string;
+  sdk?: { name: string; version: string };
+  platform?: string;
+  kind?: string;
+  release?: { version: string; build?: string; channel?: string };
+  environment?: string;
+  exception?: {
+    type: string;
+    message: string;
+    handled: boolean;
+    frames: { function?: string; file?: string; line?: number; col?: number; inApp: boolean }[];
+  };
+  native?: { process: string; fault: string; module: string; dumpBytes?: number };
+  exit?: { code?: number; signal?: string; reason?: string; name?: string; lastUptimeMs?: number };
+  os?: { name: string; version?: string; arch?: string };
+  runtime?: { name: string; version?: string };
+  user?: { id: string };
+  tags?: Record<string, string>;
+  context?: Record<string, unknown>;
+  fingerprint?: string[];
+};
+
+export type CrashRelease = {
+  version: string;
+  build: string;
+  channel: string;
+  order: number;
+  firstSeenAt: string;
+  reports: number;
+  groups: number;
+  newGroups: number;
+};
+
+export type CrashRetention = {
+  maxReports: number;
+  maxAgeDays: number | null;
+  bounds: {
+    maxReports: { min: number; max: number; default: number };
+    maxAgeDays: { min: number; max: number; default: number };
+  };
+};
+
+export type CrashGroupFilters = {
+  state?: CrashGroupState;
+  kind?: string;
+  release?: string;
+  os?: string;
+  environment?: string;
+  userId?: string;
+  q?: string;
+};
+
+export type CrashGroupSort = 'lastSeen' | 'firstSeen' | 'count' | 'affectedUsers';
+
+export type CrashStateChange =
+  | { state: 'resolved'; resolvedInRelease?: string }
+  | { state: 'ignored' }
+  | { state: 'open' };
+
+function crashQuery(params: Record<string, string | number | undefined>): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== '') search.set(key, String(value));
+  }
+  const qs = search.toString();
+  return qs ? `?${qs}` : '';
+}
+
 export const api = {
+  // --- Crash databases ---
+  listCrashDatabases: (projectId: string) =>
+    request<CrashDatabase[]>(`/v1/projects/${projectId}/crash-databases`),
+  createCrashDatabase: (projectId: string, name: string) =>
+    request<CrashDatabase>(`/v1/projects/${projectId}/crash-databases`, { method: 'POST', body: { name } }),
+  getCrashDatabase: (databaseId: string) => request<CrashDatabase>(`/v1/crash-databases/${databaseId}`),
+  renameCrashDatabase: (databaseId: string, name: string) =>
+    request<CrashDatabase>(`/v1/crash-databases/${databaseId}`, { method: 'PATCH', body: { name } }),
+  deleteCrashDatabase: (databaseId: string) =>
+    request<{ deleted: true }>(`/v1/crash-databases/${databaseId}`, { method: 'DELETE' }),
+  crashDeletionImpact: (databaseId: string) =>
+    request<{ groups: number; reports: number; notice: string }>(`/v1/crash-databases/${databaseId}/deletion-impact`),
+  getCrashRetention: (databaseId: string) => request<CrashRetention>(`/v1/crash-databases/${databaseId}/retention`),
+  updateCrashRetention: (databaseId: string, patch: { maxReports?: number; maxAgeDays?: number | null }) =>
+    request<CrashRetention>(`/v1/crash-databases/${databaseId}/retention`, { method: 'PATCH', body: patch }),
+  listCrashGroups: (
+    databaseId: string,
+    options: CrashGroupFilters & { sort?: CrashGroupSort; limit?: number; offset?: number; days?: number },
+  ) => request<{ groups: CrashGroup[]; total: number }>(`/v1/crash-databases/${databaseId}/groups${crashQuery(options)}`),
+  getCrashGroup: (databaseId: string, groupId: string, days: number) =>
+    request<CrashGroupDetail>(`/v1/crash-databases/${databaseId}/groups/${groupId}${crashQuery({ days })}`),
+  setCrashGroupState: (databaseId: string, groupId: string, change: CrashStateChange) =>
+    request<Omit<CrashGroup, 'sparkline'>>(`/v1/crash-databases/${databaseId}/groups/${groupId}/state`, { method: 'POST', body: change }),
+  setCrashGroupsState: (databaseId: string, groupIds: string[], change: CrashStateChange) =>
+    request<{ updated: number }>(`/v1/crash-databases/${databaseId}/groups/state`, { method: 'POST', body: { groupIds, change } }),
+  deleteCrashGroup: (databaseId: string, groupId: string) =>
+    request<{ deleted: true }>(`/v1/crash-databases/${databaseId}/groups/${groupId}`, { method: 'DELETE' }),
+  listCrashGroupReports: (databaseId: string, groupId: string, limit = 20) =>
+    request<{ reports: CrashReport[] }>(`/v1/crash-databases/${databaseId}/groups/${groupId}/reports${crashQuery({ limit })}`),
+  getCrashReport: (databaseId: string, reportId: string) =>
+    request<CrashReport>(`/v1/crash-databases/${databaseId}/reports/${reportId}`),
+  listCrashReleases: (databaseId: string) =>
+    request<{ releases: CrashRelease[] }>(`/v1/crash-databases/${databaseId}/releases`),
+  getCrashStats: (databaseId: string, options: CrashGroupFilters & { days: number; by?: 'day' | 'release' | 'os' | 'environment' | 'kind' }) =>
+    request<CrashTimeline>(`/v1/crash-databases/${databaseId}/stats${crashQuery(options)}`),
+  crashGroupsExportUrl: (databaseId: string, format: 'json' | 'csv', filters: CrashGroupFilters) =>
+    `/v1/crash-databases/${databaseId}/groups/export${crashQuery({ ...filters, format })}`,
+  crashReportsExportUrl: (databaseId: string, filters: CrashGroupFilters) =>
+    `/v1/crash-databases/${databaseId}/reports/export${crashQuery(filters)}`,
+  /**
+   * The Collect tab's "send a test report": one envelope of kind `message`, posted the way
+   * an application would, with the project's publishable key rather than the session.
+   */
+  sendCrashTestReport: (databaseId: string, publishableKey: string) =>
+    request<{ reportId: string; groupId: string; isNewGroup: boolean; isRegression: boolean }>(
+      `/v1/crash-databases/${databaseId}/reports`,
+      {
+        method: 'POST',
+        credentials: 'omit',
+        headers: { authorization: `Bearer ${publishableKey}` },
+        body: {
+          eventId: crypto.randomUUID(),
+          timestamp: new Date().toISOString(),
+          sdk: { name: 'inlet-web', version: '0.1.0' },
+          platform: 'browser',
+          kind: 'message',
+          release: { version: 'test' },
+          environment: 'development',
+          exception: { type: 'TestReport', message: 'Test report from the Collect tab', handled: true, frames: [] },
+        },
+      },
+    ),
+
   signIn: (email: string, password: string) =>
     request<CurrentUser>('/v1/auth/sign-in', { method: 'POST', body: { email, password } }),
   signOut: () => request<{ ok: true }>('/v1/auth/sign-out', { method: 'POST' }),
@@ -449,15 +658,15 @@ export const api = {
     }),
 
   getSlackNotifications: (databaseId: string) =>
-    request<SlackNotifications>(`/v1/feedback-databases/${databaseId}/slack-notifications`),
+    request<SlackNotifications>(`${databaseBase(databaseId)}/slack-notifications`),
   updateSlackNotifications: (databaseId: string, patch: SlackNotificationsPatch) =>
-    request<SlackNotifications>(`/v1/feedback-databases/${databaseId}/slack-notifications`, {
+    request<SlackNotifications>(`${databaseBase(databaseId)}/slack-notifications`, {
       method: 'PATCH',
       body: patch,
     }),
   sendSlackTestMessage: (databaseId: string) =>
     request<{ delivered: true }>(
-      `/v1/feedback-databases/${databaseId}/slack-notifications/test`,
+      `${databaseBase(databaseId)}/slack-notifications/test`,
       { method: 'POST' },
     ),
 
@@ -529,14 +738,14 @@ export const api = {
     request<{ ok: true }>(`/v1/projects/${projectId}/members/${userId}`, { method: 'DELETE' }),
 
   listDatabaseMembers: (databaseId: string) =>
-    request<Member[]>(`/v1/feedback-databases/${databaseId}/members`),
+    request<Member[]>(`${databaseBase(databaseId)}/members`),
   setDatabaseRole: (databaseId: string, userId: string, role: Role) =>
-    request<Member>(`/v1/feedback-databases/${databaseId}/members/${userId}`, {
+    request<Member>(`${databaseBase(databaseId)}/members/${userId}`, {
       method: 'PUT',
       body: { role },
     }),
   clearDatabaseRole: (databaseId: string, userId: string) =>
-    request<{ ok: true }>(`/v1/feedback-databases/${databaseId}/members/${userId}`, {
+    request<{ ok: true }>(`${databaseBase(databaseId)}/members/${userId}`, {
       method: 'DELETE',
     }),
 
@@ -553,15 +762,15 @@ export const api = {
     }),
 
   listDatabaseInvitations: (databaseId: string) =>
-    request<Invitation[]>(`/v1/feedback-databases/${databaseId}/invitations`),
+    request<Invitation[]>(`${databaseBase(databaseId)}/invitations`),
   inviteToDatabase: (databaseId: string, role: Role) =>
-    request<InvitationWithLink>(`/v1/feedback-databases/${databaseId}/invitations`, {
+    request<InvitationWithLink>(`${databaseBase(databaseId)}/invitations`, {
       method: 'POST',
       body: { role },
     }),
   revokeDatabaseInvitation: (databaseId: string, invitationId: string) =>
     request<Invitation>(
-      `/v1/feedback-databases/${databaseId}/invitations/${invitationId}/revoke`,
+      `${databaseBase(databaseId)}/invitations/${invitationId}/revoke`,
       { method: 'POST' },
     ),
 

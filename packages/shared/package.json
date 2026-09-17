@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./crash-core": {
+      "types": "./dist/crash-core.d.ts",
+      "default": "./dist/crash-core.js"
     }
   },
   "scripts": {

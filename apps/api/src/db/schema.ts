@@ -12,7 +12,7 @@ import {
   timestamp,
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
-import { SLACK_CONTENT_LEVELS, type FormDefinition, type StoredAnswers } from '@inlet/shared';
+import { SLACK_CONTENT_LEVELS, type CrashEnvelope, type FormDefinition, type StoredAnswers } from '@inlet/shared';
 
 /**
  * The Inlet schema (PRD section 10).
@@ -42,6 +42,20 @@ export const slackContentEnum = pgEnum('inlet_slack_content', SLACK_CONTENT_LEVE
  * decode at three in the morning.
  */
 export const deliveryStatusEnum = pgEnum('inlet_delivery_status', ['pending', 'sent', 'failed']);
+
+/**
+ * Foundations FD-006: what a delivery announces. One queue, one renderer per kind.
+ * `submission_received` is the Release 4 behaviour and the column default, so every
+ * pre-existing row keeps its meaning.
+ */
+export const deliveryKindEnum = pgEnum('inlet_delivery_kind', [
+  'submission_received',
+  'crash_group_opened',
+  'crash_group_regressed',
+]);
+
+/** CR-026. */
+export const crashGroupStateEnum = pgEnum('inlet_crash_group_state', ['open', 'resolved', 'ignored']);
 
 const createdAt = timestamp('created_at', { withTimezone: true }).notNull().defaultNow();
 const updatedAt = timestamp('updated_at', { withTimezone: true }).notNull().defaultNow();
@@ -456,6 +470,8 @@ export const invitations = pgTable(
     feedbackDatabaseId: text('feedback_database_id').references(() => feedbackDatabases.id, {
       onDelete: 'cascade',
     }),
+    /** FD-007: the third scope. Exactly one of project, feedback database or crash database is set. */
+    crashDatabaseId: text('crash_database_id').references(() => crashDatabases.id, { onDelete: 'cascade' }),
     role: roleEnum('role').notNull(),
     createdBy: text('created_by').references(() => users.id, { onDelete: 'set null' }),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
@@ -482,9 +498,14 @@ export const invitations = pgTable(
  * per submission, cannot answer once its rows have aged out.
  */
 export const slackNotifications = pgTable('slack_notifications', {
-  feedbackDatabaseId: text('feedback_database_id')
-    .primaryKey()
-    .references(() => feedbackDatabases.id, { onDelete: 'cascade' }),
+  /**
+   * The row's key is the database it belongs to, of either type. It stayed named after
+   * feedback databases when crash databases arrived (Release 6) because renaming a primary
+   * key buys nothing but a migration; the foreign key was dropped so a `cdb_` ID fits, and
+   * the prefix on the ID says which table it names. Deleting a crash database removes its
+   * row in the deletion service rather than by cascade.
+   */
+  feedbackDatabaseId: text('feedback_database_id').primaryKey(),
   enabled: boolean('enabled').notNull().default(false),
   webhookUrl: text('webhook_url'),
 
@@ -527,12 +548,12 @@ export const notificationDeliveries = pgTable(
   'notification_deliveries',
   {
     id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
-    submissionId: text('submission_id')
-      .notNull()
-      .references(() => submissions.id, { onDelete: 'cascade' }),
-    feedbackDatabaseId: text('feedback_database_id')
-      .notNull()
-      .references(() => feedbackDatabases.id, { onDelete: 'cascade' }),
+    /** FD-006: names the renderer. Exactly one source column below is set for the kind. */
+    kind: deliveryKindEnum('kind').notNull().default('submission_received'),
+    submissionId: text('submission_id').references(() => submissions.id, { onDelete: 'cascade' }),
+    crashGroupId: text('crash_group_id').references(() => crashGroups.id, { onDelete: 'cascade' }),
+    /** The database whose Slack settings render and receive the message; `fdb_` or `cdb_`. */
+    feedbackDatabaseId: text('feedback_database_id').notNull(),
     status: deliveryStatusEnum('status').notNull().default('pending'),
     attempts: integer('attempts').notNull().default(0),
     lastError: text('last_error'),
@@ -543,6 +564,214 @@ export const notificationDeliveries = pgTable(
   (table) => [
     index('notification_deliveries_next_idx').on(table.status, table.nextAttemptAt),
     uniqueIndex('notification_deliveries_submission_idx').on(table.submissionId),
+  ],
+);
+
+
+// ---------------------------------------------------------------------------
+// Crash Reports (Crash Reports PRD section 9.2). Everything below belongs to
+// Release 6 and is additive: nothing above changed shape for it beyond the
+// delivery kind, the third invitation scope and the untyped settings key.
+// ---------------------------------------------------------------------------
+
+/** CR-001, CR-002, CR-004, CR-023. */
+export const crashDatabases = pgTable(
+  'crash_databases',
+  {
+    id: text('id').primaryKey(),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    /** CR-023: the grouping rule this database was created under. Never changes on upgrade. */
+    groupingVersion: integer('grouping_version').notNull(),
+    /** CR-002: maximum retained reports and maximum report age; null age means unlimited. */
+    retentionCap: integer('retention_cap').notNull(),
+    retentionMaxAgeDays: integer('retention_max_age_days'),
+    createdBy: text('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt,
+    updatedAt,
+  },
+  (table) => [index('crash_databases_project_idx').on(table.projectId)],
+);
+
+/** Same shape as feedback-database memberships (Foundations 10.6, FD-007). */
+export const crashDatabaseMemberships = pgTable(
+  'crash_database_memberships',
+  {
+    crashDatabaseId: text('crash_database_id')
+      .notNull()
+      .references(() => crashDatabases.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    role: roleEnum('role').notNull(),
+    createdAt,
+    updatedAt,
+  },
+  (table) => [
+    primaryKey({ columns: [table.crashDatabaseId, table.userId] }),
+    index('crash_database_memberships_user_idx').on(table.userId),
+  ],
+);
+
+/**
+ * CR-004: reports refused for rate limiting or removed by retention, counted per hour so
+ * "the last 24 hours" is a sum over 24 rows rather than a rolling counter that has to be
+ * decayed. Rows older than a day are deleted by the daily pass.
+ */
+export const crashDroppedCounts = pgTable(
+  'crash_dropped_counts',
+  {
+    crashDatabaseId: text('crash_database_id')
+      .notNull()
+      .references(() => crashDatabases.id, { onDelete: 'cascade' }),
+    hour: timestamp('hour', { withTimezone: true }).notNull(),
+    rateLimited: integer('rate_limited').notNull().default(0),
+    evicted: integer('evicted').notNull().default(0),
+  },
+  (table) => [primaryKey({ columns: [table.crashDatabaseId, table.hour] })],
+);
+
+/** CR-030: a version string, ordered by first sighting. Unique on (database, version, build, channel). */
+export const crashReleases = pgTable(
+  'crash_releases',
+  {
+    id: text('id').primaryKey(),
+    crashDatabaseId: text('crash_database_id')
+      .notNull()
+      .references(() => crashDatabases.id, { onDelete: 'cascade' }),
+    version: text('version').notNull(),
+    build: text('build').notNull().default(''),
+    channel: text('channel').notNull().default(''),
+    /** Per-database sequence assigned at first sighting; the regression comparison (CR-028). */
+    order: integer('order').notNull(),
+    firstSeenAt: timestamp('first_seen_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('crash_releases_identity_idx').on(table.crashDatabaseId, table.version, table.build, table.channel),
+    uniqueIndex('crash_releases_order_idx').on(table.crashDatabaseId, table.order),
+  ],
+);
+
+/** CR-024, CR-026 to CR-028. */
+export const crashGroups = pgTable(
+  'crash_groups',
+  {
+    id: text('id').primaryKey(),
+    crashDatabaseId: text('crash_database_id')
+      .notNull()
+      .references(() => crashDatabases.id, { onDelete: 'cascade' }),
+    fingerprint: text('fingerprint').notNull(),
+    // --- Title fields, extracted once at ingest (CR-051) ---
+    kind: text('kind').notNull(),
+    exceptionType: text('exception_type'),
+    topFrame: text('top_frame'),
+    module: text('module'),
+    /** The first report's message, shown as the group's subtitle. Never leaves the interface. */
+    sampleMessage: text('sample_message'),
+    // --- State (CR-026, CR-027) ---
+    state: crashGroupStateEnum('state').notNull().default('open'),
+    regressed: boolean('regressed').notNull().default(false),
+    resolvedInReleaseId: text('resolved_in_release_id').references(() => crashReleases.id, { onDelete: 'set null' }),
+    stateChangedBy: text('state_changed_by').references(() => users.id, { onDelete: 'set null' }),
+    stateChangedAt: timestamp('state_changed_at', { withTimezone: true }),
+    // --- Aggregates (CR-024) ---
+    count: integer('count').notNull().default(0),
+    affectedUsers: integer('affected_users').notNull().default(0),
+    firstSeenAt: timestamp('first_seen_at', { withTimezone: true }).notNull(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull(),
+    firstReleaseId: text('first_release_id').references(() => crashReleases.id, { onDelete: 'set null' }),
+    lastReleaseId: text('last_release_id').references(() => crashReleases.id, { onDelete: 'set null' }),
+    /** No foreign key: reports point at groups, and eviction may remove the report it names. */
+    latestReportId: text('latest_report_id'),
+    createdAt,
+    updatedAt,
+  },
+  (table) => [
+    uniqueIndex('crash_groups_fingerprint_idx').on(table.crashDatabaseId, table.fingerprint),
+    index('crash_groups_state_last_seen_idx').on(table.crashDatabaseId, table.state, table.lastSeenAt),
+    index('crash_groups_last_seen_idx').on(table.crashDatabaseId, table.lastSeenAt),
+    index('crash_groups_count_idx').on(table.crashDatabaseId, table.count),
+  ],
+);
+
+/** CR-024: the distinct integrator-supplied user IDs behind `affectedUsers`. */
+export const crashGroupUsers = pgTable(
+  'crash_group_users',
+  {
+    crashGroupId: text('crash_group_id')
+      .notNull()
+      .references(() => crashGroups.id, { onDelete: 'cascade' }),
+    userId: text('user_id').notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.crashGroupId, table.userId] })],
+);
+
+/**
+ * CR-025: the daily rollup behind every timeline, sparkline and breakdown. One row per
+ * (group, day, release, OS, environment); the database-wide timeline (CR-048) sums rows
+ * across groups, filtered on the same columns the list filters on. Survives eviction.
+ */
+export const crashGroupDaily = pgTable(
+  'crash_group_daily',
+  {
+    crashGroupId: text('crash_group_id')
+      .notNull()
+      .references(() => crashGroups.id, { onDelete: 'cascade' }),
+    crashDatabaseId: text('crash_database_id')
+      .notNull()
+      .references(() => crashDatabases.id, { onDelete: 'cascade' }),
+    day: text('day').notNull(),
+    releaseId: text('release_id')
+      .notNull()
+      .references(() => crashReleases.id, { onDelete: 'cascade' }),
+    osName: text('os_name').notNull().default(''),
+    environment: text('environment').notNull(),
+    count: integer('count').notNull().default(0),
+  },
+  (table) => [
+    primaryKey({ columns: [table.crashGroupId, table.day, table.releaseId, table.osName, table.environment] }),
+    index('crash_group_daily_db_day_idx').on(table.crashDatabaseId, table.day),
+  ],
+);
+
+/** Section 9.2, Report. Immutable; evicted under retention (CR-080 to CR-082). */
+export const crashReports = pgTable(
+  'crash_reports',
+  {
+    id: text('id').primaryKey(),
+    crashDatabaseId: text('crash_database_id')
+      .notNull()
+      .references(() => crashDatabases.id, { onDelete: 'cascade' }),
+    crashGroupId: text('crash_group_id')
+      .notNull()
+      .references(() => crashGroups.id, { onDelete: 'cascade' }),
+    /** CR-013: the idempotency key, unique per database. */
+    eventId: text('event_id').notNull(),
+    receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
+    /** CR-017: the client timestamp, or the received time when the clock was off. */
+    effectiveAt: timestamp('effective_at', { withTimezone: true }).notNull(),
+    clockSkew: boolean('clock_skew').notNull().default(false),
+    kind: text('kind').notNull(),
+    releaseId: text('release_id')
+      .notNull()
+      .references(() => crashReleases.id, { onDelete: 'cascade' }),
+    environment: text('environment').notNull(),
+    osName: text('os_name'),
+    osVersion: text('os_version'),
+    arch: text('arch'),
+    userId: text('user_id'),
+    /** CR-015: the credential that reported it. There is deliberately no IP column. */
+    credentialId: text('credential_id').references(() => projectCredentials.id, { onDelete: 'set null' }),
+    envelope: jsonb('envelope').$type<CrashEnvelope>().notNull(),
+  },
+  (table) => [
+    uniqueIndex('crash_reports_event_idx').on(table.crashDatabaseId, table.eventId),
+    index('crash_reports_group_received_idx').on(table.crashDatabaseId, table.crashGroupId, table.receivedAt),
+    index('crash_reports_release_idx').on(table.crashDatabaseId, table.releaseId),
+    index('crash_reports_user_idx').on(table.crashDatabaseId, table.userId),
+    index('crash_reports_received_idx').on(table.crashDatabaseId, table.receivedAt),
   ],
 );
 
@@ -561,3 +790,8 @@ export type FeedbackDatabaseMembershipRow = typeof feedbackDatabaseMemberships.$
 export type HostedFormRow = typeof hostedForms.$inferSelect;
 export type SlackNotificationRow = typeof slackNotifications.$inferSelect;
 export type NotificationDeliveryRow = typeof notificationDeliveries.$inferSelect;
+export type CrashDatabaseRow = typeof crashDatabases.$inferSelect;
+export type CrashDatabaseMembershipRow = typeof crashDatabaseMemberships.$inferSelect;
+export type CrashReleaseRow = typeof crashReleases.$inferSelect;
+export type CrashGroupRow = typeof crashGroups.$inferSelect;
+export type CrashReportRow = typeof crashReports.$inferSelect;

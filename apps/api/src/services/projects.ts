@@ -1,4 +1,5 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, sql, type SQL } from 'drizzle-orm';
+import type { Db } from '../db/index.js';
 import { newId, type Role } from '@inlet/shared';
 import type { AppContext } from '../context.js';
 import {
@@ -126,6 +127,10 @@ export async function deleteProject(
     ...(await logoKeysForProject(ctx, projectId)),
   ];
   await ctx.db.transaction(async (tx) => {
+    await deleteNotificationRows(tx, sql`
+      select id from feedback_databases where project_id = ${projectId}
+      union all select id from crash_databases where project_id = ${projectId}
+    `);
     const deleted = await tx
       .delete(projects)
       .where(eq(projects.id, projectId))
@@ -255,6 +260,7 @@ export async function deleteFeedbackDatabase(
     ...(await logoKeysForDatabase(ctx, databaseId)),
   ];
   await ctx.db.transaction(async (tx) => {
+    await deleteNotificationRows(tx, sql`select ${databaseId}`);
     const deleted = await tx
       .delete(feedbackDatabases)
       .where(eq(feedbackDatabases.id, databaseId))
@@ -263,4 +269,15 @@ export async function deleteFeedbackDatabase(
     await enqueuePurge(tx, keys);
   });
   return { purgedKeys: keys.length };
+}
+
+/**
+ * Slack settings and queued deliveries are keyed on a database ID of either type
+ * (`fdb_` or `cdb_`) and so carry no foreign key since Release 6; they are removed here,
+ * in the deleting transaction, instead of by cascade. `databaseIds` is a subquery
+ * yielding the IDs about to disappear.
+ */
+export async function deleteNotificationRows(tx: Db, databaseIds: SQL): Promise<void> {
+  await tx.execute(sql`delete from notification_deliveries where feedback_database_id in (${databaseIds})`);
+  await tx.execute(sql`delete from slack_notifications where feedback_database_id in (${databaseIds})`);
 }

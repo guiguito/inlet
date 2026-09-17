@@ -16,6 +16,7 @@ import {
   slugSchema,
 } from '@inlet/shared';
 import { InletClient, InletError } from './client.js';
+import { registerCrashTools } from './crash-tools.js';
 
 /**
  * The MCP tool surface (FR-120 to FR-125).
@@ -40,7 +41,7 @@ import { InletClient, InletError } from './client.js';
 const projectId = z.string().describe('The project identifier, like prj_5waxfxyby3st.');
 const databaseId = z
   .string()
-  .describe('The feedback database identifier, like fdb_n8b3mj3axdfh.');
+  .describe('The database identifier: a feedback database like fdb_n8b3mj3axdfh, or, for members, invitations, Slack settings and deletion impact, a crash database like cdb_9rdayr4rstbv.');
 const submissionId = z.string().describe('The submission identifier, like sub_bzq1whs3129d.');
 const userId = z.string().describe('The account identifier, like usr_bz33m9801wz9.');
 const roleArg = z.enum(ROLES).describe('admin, creator or viewer.');
@@ -92,7 +93,17 @@ function assertConfirmed(expected: string, given: string): void {
   );
 }
 
+/**
+ * FD-002: the shared tools (members, invitations, Slack settings, deletion impact) take a
+ * database of either type. The ID prefix says which routes serve it.
+ */
+function databasePath(id: string): string {
+  return id.startsWith('cdb_') ? `/v1/crash-databases/${id}` : `/v1/feedback-databases/${id}`;
+}
+
 export function registerTools(server: McpServer, client: InletClient): void {
+  registerCrashTools(server, client);
+
   // --- Reading ------------------------------------------------------------
 
   server.registerTool(
@@ -310,7 +321,7 @@ export function registerTools(server: McpServer, client: InletClient): void {
     },
     async ({ databaseId: id }) =>
       guard(async () =>
-        json(await client.request('GET', `/v1/feedback-databases/${id}/deletion-impact`)),
+        json(await client.request('GET', `${databasePath(id)}/deletion-impact`)),
       ),
   );
 
@@ -858,7 +869,7 @@ export function registerTools(server: McpServer, client: InletClient): void {
     },
     async ({ databaseId: id }) =>
       guard(async () =>
-        json(await client.request('GET', `/v1/feedback-databases/${id}/slack-notifications`)),
+        json(await client.request('GET', `${databasePath(id)}/slack-notifications`)),
       ),
   );
 
@@ -907,7 +918,7 @@ export function registerTools(server: McpServer, client: InletClient): void {
           throw new InletError(400, 'validation_failed', 'Pass at least one setting to change.');
         }
         return json(
-          await client.request('PATCH', `/v1/feedback-databases/${id}/slack-notifications`, body),
+          await client.request('PATCH', `${databasePath(id)}/slack-notifications`, body),
         );
       }),
   );
@@ -933,7 +944,7 @@ export function registerTools(server: McpServer, client: InletClient): void {
         };
         assertConfirmed(database.name, confirm);
         return json(
-          await client.request('POST', `/v1/feedback-databases/${id}/slack-notifications/test`),
+          await client.request('POST', `${databasePath(id)}/slack-notifications/test`),
         );
       }),
   );
@@ -953,7 +964,7 @@ function scopePath(
     );
   }
   if (project) return `/v1/projects/${project}/${suffix}`;
-  if (database) return `/v1/feedback-databases/${database}/${suffix}`;
+  if (database) return `${databasePath(database)}/${suffix}`;
   throw scopeRequired();
 }
 

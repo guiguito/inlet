@@ -9,7 +9,7 @@ import {
   type SlackNotificationRow,
 } from '../db/schema.js';
 import { apiError } from '../lib/errors.js';
-import { requireDatabase } from '../services/access.js';
+import { requireDatabase, type Principal } from '../services/access.js';
 import { requireManagementPrincipal } from '../services/principal.js';
 import {
   getDraft,
@@ -486,7 +486,21 @@ export function hostedFormRoutes(ctx: AppContext): FastifyPluginAsyncZod {
  * revoked, which turns read access into persistence. Everything else here stays open to
  * a key, so MCP can still read the settings and change the harmless fields.
  */
-export function slackNotificationRoutes(ctx: AppContext): FastifyPluginAsyncZod {
+/**
+ * Who may read and change the settings of the database at this ID, and what it is called.
+ * The default is the feedback database check; the crash database registration passes its
+ * own. The settings row, the delivery queue and the worker are shared (FD-002, FD-006), so
+ * one plugin serves both types from two prefixes rather than two plugins serving one each.
+ */
+export type SlackSettingsAccess = (principal: Principal, databaseId: string) => Promise<{ name: string }>;
+
+export function slackNotificationRoutes(
+  ctx: AppContext,
+  access: SlackSettingsAccess = async (principal, databaseId) => {
+    const { database } = await requireDatabase(ctx.db, principal, databaseId, 'creator');
+    return { name: database.name };
+  },
+): FastifyPluginAsyncZod {
   const view = async (row: SlackNotificationRow) => ({
     feedbackDatabaseId: row.feedbackDatabaseId,
     enabled: row.enabled,
@@ -519,7 +533,7 @@ export function slackNotificationRoutes(ctx: AppContext): FastifyPluginAsyncZod 
       },
       async (request) => {
         const principal = await requireManagementPrincipal(ctx, request);
-        await requireDatabase(ctx.db, principal, request.params.databaseId, 'creator');
+        await access(principal, request.params.databaseId);
         return view(await getSlackNotifications(ctx, request.params.databaseId));
       },
     );
@@ -539,7 +553,7 @@ export function slackNotificationRoutes(ctx: AppContext): FastifyPluginAsyncZod 
       },
       async (request) => {
         const principal = await requireManagementPrincipal(ctx, request);
-        await requireDatabase(ctx.db, principal, request.params.databaseId, 'creator');
+        await access(principal, request.params.databaseId);
 
         if (request.body.webhookUrl !== undefined && principal.kind !== 'user') {
           throw apiError(
@@ -575,13 +589,8 @@ export function slackNotificationRoutes(ctx: AppContext): FastifyPluginAsyncZod 
       },
       async (request) => {
         const principal = await requireManagementPrincipal(ctx, request);
-        const access = await requireDatabase(
-          ctx.db,
-          principal,
-          request.params.databaseId,
-          'creator',
-        );
-        return sendTestMessage(ctx, request.params.databaseId, access.database.name);
+        const { name } = await access(principal, request.params.databaseId);
+        return sendTestMessage(ctx, request.params.databaseId, name);
       },
     );
   };

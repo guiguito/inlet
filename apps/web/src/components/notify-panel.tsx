@@ -49,7 +49,14 @@ const CONTENT_CHOICES: { value: SlackContentLevel; label: string; note: string }
   },
 ];
 
-export function NotifyPanel({ databaseId }: { databaseId: string }) {
+export function NotifyPanel({
+  databaseId,
+  hideContentLevel = false,
+}: {
+  databaseId: string;
+  /** CR-050: a crash database announces groups only; there is no content to choose. */
+  hideContentLevel?: boolean;
+}) {
   const queryClient = useQueryClient();
   const notifications = useQuery({
     queryKey: ['slack-notifications', databaseId],
@@ -243,6 +250,7 @@ export function NotifyPanel({ databaseId }: { databaseId: string }) {
         </CardContent>
       </Card>
 
+      {hideContentLevel ? null : (
       <Card>
         <CardHeader>
           <CardTitle>What Slack sees</CardTitle>
@@ -273,6 +281,7 @@ export function NotifyPanel({ databaseId }: { databaseId: string }) {
           </p>
         </CardContent>
       </Card>
+      )}
 
       <Card>
         <CardHeader>

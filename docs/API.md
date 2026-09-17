@@ -17,6 +17,7 @@ Everything is under `/v1`. Requests and responses are JSON unless stated otherwi
 - [Hosted forms](#hosted-forms)
 - [Slack notifications](#slack-notifications)
 - [Access: members and invitations](#access-members-and-invitations)
+- [Crash reports](#crash-reports)
 - [Errors](#errors)
 - [Limits](#limits)
 - [What each credential may do](#what-each-credential-may-do)
@@ -879,6 +880,154 @@ The role and scope recorded on the invitation are what get granted, whatever add
 the redeemer uses. An invitation is not proof of control over an address, so it cannot
 be used to set the password of an account that already exists.
 
+## Crash reports
+
+A **crash database** (`cdb_…`) receives failure reports from an application and groups
+them. Its routes live under `/v1/crash-databases`; management, members, invitations and
+Slack settings follow the same shapes as feedback databases with that prefix.
+
+### Ingest
+
+```
+POST /v1/crash-databases/{databaseId}/reports
+POST /v1/crash-databases/{databaseId}/reports/batch
+```
+
+Authenticated with a publishable or secret key of the owning project. The body is one
+envelope, or `{"reports": [...]}` with at most 50. One accepted report answers
+`201 {reportId, groupId, isNewGroup, isRegression}`; a repeated `eventId` answers `200`
+with the original result and changes nothing. A batch answers `207` with one result or
+error per item, in order, and stores every valid item even when others fail.
+
+Rate limits are per key (300 in five minutes, 2,000 an hour) and per key and fingerprint
+(ten an hour, then one a minute). Exceeding one answers `429 rate_limit_exceeded` with a
+`Retry-After` header in seconds; the refused reports are counted on the database. A
+publishable key is one bucket, so every browser running your application shares it.
+
+**These two routes and `GET /v1/health` are the only cross-origin routes in Inlet.** They
+answer `Access-Control-Allow-Origin: *`, and a preflight asking for `authorization` and
+`content-type`, so a browser SDK can report from your own site without putting Inlet behind
+your domain. `Retry-After` is exposed, so a browser client can honour a `429` rather than
+guess at it. Credentials are never allowed: no `Access-Control-Allow-Credentials` is sent,
+an Inlet session cookie is therefore unusable from another origin, and ingest authenticates
+with a publishable key only. Every other route, crash database management included, stays
+same-origin.
+
+### The envelope
+
+At most 64 KiB serialized. Exactly these top-level fields; any other is refused with
+`unknown_field` naming it. A field out of bounds is `invalid_envelope` with the path.
+
+| Field | Required | Bounds |
+| --- | --- | --- |
+| `eventId` | yes | UUID or 32 hex characters; the idempotency key |
+| `timestamp` | yes | RFC 3339. More than 30 days old or 5 minutes ahead: stored with the received time and `clockSkew` |
+| `sdk` | yes | `{name ≤ 64, version ≤ 32}` |
+| `platform` | no | `node`, `browser`, `electron`, `other` |
+| `kind` | yes | ≤ 32 lowercase; `exception`, `unhandled-rejection`, `renderer-gone`, `render-error`, `native`, `child-exit`, `unclean-exit`, `message`, or your own |
+| `release` | yes | `{version ≤ 64, build? ≤ 64, channel? ≤ 32}` |
+| `environment` | no | ≤ 32, default `production` |
+| `exception` | for `exception`, `unhandled-rejection`, `render-error`, `message` | `{type ≤ 128, message (truncated to 200), handled, frames[≤ 30]}`; frame `{function? ≤ 128, file? ≤ 128, line?, col?, inApp}` |
+| `native` | for `native` | `{process ≤ 32, fault ≤ 32, module ≤ 128, dumpBytes?}` |
+| `exit` | for `renderer-gone`, `child-exit`, `unclean-exit` | `{code?, signal? ≤ 16, reason? ≤ 64, name? ≤ 64, lastUptimeMs?}` |
+| `os` | no | `{name ≤ 32, version? ≤ 64, arch? ≤ 16}` |
+| `runtime` | no | `{name ≤ 32, version? ≤ 32}` |
+| `user` | no | `{id ≤ 128}`, and nothing else |
+| `tags` | no | ≤ 20 string pairs, key ≤ 64, value ≤ 256 |
+| `context` | no | ≤ 16 KiB of JSON, stored verbatim |
+| `fingerprint` | no | ≤ 8 strings ≤ 128; `{{ default }}` expands to the computed fingerprint |
+
+```bash
+curl -s -X POST "$BASE/v1/crash-databases/$DB/reports" \
+  -H "Authorization: Bearer $KEY" -H 'content-type: application/json' \
+  -d '{
+    "eventId": "3f2c1e0a9b8d4c7e8f1a2b3c4d5e6f70",
+    "timestamp": "2026-09-17T10:00:00Z",
+    "sdk": {"name": "@inlet/sdk", "version": "0.1.0"},
+    "kind": "exception",
+    "release": {"version": "1.4.0"},
+    "os": {"name": "macOS", "version": "15.1", "arch": "arm64"},
+    "exception": {
+      "type": "TypeError",
+      "message": "Cannot read properties of undefined (reading '"'"'id'"'"')",
+      "handled": false,
+      "frames": [
+        {"function": "loadUser", "file": "/app/dist/users.js", "line": 12, "col": 4, "inApp": true},
+        {"function": "processTicksAndRejections", "file": "<external>", "inApp": false}
+      ]
+    }
+  }'
+```
+
+### Grouping
+
+Without a client `fingerprint`, the server hashes: the kind; the exception type, or the
+native fault and module; the message with UUIDs, hex strings, integers, email addresses,
+URLs, IP addresses, file paths, timestamps and quoted strings replaced by placeholders;
+and up to five `inApp` frames reduced to function name and file basename. Line and column
+numbers never take part. A client fingerprint replaces this; `{{ default }}` inside it
+splices the computed one in, so `["{{ default }}", "checkout"]` refines rather than
+replaces. Each crash database records the grouping version it was created with, so a
+later change to the rule never splits existing groups.
+
+### Reading
+
+```
+GET  /v1/crash-databases/{id}/groups?state&kind&release&os&arch&environment&userId&since&until&q&sort&limit&offset&days
+GET  /v1/crash-databases/{id}/groups/{groupId}?days=30
+GET  /v1/crash-databases/{id}/groups/{groupId}/reports?release&os&environment&userId&limit
+GET  /v1/crash-databases/{id}/reports/{reportId}
+GET  /v1/crash-databases/{id}/releases
+GET  /v1/crash-databases/{id}/stats?days=30&by=day|release|os|environment|kind (plus the list filters)
+```
+
+The groups list returns `{groups, total}`; `sort` is `lastSeen` (default), `firstSeen`,
+`count` or `affectedUsers`; each group carries a `sparkline` of reports per day over
+`days`. A group detail adds `byRelease`, `byOs` and a `timeline`
+(`{days: [{day, reports, newGroups}], releases: [{version, day}]}`). Stats return the
+same timeline for the whole database, reshaped by the filters, served from a daily rollup
+and never by scanning reports; with `by=release`, `os`, `environment` or `kind` they also carry
+`breakdown: {by, rows: [{key, reports, groups}]}` for the range. A group detail accepts
+the release, OS and environment filters too, and reshapes its breakdowns and timeline.
+
+### State
+
+```
+POST /v1/crash-databases/{id}/groups/{groupId}/state   {"state": "resolved", "resolvedInRelease": "1.4.0"}
+POST /v1/crash-databases/{id}/groups/state             {"groupIds": [...], "change": {"state": "ignored"}}
+DELETE /v1/crash-databases/{id}/groups/{groupId}
+```
+
+`state` is `resolved` (optionally in a release this database has already seen, else
+`crash_release_not_found`), `ignored` or `open`. A resolved group counts reports from its
+release or earlier silently, and reopens with `regressed: true` on a report from a release
+first seen later; without a release, on any report. Ignored groups count and never
+notify. Deleting a group removes its reports, rollup and user associations. Individual
+reports cannot be edited or deleted; they expire under retention.
+
+### Export, retention, deletion
+
+```
+GET  /v1/crash-databases/{id}/groups/export?format=json|csv   (plus the list filters)
+GET  /v1/crash-databases/{id}/reports/export                  (NDJSON, plus the list filters)
+GET|PATCH /v1/crash-databases/{id}/retention                  {"maxReports": 10000, "maxAgeDays": 90 | null}
+GET  /v1/crash-databases/{id}/deletion-impact                 → {groups, reports, notice}
+DELETE /v1/crash-databases/{id}
+```
+
+Retention bounds: 1,000 to 100,000 reports; 7 to 365 days or `null`. Over the cap the
+oldest reports of the fullest group are evicted at ingest, every group keeping its latest;
+aged reports are evicted at ingest and hourly. Eviction never changes a group's count,
+first or last seen, releases, users or timeline.
+
+### Slack
+
+`GET|PATCH /v1/crash-databases/{id}/slack-notifications` and `.../test` take the same
+settings as a feedback database. A crash database announces `crash_group_opened` and
+`crash_group_regressed` and nothing else; `contentLevel` is accepted and ignored. The
+message is `kind · type · top frame or module · release`, the count, first seen, affected
+users and a link. The error message text is never sent.
+
 ## Errors
 
 Every failure returns the same shape:
@@ -917,6 +1066,11 @@ The codes you are most likely to handle:
 | `submission_deleted` | 410 | The submission this intent created has been deleted. |
 | `validation_failed` | 400 | See `details`; the intent stays usable. |
 | `client_context_too_large` | 413 | Over 16 KiB serialized. |
+| `crash_database_not_found`, `crash_database_inaccessible` | 404, 403 | No such crash database, or it belongs to another project. |
+| `crash_group_not_found`, `crash_report_not_found`, `crash_release_not_found` | 404 | The group, report (possibly evicted) or release is not in this crash database. |
+| `unknown_field` | 400 | A crash envelope carried a top-level field the API does not accept; `details` names it. |
+| `invalid_envelope` | 400 | A crash envelope field is out of bounds or of the wrong shape; `details` carries the path. |
+| `envelope_too_large` | 413 | A crash envelope over 64 KiB serialized. |
 | `unsupported_image_format`, `animated_image_rejected`, `image_too_many_pixels`, `file_too_large` | 400 / 413 | The screenshot was refused. |
 | `too_many_uploads` | 429 | Over ten uploads on one intent. |
 | `attachment_reference_invalid` | 400 | The screenshot does not belong to this intent and question. |
@@ -988,3 +1142,12 @@ carry their own limits, applied per requesting address and per slug. A throttled
 | Set the Slack webhook URL | No | No | Creator or Admin |
 | Send a Slack test message | No | Yes | Creator or Admin |
 | Open the hosted form and respond | Not applicable | Not applicable | Anyone holding the link |
+| Report a crash, one or a batch | Yes | Yes | Not applicable |
+| List and read crash groups, reports, releases, stats | No | Yes | Viewer or above |
+| Resolve, ignore, reopen crash groups | No | Yes | Creator or Admin |
+| Delete a crash group | No | Yes | Admin |
+| Export crash groups or reports | No | Yes | Viewer or above |
+| Read or change crash retention | No | Yes | Admin |
+| Create, rename a crash database | No | Yes | Creator or Admin |
+| Delete a crash database | No | Yes | Admin |
+| Edit or delete one crash report | No | No | Not supported |

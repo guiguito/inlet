@@ -176,6 +176,21 @@ That `client_max_body_size` matters. The default of 1 MB rejects most phone
 screenshots before they reach Inlet, and the respondent sees a proxy error rather than
 Inlet's own message.
 
+**Do not add CORS headers at the proxy.** Inlet sets them itself, on crash ingest and
+`/v1/health` only, so that the browser crash SDK can report from an integrator's own site.
+An `add_header 'Access-Control-Allow-Origin' '*'` on top of Inlet's produces two identical
+headers, which browsers reject as invalid, and it would open every other route as well. A
+proxy that answers `OPTIONS` itself, or strips response headers it does not recognise, breaks
+browser crash reporting the same way. Check it with:
+
+```
+curl -i -X OPTIONS https://inlet.example.com/v1/crash-databases/cdb_example/reports \
+  -H 'Origin: https://app.example.com' -H 'Access-Control-Request-Method: POST'
+```
+
+Expect `204` and exactly one `access-control-allow-origin: *`. The same request against
+`/v1/auth/sign-in` should answer `404` with no such header.
+
 ## Using managed PostgreSQL and S3
 
 Nothing in Inlet assumes the bundled services. Drop `postgres` and `minio` from the
@@ -294,10 +309,16 @@ health check and your load balancer probe.
 Logs are structured JSON on stdout (pino). Ship them wherever you ship logs. Webhook
 URLs, passwords and tokens are redacted before anything is written.
 
-Two workers run inside the API process and log what they do: one purges screenshot
-objects after a deletion, and one delivers Slack notifications with backoff. Both are
-idempotent and safe across restarts. A shutdown waits for work in flight before
-closing the database pool.
+Three workers run inside the API process and log what they do: one purges screenshot
+objects after a deletion, one delivers Slack notifications with backoff, and one runs
+the crash-report retention pass at start and then hourly, evicting reports past a crash
+database's age limit or cap in bounded steps. All three are idempotent and safe across
+restarts. A shutdown waits for the Slack work in flight before closing the database pool.
+
+Crash ingest is rate limited per key and per crash fingerprint in memory on the API
+process. With one API container, which is what this guide deploys, that is the whole
+story; a second instance would need a shared store, which is documented in
+`docs/DECISIONS.md` as the upgrade path and changes no contract.
 
 ## Security checklist
 

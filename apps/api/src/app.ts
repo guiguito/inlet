@@ -34,6 +34,9 @@ import {
 } from './routes/databases.js';
 import { hostedRoutes } from './routes/hosted.js';
 import { memberRoutes } from './routes/members.js';
+import { crashRoutes } from './routes/crashes.js';
+import { crashReadRoutes } from './routes/crash-reads.js';
+import { requireCrashDatabase } from './services/access.js';
 import { projectRoutes } from './routes/projects.js';
 import { attachmentRoutes, submissionRoutes } from './routes/submissions.js';
 import { openapiDocument } from './openapi.js';
@@ -84,6 +87,7 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
     });
   }
 
+  registerCrossOriginCollection(app);
   await registerDocs(app, ctx);
   registerErrorHandler(app);
 
@@ -91,7 +95,9 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
     async (v1) => {
       v1.get('/health', { schema: { hide: true } }, async () => {
         await ctx.db.execute('select 1');
-        return { status: 'ok' };
+        // FD-013: what this server can do, so an SDK can tell an old deployment from a
+        // reachable one before it queues reports the server would refuse.
+        return { status: 'ok', capabilities: ['feedback', 'crash'] };
       });
 
       await v1.register(authRoutes(ctx), { prefix: '/auth' });
@@ -104,6 +110,16 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
       await v1.register(slackNotificationRoutes(ctx), { prefix: '/feedback-databases' });
       await v1.register(hostedRoutes(ctx), { prefix: '/hosted' });
       await v1.register(memberRoutes(ctx));
+      await v1.register(crashRoutes(ctx));
+      await v1.register(crashReadRoutes(ctx));
+      // The shared Slack settings plugin, a second time, for crash databases (CR-050).
+      await v1.register(
+        slackNotificationRoutes(ctx, async (principal, databaseId) => {
+          const { database } = await requireCrashDatabase(ctx.db, principal, databaseId, 'creator');
+          return { name: database.name };
+        }),
+        { prefix: '/crash-databases' },
+      );
     },
     { prefix: '/v1' },
   );
@@ -127,6 +143,64 @@ async function registerDocs(app: FastifyInstance, ctx: AppContext): Promise<void
   });
 
   app.get('/openapi.json', { schema: { hide: true } }, async () => app.swagger());
+}
+
+/**
+ * The collection surface a browser on another origin may reach: crash ingest, and the
+ * health probe the browser SDK reads before its first send (CR-010, FD-013).
+ *
+ * Everything else in Inlet stays same-origin, which is what section 13 of DECISIONS.md
+ * describes and why there is no CORS plugin here. This is the one exception, and it is
+ * three paths wide: `@inlet/sdk/crash/browser` runs on the integrator's own origin by
+ * definition, and its transport sends `authorization` and `content-type: application/json`,
+ * both of which force a preflight. Without this the preflight 404s and the browser never
+ * sends the report at all.
+ *
+ * Two details are load-bearing:
+ *
+ * The hook goes on the root instance, not in a scope around the ingest routes. A preflight
+ * matches no route — `OPTIONS` is never declared — so Fastify serves it from the 404
+ * context, and that context is built from the *root* instance's hooks. A hook registered
+ * inside an encapsulated child would never run for the request that needs it most.
+ *
+ * The path is matched on `request.url` rather than on the resolved route, for the same
+ * reason: an unmatched preflight has no route to read.
+ */
+const CROSS_ORIGIN_COLLECTION = /^\/v1\/(health|crash-databases\/[^/]+\/reports(\/batch)?)$/;
+
+function registerCrossOriginCollection(app: FastifyInstance): void {
+  app.addHook('onRequest', (request, reply, done) => {
+    if (!CROSS_ORIGIN_COLLECTION.test(request.url.split('?')[0] ?? '')) return done();
+
+    /*
+     * No `access-control-allow-credentials`, ever. That absence is the security property:
+     * a browser will not attach the session cookie to these requests, so the management
+     * session cannot be replayed from another origin. Ingest carries its own bearer
+     * publishable key, which was always meant to travel in public code.
+     */
+    reply.header('access-control-allow-origin', '*');
+    /*
+     * CR-016: the SDK honours `Retry-After` on a 429. It is not a CORS-safelisted response
+     * header, so without this a cross-origin client reads null and backs off on a guess
+     * instead of on the number the server sent.
+     */
+    reply.header('access-control-expose-headers', 'retry-after');
+
+    // Set before any handler runs, so a 401 or a 429 carries them too. A cross-origin
+    // error response without them is an opaque network failure to `fetch`, and the SDK
+    // would requeue for ever a report the server has already refused.
+    if (request.method !== 'OPTIONS') return done();
+
+    reply
+      .header('access-control-allow-methods', 'POST, GET, OPTIONS')
+      // Exactly what the transport sends. A static list rather than an echo of
+      // `access-control-request-headers`, so a client that adds a header gets a clean
+      // preflight failure instead of a silently widened surface.
+      .header('access-control-allow-headers', 'authorization, content-type')
+      .header('access-control-max-age', '86400')
+      .code(204)
+      .send();
+  });
 }
 
 /**

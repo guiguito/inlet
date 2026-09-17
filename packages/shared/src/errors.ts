@@ -78,6 +78,19 @@ export const ERROR_STATUS = {
   invitation_already_redeemed: 409,
   last_admin_removal: 409,
 
+  // --- Crash Reports (Release 6, Crash Reports PRD section 7.1) -------------
+  crash_database_not_found: 404,
+  crash_database_inaccessible: 403,
+  crash_group_not_found: 404,
+  crash_report_not_found: 404,
+  crash_release_not_found: 404,
+  /** CR-011: an envelope carried a top-level key section 9.1 does not name. The detail path names it. */
+  unknown_field: 400,
+  /** CR-011: the serialized envelope exceeds 64 KiB. */
+  envelope_too_large: 413,
+  /** CR-011: a named field is out of bounds or of the wrong shape. The detail path names it. */
+  invalid_envelope: 400,
+
   // --- Notifications -------------------------------------------------------
   /**
    * Slack refused a message. The Slack error string travels in the message and the

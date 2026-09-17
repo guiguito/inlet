@@ -42,7 +42,9 @@ import { formatDateTime, formatRelative } from '@/lib/format';
 
 export type AccessScope =
   | { kind: 'project'; projectId: string; name: string }
-  | { kind: 'feedbackDatabase'; databaseId: string; name: string };
+  | { kind: 'feedbackDatabase'; databaseId: string; name: string }
+  /** FD-007: a crash database; the API calls route on the `cdb_` prefix. */
+  | { kind: 'crashDatabase'; databaseId: string; name: string };
 
 const ROLE_HELP: Record<Role, string> = {
   admin: 'Manages access, credentials and deletion, and everything a Creator can do.',

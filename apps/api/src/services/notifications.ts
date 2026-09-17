@@ -9,13 +9,14 @@ import type { Db } from '../db/index.js';
 import {
   formVersions,
   notificationDeliveries,
+  crashGroups,
   slackNotifications,
   submissions,
   type SlackNotificationRow,
 } from '../db/schema.js';
 import { apiError, errors } from '../lib/errors.js';
 import { submissionUrl } from './export.js';
-import { buildSlackMessage, type SlackMessage } from './slack-message.js';
+import { buildCrashSlackMessage, buildSlackMessage, type SlackMessage } from './slack-message.js';
 
 /**
  * Slack notifications (FR-155 to FR-172).
@@ -336,7 +337,7 @@ export async function runNotificationBatch(
         limit ${BATCH_SIZE}
         for update skip locked
      )
-    returning id, submission_id, feedback_database_id, attempts
+    returning id, kind, submission_id, crash_group_id, feedback_database_id, attempts
   `);
 
   const rows = (claimed as unknown as { rows: DeliveryClaim[] }).rows ?? [];
@@ -353,7 +354,9 @@ export async function runNotificationBatch(
 
 type DeliveryClaim = {
   id: number;
-  submission_id: string;
+  kind: 'submission_received' | 'crash_group_opened' | 'crash_group_regressed';
+  submission_id: string | null;
+  crash_group_id: string | null;
   feedback_database_id: string;
   attempts: number;
 };
@@ -433,10 +436,15 @@ async function deliverOne(ctx: AppContext, claim: DeliveryClaim): Promise<boolea
 }
 
 /** Reads the submission and settings as they are now, and renders the message. */
+/** FD-006: one renderer per kind. The worker, the queue and the retry contract are shared. */
 async function render(
   ctx: AppContext,
   claim: DeliveryClaim,
 ): Promise<'nothing' | { url: string; message: SlackMessage }> {
+  if (claim.kind === 'crash_group_opened' || claim.kind === 'crash_group_regressed') {
+    return renderCrash(ctx, claim, claim.kind);
+  }
+  if (!claim.submission_id) return 'nothing';
   const rows = await ctx.db
     .select({
       submission: submissions,
@@ -476,6 +484,55 @@ async function render(
       definition: found.definition ?? undefined,
       attachmentCount,
       via: arrivalPath(found.submission.clientContext),
+      settings: found.settings,
+    }),
+  };
+}
+
+/**
+ * CR-051, CR-052: rendered from the group as it stands at send time (FD-006), so the count
+ * in the message is the count when Slack receives it. A deleted group, or a group ignored
+ * between enqueue and send (CR-029), sends nothing.
+ */
+async function renderCrash(
+  ctx: AppContext,
+  claim: DeliveryClaim,
+  kind: 'crash_group_opened' | 'crash_group_regressed',
+): Promise<'nothing' | { url: string; message: SlackMessage }> {
+  if (!claim.crash_group_id) return 'nothing';
+  const rows = await ctx.db
+    .select({
+      group: crashGroups,
+      settings: slackNotifications,
+      databaseName: sql<string>`(select name from crash_databases where id = ${claim.feedback_database_id})`,
+      lastRelease: sql<string | null>`(select version from crash_releases where id = ${crashGroups.lastReleaseId})`,
+      resolvedInRelease: sql<string | null>`(select version from crash_releases where id = ${crashGroups.resolvedInReleaseId})`,
+    })
+    .from(crashGroups)
+    .innerJoin(slackNotifications, eq(slackNotifications.feedbackDatabaseId, crashGroups.crashDatabaseId))
+    .where(eq(crashGroups.id, claim.crash_group_id))
+    .limit(1);
+  const found = rows[0];
+  if (!found) return 'nothing';
+  if (!found.settings.enabled || !found.settings.webhookUrl) return 'nothing';
+  if (found.group.state === 'ignored') return 'nothing';
+  return {
+    url: found.settings.webhookUrl,
+    message: buildCrashSlackMessage({
+      kind,
+      databaseName: found.databaseName ?? 'a crash database',
+      groupUrl: `${ctx.env.INLET_PUBLIC_URL.replace(/\/$/, '')}/crash-databases/${found.group.crashDatabaseId}/groups/${found.group.id}`,
+      group: {
+        kind: found.group.kind,
+        exceptionType: found.group.exceptionType,
+        topFrame: found.group.topFrame,
+        module: found.group.module,
+        count: found.group.count,
+        affectedUsers: found.group.affectedUsers,
+        firstSeenAt: found.group.firstSeenAt,
+        lastRelease: found.lastRelease,
+        resolvedInRelease: found.resolvedInRelease,
+      },
       settings: found.settings,
     }),
   };

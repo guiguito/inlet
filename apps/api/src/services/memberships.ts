@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { effectiveRole, type Role } from '@inlet/shared';
 import type { AppContext } from '../context.js';
 import {
@@ -6,6 +6,8 @@ import {
   feedbackDatabases,
   projectMemberships,
   users,
+  crashDatabaseMemberships,
+  crashDatabases,
 } from '../db/schema.js';
 import { apiError, errors } from '../lib/errors.js';
 import { countProjectAdmins } from './access.js';
@@ -173,6 +175,13 @@ export async function listDatabaseMembers(
     .innerJoin(users, eq(users.id, feedbackDatabaseMemberships.userId))
     .where(eq(feedbackDatabaseMemberships.feedbackDatabaseId, databaseId));
 
+  return mergeMembers(projectRoles, overrides);
+}
+
+type OverrideRow = { userId: string; email: string; displayName: string; role: Role; createdAt: Date };
+
+/** The FR-071 resolution, shared by feedback and crash databases: project roles, then overrides. */
+function mergeMembers(projectRoles: Map<string, MemberView>, overrides: OverrideRow[]): MemberView[] {
   const overrideByUser = new Map(overrides.map((row) => [row.userId, row]));
   const members: MemberView[] = [];
 
@@ -206,6 +215,72 @@ export async function listDatabaseMembers(
   }
 
   return members.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+}
+
+// --- Crash-database memberships (FD-007, Release 6) --------------------------
+//
+// The same three operations as above against `crash_database_memberships`. Separate
+// functions rather than a generic over the table, for the reason given in access.ts.
+
+async function crashProjectId(ctx: AppContext, databaseId: string): Promise<string> {
+  const rows = await ctx.db.select({ projectId: crashDatabases.projectId }).from(crashDatabases).where(eq(crashDatabases.id, databaseId)).limit(1);
+  const projectId = rows[0]?.projectId;
+  if (!projectId) throw apiError('crash_database_not_found', 'That crash database does not exist.');
+  return projectId;
+}
+
+export async function listCrashDatabaseMembers(ctx: AppContext, databaseId: string): Promise<MemberView[]> {
+  const projectId = await crashProjectId(ctx, databaseId);
+  const projectRoles = new Map((await listProjectMembers(ctx, projectId)).map((member) => [member.userId, member]));
+  const overrides = await ctx.db
+    .select({
+      userId: users.id,
+      email: users.email,
+      displayName: users.displayName,
+      role: crashDatabaseMemberships.role,
+      createdAt: crashDatabaseMemberships.createdAt,
+    })
+    .from(crashDatabaseMemberships)
+    .innerJoin(users, eq(users.id, crashDatabaseMemberships.userId))
+    .where(eq(crashDatabaseMemberships.crashDatabaseId, databaseId));
+  return mergeMembers(projectRoles, overrides);
+}
+
+export async function setCrashDatabaseRole(ctx: AppContext, databaseId: string, userId: string, role: Role): Promise<MemberView> {
+  const projectId = await crashProjectId(ctx, databaseId);
+  await assertOverridable(ctx, projectId, userId);
+  await ctx.db
+    .insert(crashDatabaseMemberships)
+    .values({ crashDatabaseId: databaseId, userId, role })
+    .onConflictDoUpdate({
+      target: [crashDatabaseMemberships.crashDatabaseId, crashDatabaseMemberships.userId],
+      set: { role, updatedAt: new Date() },
+    });
+  const updated = (await listCrashDatabaseMembers(ctx, databaseId)).find((member) => member.userId === userId);
+  if (!updated) throw apiError('internal_error', 'The assignment could not be read back.');
+  return updated;
+}
+
+export async function clearCrashDatabaseRole(ctx: AppContext, databaseId: string, userId: string): Promise<void> {
+  const deleted = await ctx.db
+    .delete(crashDatabaseMemberships)
+    .where(and(eq(crashDatabaseMemberships.crashDatabaseId, databaseId), eq(crashDatabaseMemberships.userId, userId)))
+    .returning({ userId: crashDatabaseMemberships.userId });
+  if (!deleted[0]) throw apiError('not_found', 'That person has no assignment on this crash database.');
+}
+
+/** FR-071A and "has an account", shared by both database types. */
+async function assertOverridable(ctx: AppContext, projectId: string, userId: string): Promise<void> {
+  const projectRole = await ctx.db
+    .select({ role: projectMemberships.role })
+    .from(projectMemberships)
+    .where(and(eq(projectMemberships.projectId, projectId), eq(projectMemberships.userId, userId)))
+    .limit(1);
+  if (projectRole[0]?.role === 'admin') {
+    throw apiError('forbidden', 'That person is an Admin of this project, so their access here cannot be narrowed.');
+  }
+  const exists = await ctx.db.select({ id: users.id }).from(users).where(eq(users.id, userId)).limit(1);
+  if (!exists[0]) throw apiError('not_found', 'That person does not have an account.');
 }
 
 /**
@@ -311,4 +386,9 @@ async function clearDatabaseOverrides(
         ),
       );
   }
+  // FD-007: the same for the project's crash databases.
+  await ctx.db.execute(
+    sql`delete from crash_database_memberships where user_id = ${userId}
+        and crash_database_id in (select id from crash_databases where project_id = ${projectId})`,
+  );
 }

@@ -424,7 +424,8 @@ payload, so it cannot be missed by someone reading only the file.
 
 **The API serves the built interface.** One origin, so the session cookie is
 first-party and there is no CORS configuration to get wrong, and one container to
-deploy.
+deploy. Release 6 added one deliberate exception, three paths wide, for the browser
+crash SDK, which runs on somebody else's origin by definition: see section 24.12.
 
 **The design follows PRD section 20.5 exactly**: zinc neutrals with one warm accent
 (`#C2410C` light, `#FB923C` dark) used only for primary actions, active states and the
@@ -1438,3 +1439,350 @@ an attachment's storage key is fixed at upload and never changes, which is what 
 its asset URL stable for life (FR-069). Binding retags in place instead of copying to a
 second prefix, so there is no window in which the bytes live at a key the database does
 not know about. The code was right and the sentence was wrong, so the sentence changed.
+
+## 24. Release 6: Crash Reports
+
+The Crash Reports PRD (`docs/prd/crash-reports.md`) is implemented in the order the data
+flows: the contract both ends share, then the tables, then ingest, then reading, then the
+interface and the SDK. This section records the choices as they are made; each subsection
+names the requirements it serves and what was rejected.
+
+### 24.1 One envelope module, shared by the server and the SDK
+
+`packages/shared/src/crash.ts` holds the section 9.1 schema, the CR-021 normalizer and
+the CR-020 fingerprint. The API validates with it; the SDK will enforce the same bounds
+before queueing and compute the same fingerprint for its client-side dedupe (CR-099). The
+PRD asks for this so the two cannot drift (section 11, Security). It also means a bound is
+changed in exactly one place.
+
+- **`strictObject` is the whole of CR-011.** An unknown top-level key is a zod issue with
+  the key's path; the route turns that into `unknown_field` naming it. No allowlist to
+  maintain beside the schema.
+- **The message is the only field that is truncated rather than rejected.** It is the one
+  thing a client cannot bound ahead of time, and losing a crash report over a long message
+  helps nobody. Everything else is a hard bound: a client that sends 31 frames is
+  misconfigured, and a `400` says so.
+- **The fingerprint hashes length-prefixed parts, not a joined string.** `["a","bc"]`
+  and `["ab","c"]` must not collide. SHA-256 through WebCrypto, because the SDK runs in
+  browsers; Node's `crypto.subtle` gives the same bytes, so a test can assert the SDK and
+  the server agree byte for byte.
+- **Normalization order is fixed and tested.** Quoted strings first, so a path inside
+  quotes becomes `<str>` not `<path>`; URLs before paths and hex; emails before hex;
+  timestamps before integers; UUIDs before hex. Each placeholder is distinct, so
+  "user <uuid> not found" and "user <email> not found" stay two bugs. *Rejected:* one
+  `<x>` placeholder for everything, which is what Bugsink does. It over-groups messages
+  that differ only in which kind of token they carry.
+- **Custom kinds require no conditional block.** CR-012 names the built-in kinds; an
+  integrator's own kind carries whatever it likes and fingerprints on the kind alone plus
+  whichever block it did send.
+- **`CRASH_GROUPING_VERSION` is a constant in this file.** Change the normalizer or the
+  frame rule, bump it; a crash database records the version it was created with and is
+  grouped with that forever (CR-023). Version 1 is the only version, so there is no
+  per-version branch yet; when version 2 exists it is a `switch` on the database's column.
+
+### 24.2 Tables
+
+Six new tables and one hourly counter, all under `crash_` (`apps/api/src/db/schema.ts`,
+migration `0005_crash_reports.sql`). Three existing tables changed, additively:
+
+- **`notification_deliveries` gains `kind`** (FD-006) with the default
+  `submission_received`, so every existing row keeps its meaning; `submission_id` becomes
+  nullable and `crash_group_id` arrives beside it. The worker renders by kind. *Rejected:*
+  a second queue for crash deliveries. FD-006 says adding a kind adds a renderer, never
+  a queue, and the claim-and-lease logic of section 21.1 is the part nobody wants twice.
+- **`slack_notifications.feedback_database_id` lost its foreign key and kept its name.**
+  The column now holds either an `fdb_` or a `cdb_` ID; the prefix says which table it
+  names. Renaming the primary key column to `database_id` would have been tidier and would
+  have bought nothing but a rewrite of every query in `notifications.ts`. Deleting a crash
+  database removes its settings row in the deletion service instead of by cascade.
+- **`invitations` gains `crash_database_id`** as the third scope (FD-007). Exactly one of
+  the three scope columns is set; the check lives in the service, as it did for two.
+
+Choices inside the crash tables:
+
+- **The daily rollup is keyed on (group, day, release, OS, environment).** CR-048 wants
+  the database-wide timeline to honour the list filters; a rollup per group per day alone
+  could not be filtered by release or OS without scanning reports. Five columns is the
+  smallest key that answers every CR-048 filter except user ID and text query, which read
+  the groups table. *Rejected:* separate rollups per dimension, three tables where one
+  serves.
+- **`latest_report_id` has no foreign key.** Eviction may remove the report a group names;
+  the reader tolerates a dangling pointer and falls back to the newest retained report.
+- **Releases store `build` and `channel` as empty strings, not nulls**, so the unique
+  index on `(database, version, build, channel)` behaves; PostgreSQL treats two nulls as
+  distinct in a unique index.
+- **Dropped counts are hourly rows, not a rolling counter.** "The last 24 hours" (CR-004)
+  is a sum over at most 24 rows and the daily pass deletes older ones. A single counter
+  would need a decay rule nobody would trust.
+- **There is no IP column on reports** (CR-015), and no way to add one by accident: the
+  ingest route never reads the request address.
+
+### 24.3 Ingest over HTTP
+
+- **The envelope is validated after the body is parsed, in `parseEnvelope`, not by the
+  route's body schema.** Fastify's zod type provider would answer with the generic
+  `validation_failed`; the PRD wants three distinct codes. Order inside the function: a
+  non-object is `invalid_envelope`; over 64 KiB re-serialized is `envelope_too_large`; a zod
+  `unrecognized_keys` issue at the root is `unknown_field` naming each key; every other issue
+  is `invalid_envelope` with the dotted path. The route's `bodyLimit` is 96 KiB, so a 65 KiB
+  envelope reaches the size check and gets the specific code rather than Fastify's 413.
+- **A batch is fifty independent transactions, not one.** CR-014 says every valid item is
+  stored even when others fail; one transaction could not do that without savepoints per
+  item, and the per-item transaction already exists. A batch of fifty is fifty database
+  round trips; at the PRD's volumes that is fine, and the SDK batches to save HTTP requests,
+  not database work.
+- **The rate limiter runs before the transaction** and counts a report only when it is
+  admitted, so a client in a `429` loop does not extend its own penalty. The limiter's
+  answer travels as an `ApiError` detail named `retryAfter`; the route copies it into the
+  `Retry-After` header. *Rejected:* `@fastify/rate-limit` on the route, which keys on the
+  client address and cannot see the fingerprint.
+- **`isNewGroup` is false on a repeated `eventId`.** CR-013 says a repeat returns the
+  original report and group IDs and changes nothing; reporting `isNewGroup: true` a second
+  time would make an SDK announce the same group twice.
+- **The routes are registered without a prefix**, so management lives under `/projects` and
+  ingest under `/crash-databases` as section 7.2 proposes, from one file.
+
+### 24.4 Reading and triage
+
+- **One filter builder, two targets.** `groupWhere` produces the WHERE fragment on the
+  groups table; `dailyWhere` produces the matching fragment on the rollup and, when a
+  group-only filter is present (state, kind, text, user, arch), nests `groupWhere` in an
+  EXISTS. The list, the total, the sparklines and the CR-048 timeline all read through these
+  two, so a filter cannot mean one thing in the list and another in the chart.
+- **Release, OS and environment filter through the rollup, not the reports.** A group
+  "is on release X" when it has a rollup row for X. This is what makes CR-082 hold for
+  filters too: evicting reports does not drop a group out of a release filter. *Rejected:*
+  filtering through `crash_reports`, which is faster to write and wrong after eviction.
+  The one exception is `arch`, which the rollup does not carry, so it reads reports and is
+  documented as approximate once eviction has run; adding arch to the rollup key was
+  judged not worth a sixth key column for a filter the PRD lists last.
+- **New groups per day comes from `crash_groups.first_seen_at`**, not the rollup. The
+  rollup counts reports; a group's birth is a property of the group. One `GROUP BY` on an
+  indexed column at database scale is cheap.
+- **Sparklines are one query for the whole page**, a `GROUP BY (group, day)` over the page's
+  IDs, then distributed in memory. Fifty groups is one round trip, not fifty.
+- **Resolving clears `regressed`; ignoring and reopening keep it.** The flag is history
+  ("this came back once") until a developer claims a fix; CR-028 reads the same way.
+- **Resolving in a release the database has never seen is an error**
+  (`crash_release_not_found`), not a silent create. Release order is first-sighting order
+  (CR-030); inventing a release at resolve time would give it an order that says nothing.
+  The developer resolves without a release, or ships first and resolves after the first
+  report from the new version arrives.
+- **Bulk state changes refuse unknown IDs** rather than skipping them; a multi-select in
+  the interface that silently did less than asked is worse than a 404.
+- **`stats?by=release|os|environment` returns the timeline plus a breakdown.** It was
+  first left out as redundant with the releases list; the conformance audit put it back
+  because CR-046 names it, and because the Groups tab's OS and environment selects need the
+  list of values a database has actually seen, which is exactly this query.
+
+### 24.5 Slack messages for crash groups
+
+- **The delivery claim carries `kind` and dispatches to a renderer.** `render` handles
+  `submission_received` exactly as before; `renderCrash` handles the two crash kinds. The
+  queue, the claim-and-lease, the retry contract and the send path are untouched (FD-006).
+- **Rendered from the group at send time**, so the count in the message is the count when
+  Slack receives it, and a group ignored between enqueue and send sends nothing (CR-029).
+- **The headline is built from group columns, never from the envelope.** Kind, exception
+  type, top frame or module, release. The message text is not in the group's title columns
+  by design (`sample_message` exists for the interface only and is not read here), so there
+  is no path by which content reaches Slack. Every column is escaped anyway.
+- **The link goes to the group**, `/crash-databases/{id}/groups/{groupId}`, the route the
+  web interface will own. Chosen now so the interface has to meet it, not the other way.
+- **No content level.** CR-050 says there is none for crash databases; the renderer ignores
+  the column and the settings route to come hides it.
+
+### 24.6 The third membership scope
+
+- **Invitations gained a column, not a table.** `invitations.crash_database_id` sits beside
+  `feedback_database_id`; exactly one of the three scope columns is set, checked in the
+  service as it was for two. The view gains `scope: 'crash_database'` and a
+  `crashDatabaseId` field; existing clients that switch on the two old values see the new
+  one only for invitations they could not have created.
+- **Membership functions are separate per table, but the FR-071 resolution is one
+  function.** `mergeMembers` takes the project roles and the overrides and produces the
+  member list with `effectiveRole` and `inherited`; the feedback and crash list functions
+  differ only in which table they read overrides from. The Admin-cannot-be-narrowed and
+  has-an-account checks are shared too (`assertOverridable`). *Rejected:* one generic
+  function over a table parameter; Drizzle loses the row types and the code gains a
+  second thing to decode.
+- **Removing a project member clears their crash overrides as well as their feedback
+  ones**, in the same function, so the two cannot drift.
+- **A database-only member does not see the project's database lists**, for crash
+  databases exactly as for feedback databases. They reach their database by its address.
+  Recorded because the test first assumed otherwise.
+
+### 24.7 Export and MCP
+
+- **Group export carries the fingerprint.** It is the one thing an operator needs to
+  correlate an exported group with a client-side dedupe log, and it is a hash, not content.
+- **Report export streams.** `Readable.from` over an async generator that pages by report
+  ID in blocks of 500; the first streaming response in the API. *Rejected:* building the
+  NDJSON string in memory, which at the 100,000-report cap is a 1 GB string.
+- **The crash tools live in their own file** (`crash-tools.ts`) and are registered from
+  `registerTools`, so the feedback tool file does not double in size, while the server still
+  has one registration entry point and one test harness.
+- **The shared tools dispatch on the ID prefix.** `databasePath` sends `cdb_` to
+  `/crash-databases` and everything else to `/feedback-databases`. *Rejected:* a
+  `databaseType` argument on every shared tool, which asks an agent to state what the ID
+  already says.
+- **`update_crash_group_state` is one tool for one or many groups**, as the PRD lists it;
+  it picks the single or the bulk route by the length of the list. An agent should not have
+  to learn two tools for one action.
+- **`send_crash_test_report` posts through the ordinary ingest route** with the secret key,
+  kind `message`, environment `development`, release `test` by default. It is a real report
+  and lands in a real group; that is the point of a test.
+
+### 24.8 The SDK
+
+- **`@inlet/shared` was split so the SDK can bundle half of it.** `crash-core.ts` holds
+  the bounds, kinds, normalizer and fingerprint with no imports; `crash.ts` adds the zod
+  schema for the API and re-exports the core. The SDK imports only the core, and esbuild
+  inlines it, so `@inlet/sdk` has zero runtime dependencies (FD-013) while computing the
+  byte-identical fingerprint the server groups by. A unit test asserts the two agree.
+  *Rejected:* the SDK validating with zod, which would make zod a dependency of every
+  application, and the SDK carrying its own copy of the normalizer, which would drift.
+- **Bounds on the client mirror the server's table, with one reading of "truncate where
+  the envelope permits".** The message is truncated; frames beyond thirty are dropped
+  because the SDK built them; tags beyond twenty are dropped one by one with a warning
+  because the SDK collected them; an oversized `context` or envelope drops the event with a
+  warning, because those are the integrator's and silently cutting them would send
+  something they did not write.
+- **The fatal path is synchronous end to end, and needs a synchronous hash.** WebCrypto is
+  asynchronous, so the fingerprint for dedupe cannot be computed on the way down in a
+  browser. The Node adapter passes `node:crypto`'s SHA-256 as `hash`; with it, `captureFatal`
+  builds, dedupes, and writes the queue file synchronously before any network. Without it,
+  dedupe is skipped on that path rather than the write, because a report on disk beats a
+  perfectly deduplicated one that was never written.
+- **`beforeSend` does not run on the fatal path.** It is asynchronous by contract, and the
+  process is dying. Redaction, which is synchronous, does run.
+- **Replay paces requests, not events.** FD-012 says at least 100 ms between replayed
+  events; a batch of fifty is one request, and 100 ms between requests keeps a replaying
+  client well under the per-key limit while draining a full queue in seconds rather than
+  minutes. Recorded because it is the one place the wording was read loosely.
+- **A 4xx for a single report is treated as answered, including 401 and 403.** Resending
+  cannot fix a bad key or a foreign database, and a client that retried forever on a revoked
+  key would be a silent leak of attempts. The debug hook says what happened.
+- **Electron renderers hold nothing.** No key, no queue, no transport: every capture is
+  an envelope over IPC to main, which fills in what only it knows and queues it. The
+  documented path is a preload bridge; `require('electron')` works only without context
+  isolation and is a fallback, not a recommendation.
+- **The React helper takes `React` as a parameter** rather than importing it, so the
+  package has no peer dependency and an application without React never loads it.
+- **Not built in this release: `@inlet/sdk/feedback`.** The PRD allows it to slip to
+  Release 7; the existing client API is documented and small.
+
+### 24.9 What verification changed
+
+Three things the tests found that the code review had not:
+
+- **Deleting a feedback database stopped removing its Slack settings** once the settings
+  row lost its foreign key. The deletion service now removes settings and deliveries
+  explicitly, and the existing Slack suite is what caught it.
+- **The SDK transport marked itself loaded before the disk read finished.** A `flush` right
+  after `init` saw an empty queue and returned; the end-to-end suite, which replays a queue
+  left by an "offline" run, caught it in the first minute. `load` now memoizes its promise
+  and merges by event ID, and the fatal path reads the previous queue synchronously before
+  writing so it cannot clobber it.
+- **Export breakdowns came back in planner order.** A bare `GROUP BY` produced
+  `1.1.0=1 1.0.0=3` on one run and the reverse on the next. The query orders by count then
+  name, so an export is byte-identical run to run.
+
+### 24.10 The conformance audit
+
+A requirement-by-requirement pass over the Crash Reports PRD after the build
+(`docs/plans/crash-reports-release-6.md`, "Conformance"). It changed five things:
+
+- `stats?by=…` (CR-046) was built, and the Groups tab's OS and environment filters became
+  selects fed by it (section 8.1 asks for selects, not text fields).
+- The group detail accepts the release, OS and environment filters and reshapes its
+  breakdowns and timeline (CR-041, "with the same filters as the list").
+- `/v1/health` reports `capabilities`, and the SDK's first-use check reads it, so an old
+  deployment is told apart from an unreachable one (FD-013, the minimum-server check).
+- The retention pass and the Electron adapter gained direct tests; both had been covered
+  only by the code paths they share with tested code.
+- The crash delete dialog offers the exports beside the warning (FD-002, "deletion with
+  warning and export offer").
+
+One naming deviation: PRD section 7.1 lists an `unknown_crash_database` error; the API
+answers `crash_database_not_found` and `crash_database_inaccessible`, following the two
+codes feedback databases already use, so a client that handles the feedback pair handles
+the crash pair the same way. Section 7 calls its names proposals.
+
+Three readings are recorded rather than changed. **CR-081** says a daily pass; the pass runs
+hourly, which honours the age limit at least as well and lets a database far over its
+limit catch up in bounded steps. **CR-090** says no other public surface; `@inlet/sdk/crash`
+also exports `defaultRedaction`, `redactExcept`, `CrashClient`, `MemoryStore` and
+`getClient`. The first two exist so an integrator can *replace* the redaction policy, which
+CR-094 requires; the rest are what a test or an application with two databases needs, and
+none of them sends anything. **CR-023**'s opt-in to a newer grouping version has no route
+because there is only version 1; the column exists and the switch is described where it
+will go.
+
+### 24.11 Measured, not estimated
+
+The per-database `for update` lock in ingest (24.3's "ponytail" note) was the one design
+choice with a plausible performance cost, so it was measured rather than argued: 647
+reports per second at 5 in flight with a 9.7 ms p95, 709 at 50 in flight, and 377 while
+eviction ran on every request past the cap. The PRD asks for 100. Reads on a database at
+its 10,000-report cap take 2 to 20 ms. The lock stays; the upsert-with-returning upgrade
+path stays documented and unbuilt.
+
+### 24.12 Crash ingest is the one cross-origin surface
+
+**What changed.** Section 13 recorded that there was no CORS configuration to get wrong.
+That held for five releases because every browser that talked to Inlet was served by Inlet:
+the management interface, the reference renderer, the hosted form inside its iframe.
+`@inlet/sdk/crash/browser` is the first client that is not. It runs on the integrator's own
+origin, and its transport sends `authorization` and `content-type: application/json`, both
+non-simple, so a preflight is unavoidable. Without CORS the preflight matched no route,
+answered 404, and the browser never sent the report — browser crash reporting was not merely
+awkward, it was impossible, while the docs promised it.
+
+**The exception is three paths.** The two ingest routes and the health probe the SDK reads
+before its first send, matched by one regular expression on the raw request path. Wildcard
+origin with credentials off, which is the safe pair: with no
+`Access-Control-Allow-Credentials` a browser attaches no cookie, so a management session
+cannot be replayed from another origin, and ingest carries its own bearer publishable key,
+which was always meant to travel in public code. A secret key still reaches nothing
+cross-origin, and neither does management, the client feedback flow or the interface.
+
+**Hand-rolled rather than `@fastify/cors`.** Origin reflection, credentials and per-origin
+`Vary` are what that plugin is for, and this decision discards all three; what is left is one
+`onRequest` hook. *Rejected:* registering the plugin globally with a delegator returning
+`{ origin: false }` everywhere else, which changes the answer to `OPTIONS` on every path in
+the application in order to open three, and makes "is this route cross-origin?" a question you
+answer by reading a delegator and then the plugin's source. *Also rejected:* an encapsulated
+scope around the ingest routes, which does not work at all — a preflight matches no route, so
+Fastify serves it from the 404 context, and that context is built from the **root** instance's
+hooks. A hook inside a child scope would never run for the one request that needs it.
+
+**`Access-Control-Expose-Headers: retry-after`.** CR-016's backoff is carried in a header that
+is not CORS-safelisted. Without exposing it a browser client reads `null` and falls back to
+sixty seconds, ignoring the number the server actually sent. This was found by writing the
+test, not by reading the code.
+
+**Headers are set in `onRequest`, so error responses carry them too.** A cross-origin 401 or
+429 without them is an opaque network failure to `fetch`; the SDK would treat a permanent
+refusal as a transport failure and requeue it for ever.
+
+**No `Vary: Origin`.** The response does not vary by origin, so the only effect would be a
+per-origin entry in every cache in front of Inlet.
+
+### 24.13 What the browser adapter's first test found
+
+The Release 6 audit left one gap open and named it: the browser IndexedDB store had no
+automated test. Closing it found a fault that review had not.
+
+`IndexedDbStore.open()` memoised its connection promise and rebuilt it only when the field was
+falsy — and a rejected promise is not falsy. A Firefox private window, a blocked upgrade or an
+exhausted quota makes the first open fail, and the rejection was then cached for the life of
+the page: every later read and write failed with the same stale error. Because every caller
+treats a store failure as "carry on in memory, warn through `debug`", the SDK went on working
+while quietly persisting nothing, which is precisely the failure CR-097 exists to prevent and
+the one a developer would never notice. The fix forgets a failed open, so the next call
+retries; it also handles `onblocked`, and closes on `onversionchange` so a second tab cannot
+block the first for ever.
+
+The test that pins it (`e2e/api/sdk-browser.spec.ts`) fails a single `indexedDB.open` — the one
+the client constructor's queue read consumes — and asserts the report still reaches IndexedDB.
+It was run against the old implementation and confirmed red before being kept.

@@ -40,6 +40,13 @@ export function DatabaseSwitcher({
     queryFn: () => api.listDatabases(projectId),
     enabled: open,
   });
+  // FD-003: the switcher moves between databases of every type without going back to
+  // the project. Crash databases are listed under their own heading.
+  const crashSiblings = useQuery({
+    queryKey: ['crash-databases', projectId],
+    queryFn: () => api.listCrashDatabases(projectId),
+    enabled: open,
+  });
 
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
@@ -60,6 +67,9 @@ export function DatabaseSwitcher({
 
       <DropdownMenuContent align="start" className="min-w-56">
         <DropdownMenuLabel className="truncate">{projectName}</DropdownMenuLabel>
+        {(siblings.data?.length ?? 0) > 0 && (crashSiblings.data?.length ?? 0) > 0 ? (
+          <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">Feedback</DropdownMenuLabel>
+        ) : null}
         {siblings.data?.map((sibling) => (
           <DropdownMenuItem key={sibling.id} asChild>
             <Link to={`/databases/${sibling.id}`}>
@@ -72,7 +82,22 @@ export function DatabaseSwitcher({
             </Link>
           </DropdownMenuItem>
         ))}
-        {siblings.isLoading ? (
+        {(crashSiblings.data?.length ?? 0) > 0 ? (
+          <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">Crash reports</DropdownMenuLabel>
+        ) : null}
+        {crashSiblings.data?.map((sibling) => (
+          <DropdownMenuItem key={sibling.id} asChild>
+            <Link to={`/crash-databases/${sibling.id}`}>
+              {sibling.id === databaseId ? (
+                <CheckIcon />
+              ) : (
+                <span aria-hidden="true" className="size-4" />
+              )}
+              <span className="truncate">{sibling.name}</span>
+            </Link>
+          </DropdownMenuItem>
+        ))}
+        {siblings.isLoading || crashSiblings.isLoading ? (
           <DropdownMenuItem disabled>Loading</DropdownMenuItem>
         ) : null}
         <DropdownMenuSeparator />

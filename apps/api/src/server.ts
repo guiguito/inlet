@@ -10,6 +10,7 @@ import { deleteExpiredSessions } from './lib/session.js';
 import { bootstrapAdmin } from './services/bootstrap.js';
 import { startPurgeWorker } from './services/purge.js';
 import { startNotificationWorker } from './services/notifications.js';
+import { startCrashRetentionWorker } from './services/crashes.js';
 
 /** Process entry point for the bundled deployment. */
 const env = loadEnv();
@@ -64,10 +65,12 @@ await deleteExpiredSessions(db);
 const app = await buildApp(ctx);
 const stopPurgeWorker = startPurgeWorker(ctx);
 const stopNotificationWorker = startNotificationWorker(ctx);
+const stopCrashRetentionWorker = startCrashRetentionWorker(ctx);
 
 const shutdown = async (signal: string): Promise<void> => {
   log.info({ signal }, 'shutting down');
   stopPurgeWorker();
+  stopCrashRetentionWorker();
   // Awaited, unlike the purge worker: a Slack request in flight when the pool closes
   // cannot record that it succeeded, so its lease would expire and the message would be
   // delivered a second time. That makes an ordinary deploy the likeliest duplicate.

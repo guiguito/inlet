@@ -1,0 +1,50 @@
+{
+  "name": "@inlet/sdk",
+  "version": "0.1.0",
+  "description": "The Inlet client SDK. Crash Reports module with Node, browser and Electron adapters.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "files": ["dist"],
+  "exports": {
+    "./crash": {
+      "types": "./dist/crash/index.d.ts",
+      "import": "./dist/crash/index.js",
+      "require": "./dist/crash/index.cjs"
+    },
+    "./crash/node": {
+      "types": "./dist/crash/node.d.ts",
+      "import": "./dist/crash/node.js",
+      "require": "./dist/crash/node.cjs"
+    },
+    "./crash/browser": {
+      "types": "./dist/crash/browser.d.ts",
+      "import": "./dist/crash/browser.js",
+      "require": "./dist/crash/browser.cjs"
+    },
+    "./crash/electron": {
+      "types": "./dist/crash/electron.d.ts",
+      "import": "./dist/crash/electron.js",
+      "require": "./dist/crash/electron.cjs"
+    },
+    "./crash/react": {
+      "types": "./dist/crash/react.d.ts",
+      "import": "./dist/crash/react.js",
+      "require": "./dist/crash/react.cjs"
+    }
+  },
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "build": "node build.mjs && tsc -p tsconfig.json --emitDeclarationOnly",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@inlet/shared": "*",
+    "@types/node": "^22.20.1",
+    "esbuild": "*",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.0"
+  }
+}

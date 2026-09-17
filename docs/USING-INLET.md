@@ -11,6 +11,7 @@ For the person collecting the feedback. If you are deploying it, read
 - [Publishing and versions](#publishing-and-versions)
 - [Reading responses](#reading-responses)
 - [Slack notifications](#slack-notifications)
+- [Crash reports](#crash-reports)
 - [Sharing access](#sharing-access)
 - [Exporting and deleting](#exporting-and-deleting)
 - [Working with Claude and other AI agents](#working-with-claude-and-other-ai-agents)
@@ -25,6 +26,11 @@ Three levels, and it is worth getting them straight once.
   feedback", "Checkout survey", "Bug reports".
 - A **response** is one submission: the answers, any screenshots, and the version of
   the form it was answered against.
+
+A project can also hold **crash databases**, which receive failure reports from an
+application instead of answers from a person. They sit beside the feedback databases on
+the project page, share its API keys and access rules, and are described in
+[Crash reports](#crash-reports).
 
 Access is granted at either the project or the feedback-database level, so you can let
 someone read one form's responses without seeing the rest of the project.
@@ -146,6 +152,104 @@ queued in the same transaction, then retried with backoff. Slack being down, thr
 or deleted changes nothing a respondent sees, and the panel shows the last delivery
 error when something is wrong.
 
+## Crash reports
+
+A **crash database** tells you that your application broke, how often, on which versions
+and systems, and for how many users, then hands you a report and gets out of the way. It
+is not a Sentry: it never receives a memory dump, never symbolicates, never records what
+your users typed. What it stores is exactly the envelope your application sends, and the
+envelope has no field for content.
+
+### The shape of it
+
+- A **report** is one failure: an exception, an unhandled promise rejection, a renderer
+  process that died, a native crash your app parsed itself, a child process that exited,
+  or a message you chose to send.
+- A **group** is every report that is the same bug. The server decides, from the failure
+  kind, the error type, the message with numbers, paths, IDs and quoted strings stripped
+  out, and the top five frames of your own code (file names, never line numbers). A crash
+  loop on one machine is one group with a count, not a thousand rows.
+- A **release** is the version string your application reports. Releases are ordered by
+  when Inlet first saw them; it never parses the string.
+
+### Setting it up
+
+**Project → Databases → New crash database.** Then open **Collect**. It shows the crash
+database ID, your project's publishable key, and an install snippet for Node, browsers,
+Electron's main process and Electron's renderer:
+
+```ts
+import * as crash from '@inlet/sdk/crash';
+
+crash.init({
+  baseUrl: 'https://inlet.example.com',
+  publishableKey: 'ipk_…',
+  crashDatabaseId: 'cdb_…',
+  release: app.getVersion(),
+});
+crash.installNodeHandlers();
+```
+
+Press **Send a test report** to see one land before you ship anything. If your
+application is not JavaScript, any HTTP client can post the envelope documented in
+[API.md](API.md#crash-reports).
+
+### Triage
+
+**Groups** opens with a timeline: reports per day and new groups per day, over 7, 30 or 90
+days, with a marker on the day each release first appeared. Below it, one row per group
+with its count, how many distinct users hit it, when it was first and last seen, and a
+small sparkline. Filter by state, release, operating system, environment or failure kind,
+or search the error type and message; the chart follows the filters. Select several rows
+to resolve or ignore them together.
+
+Open a group for its own timeline, a breakdown by release and by operating system, and
+the most recent reports. Open a report to read its frames as a stack, with your own code
+in full and library frames marked external. **Raw JSON** shows exactly what was received.
+
+### Resolving, and knowing when it came back
+
+**Resolve** a group, and name the release the fix ships in. From then on, reports from that
+release or an older one count silently: they are users who have not updated yet. A report
+from a release Inlet first saw *after* the fix reopens the group as **Regressed**, and Slack
+hears about it once. Resolving without a release means the very next report reopens it.
+
+**Ignore** a group you do not intend to fix. It keeps counting and never notifies, until
+you reopen it.
+
+**Releases** lists every version in the order it appeared, with its reports, how many
+groups it touched and how many it introduced. **Show groups** filters the Groups tab to
+one release, which is how you check that a fix shipped: a group present on 1.4.0 and
+absent on 1.4.1 has stopped.
+
+### Slack
+
+**Settings → Notifications** works as for a feedback database, with one difference: a
+crash database announces a **new group** and a **regression**, and nothing else. There is
+no per-occurrence message and no content level to choose. The message names the failure
+kind, the error type, the top frame or module and the release, with the count and a link.
+The error message itself never goes to Slack, because it might contain something a user
+typed.
+
+### Retention
+
+**Settings → Retention.** A crash database keeps at most a number of reports (10,000 by
+default, between 1,000 and 100,000) for at most a number of days (90 by default, between 7
+and 365, or unlimited). Over the cap, the oldest reports of the fullest group go first, and
+every group keeps its most recent report. Groups, their counts, their timelines and their
+release breakdowns are never subject to retention: a group whose reports have all expired
+still shows what happened and when.
+
+The database header shows how many reports were refused for rate limiting or removed by
+retention in the last 24 hours, so a quiet chart is distinguishable from a full one.
+
+### What is never stored
+
+No request address is recorded on a crash report. The only identity is an opaque user ID
+your application chooses to send, and only if it does. Everything a report contains is in
+the envelope your code built; `context` is whatever you put there, and the interface says
+so wherever it shows it.
+
 ## Sharing access
 
 **Settings → Access**, or the project's own Access tab. Invitations are single-use links
@@ -187,7 +291,7 @@ claude mcp add inlet \
   -- node "$PWD/apps/mcp/dist/server.js"
 ```
 
-It authenticates with a secret server key and exposes 36 tools. Read-only tools are
+It authenticates with a secret server key and exposes 55 tools, feedback and crash reports together. Read-only tools are
 marked as such, so an agent can explore without changing anything, and the destructive
 ones require confirmation. Full list in [MCP.md](MCP.md).
 

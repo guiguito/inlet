@@ -95,7 +95,7 @@ test.describe('inviting a teammate', () => {
 
       // A Creator sees who has access but cannot change it (FR-073).
       await visitor.page.getByRole('link', { name: /Team project/ }).click();
-      await expect(visitor.page.getByRole('tab', { name: 'Feedback databases' })).toBeVisible();
+      await expect(visitor.page.getByRole('tab', { name: 'Databases' })).toBeVisible();
       await visitor.page.getByRole('tab', { name: 'Access' }).click();
 
       await expect(visitor.page.getByTestId(`member-${email}`)).toBeVisible();
