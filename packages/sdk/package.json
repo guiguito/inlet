@@ -3,9 +3,34 @@
   "version": "0.1.0",
   "description": "The Inlet client SDK. Crash Reports module with Node, browser and Electron adapters.",
   "license": "MIT",
+  "author": "Guilhem Duch\u00e9",
+  "homepage": "https://github.com/guiguito/inlet/tree/main/packages/sdk#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/guiguito/inlet.git",
+    "directory": "packages/sdk"
+  },
+  "bugs": {
+    "url": "https://github.com/guiguito/inlet/issues"
+  },
+  "keywords": [
+    "inlet",
+    "crash-reporting",
+    "error-tracking",
+    "error-reporting",
+    "self-hosted",
+    "electron",
+    "browser",
+    "node",
+    "sdk",
+    "privacy"
+  ],
   "type": "module",
   "sideEffects": false,
-  "files": ["dist"],
+  "files": [
+    "dist",
+    "src"
+  ],
   "exports": {
     "./crash": {
       "types": "./dist/crash/index.d.ts",
@@ -33,11 +58,17 @@
       "require": "./dist/crash/react.cjs"
     }
   },
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "node build.mjs && tsc -p tsconfig.json --emitDeclarationOnly",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepack": "npm --prefix ../.. run build:shared && npm run build"
   },
   "dependencies": {},
   "devDependencies": {

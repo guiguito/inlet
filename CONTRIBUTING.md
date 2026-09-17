@@ -86,6 +86,33 @@ npm run openapi
 
 Commit the result alongside a route or schema change.
 
+## Publishing `@inlet/sdk`
+
+The SDK is the one package in this repository that ships to a registry. It is versioned
+independently of the server, because an integrator upgrades the two on their own schedule;
+the compatibility check is at runtime, where the SDK reads `capabilities` from `/v1/health`
+and warns if a deployment predates the capability it is reporting to.
+
+```
+npm version <patch|minor|major> -w @inlet/sdk   # tag the SDK, not the repo
+npm publish -w @inlet/sdk                        # prepack rebuilds dist first
+```
+
+`prepack` runs `build:shared` and then the SDK build, so a stale or missing `dist` cannot be
+published. `publishConfig.access` is `public`, without which npm refuses a scoped package.
+
+What makes this publishable from a monorepo at all is that the bundle inlines
+`@inlet/shared`: there are no runtime dependencies and the generated declarations do not
+reference the private workspace package, so the tarball stands alone. Keep it that way. If
+the SDK ever needs a real dependency, add it to `dependencies` deliberately and say why in
+`docs/DECISIONS.md` — Foundations FD-013 asks for zero.
+
+Before publishing anything, check the tarball rather than trusting the manifest:
+
+```
+npm pack -w @inlet/sdk --dry-run
+```
+
 ## Security
 
 Do not open a public issue for a vulnerability. [SECURITY.md](SECURITY.md) explains
