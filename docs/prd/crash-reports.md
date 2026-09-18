@@ -1,14 +1,14 @@
 # Inlet — Crash Reports PRD
 
 ## Document Status
-**Status:** Implemented as Release 6 on September 17, 2026: server, interface, MCP tools and `inlet-sdk/crash` with Node, browser and Electron adapters. Technical choices and rejected alternatives: `docs/DECISIONS.md` section 24. Deferred to Release 7: `inlet-sdk/feedback`, which section 15 allows.
+**Status:** Implemented as Release 6 on September 17, 2026: server, interface, MCP tools and `inlet-sdk/crash` with Node, browser and Electron adapters. Technical choices and rejected alternatives: `docs/DECISIONS.md` section 24. `inlet-sdk/feedback`, which section 15 allowed to slip, is specified in Feedback Collection PRD section 25 as Release 7 — SDK.
 **Product:** Inlet — Crash Reports capability
 **Language:** English
 **Foundations:** Accounts, roles, keys, notifications plumbing, export, deletion, deployment, brand, SDK packaging and MCP conventions are on the Foundations PRD and are not repeated here.
 **Sources:** the HappyVibe "Crashreporting?" proposal (revised September 16, 2026), the competitor research in Appendix A, and the Inlet codebase as of Release 5.
 **Notion page:** https://app.notion.com/p/3ddd33dfffca81129df2c8a1e4af25cb
 **Repository mirror:** `docs/prd/crash-reports.md`
-**Last revised:** September 17, 2026
+**Last revised:** September 18, 2026 (release numbering after Release 7 — SDK)
 
 > **Positioning in one line.** Collect, group, notify, hand off. Inlet tells you that your application broke, how often, on which versions and systems, and for how many users, then hands the developer a content-free report and gets out of the way. It is not Sentry: it never receives a minidump, never symbolicates, never traces, never replays, and never stores a line of your users' content.
 
@@ -36,8 +36,8 @@ The first consumer, the HappyVibe desktop application, measured the gap directly
 ### 3.2 Non-Goals for Release 6
 - Sentry-protocol compatibility. Decided with the product owner on September 16, 2026; research favours it, so it is recorded as **revisit after Release 6**, not never.
 - Minidump or native dump ingestion, symbol servers, and server-side symbolication. A native crash arrives as a parsed summary from the SDK or the integrator.
-- Source maps and debug-ID symbolication (Release 7 candidate, design note in section 14).
-- Breadcrumbs (Release 7 candidate, opt-in, bounded).
+- Source maps and debug-ID symbolication (candidate for a later Crash release, design note in section 14).
+- Breadcrumbs (candidate for a later Crash release, opt-in, bounded).
 - Performance tracing, session replay, release-health sessions and crash-free rates.
 - Group split, unmerge, server-side fingerprint rules, alert thresholds and digests.
 - Any respondent identity beyond an optional integrator-supplied opaque user ID.
@@ -207,7 +207,7 @@ Reading: `list_crash_databases`, `get_crash_database`, `list_crash_groups` (all 
 Writing: `create_crash_database`, `rename_crash_database`, `update_crash_group_state` (one or many groups; resolve with optional release, ignore, reopen), `update_crash_retention`, `send_crash_test_report`.
 Destructive: `delete_crash_database` (echo the exact name), `delete_crash_group` (echo the group ID).
 Shared tools already exist for members, invitations, notification settings and the deletion impact; they accept a crash database ID.
-Release 7 candidate: `merge_crash_groups`.
+Candidate for a later Crash release: `merge_crash_groups`.
 
 ## 9. Data Contracts
 ### 9.1 Envelope
@@ -228,7 +228,7 @@ The server accepts exactly these fields and rejects any other top-level key.
 | `os` | no | `{name ≤ 32, version ≤ 64, arch ≤ 16}` | |
 | `runtime` | no | `{name ≤ 32, version ≤ 32}` | Node, Chromium, Electron, browser |
 | `user` | no | `{id ≤ 128}` | Only `id` is accepted |
-| `tags` | no | ≤ 20 pairs, key ≤ 64, value ≤ 256 | Flat strings; indexed for filtering in Release 7 |
+| `tags` | no | ≤ 20 pairs, key ≤ 64, value ≤ 256 | Flat strings; indexed for filtering in a later Crash release |
 | `context` | no | ≤ 16 KiB JSON | Stored verbatim; the integrator is responsible for its contents |
 | `fingerprint` | no | ≤ 8 strings, each ≤ 128 | `{{ default }}` expands to the computed fingerprint |
 
@@ -305,11 +305,11 @@ Indexes: unique `(database_id, fingerprint)` on groups; `(database_id, state, la
 - The crash database appears on the project page under its own heading, and the switcher moves from a feedback database to it.
 
 ## 13. Risks and Mitigations
-- **Over-grouping or under-grouping:** a normalization that is too aggressive merges distinct bugs, too weak splits one bug across groups. Mitigation: Bugsink-style normalization plus five frames, a grouping version so tuning never shatters history, and a client fingerprint override; manual merge in Release 7.
+- **Over-grouping or under-grouping:** a normalization that is too aggressive merges distinct bugs, too weak splits one bug across groups. Mitigation: Bugsink-style normalization plus five frames, a grouping version so tuning never shatters history, and a client fingerprint override; manual merge in a later Crash release.
 - **Content leaking through `context` or messages:** the integrator can put anything in `context`. Mitigation: the SDK never fills it automatically, messages are redacted by default on the client and truncated on the server, the interface labels `context` as integrator-supplied, and Slack never carries either.
 - **Crash-loop storms:** one machine in a loop could flood ingest. Mitigation: client dedupe persisted across restarts, per-fingerprint server limits, new-group-only notifications, inline eviction.
 - **Storage growth:** a popular app at its cap on many databases. Mitigation: per-database caps with platform bounds, a 12 KB budget per report, the object-storage and partitioning upgrade paths.
-- **Regression false positives:** version strings that are not monotonic (hotfix branches) reorder releases. Mitigation: first-seen ordering is documented; a resolved-in release is optional; Release 7 may add manual release ordering.
+- **Regression false positives:** version strings that are not monotonic (hotfix branches) reorder releases. Mitigation: first-seen ordering is documented; a resolved-in release is optional; a later Crash release may add manual release ordering.
 - **SDK trust boundary:** the SDK runs in the integrator's process and can be misconfigured. Mitigation: the server enforces every bound independently; the SDK refuses secret keys; the schema is shared so drift is a build error.
 - **Sentry-compatibility demand:** users with existing Sentry SDKs cannot switch. Mitigation: recorded as a revisit after Release 6; the envelope was designed so a mapping from Sentry events is mechanical.
 
@@ -329,7 +329,7 @@ Indexes: unique `(database_id, fingerprint)` on groups; `(database_id, state, la
 - Bounded `jsonb` envelopes in PostgreSQL with a per-database cap and inline eviction (Bugsink retention model); object-storage offload and partitioning as documented upgrades.
 - Notifications on new group and regression only, headline without message text.
 - No request IP on crash reports.
-- Breadcrumbs, symbolication and merge deferred to Release 7.
+- Breadcrumbs, symbolication and merge deferred to a later Crash release.
 
 **Recommended defaults, adjustable in technical design**
 - Envelope 64 KiB; message 200 characters; 30 frames; 20 tags; context 16 KiB.
@@ -338,7 +338,7 @@ Indexes: unique `(database_id, fingerprint)` on groups; `(database_id, state, la
 - Client dedupe: one per fingerprint per 24 hours, five per hour overall; queue 200 events; batch 50.
 - Clock tolerance: 30 days past, 5 minutes future.
 
-**Release 7 design notes**
+**Design notes for the later Crash release**
 - *Symbolication:* a bundler plugin injects a debug ID into each bundle and its source map; maps are uploaded to object storage keyed by debug ID with a secret key; frames carry the debug ID; the server symbolicates on read, never at ingest. No release association needed.
 - *Breadcrumbs:* opt-in at `init`, at most 20, category and message only, message through the redaction policy.
 - *Merge:* fold group B into A, keep B's fingerprint pointing at A so future reports follow, reversible.
@@ -347,10 +347,10 @@ Indexes: unique `(database_id, fingerprint)` on groups; `(database_id, state, la
 **Release 6 — Crash Reports.** Goal: HappyVibe reports every failure class to its own Inlet, the developer triages from Slack, the interface or an agent, and a second application can integrate with the SDK in an afternoon.
 - Foundations changes: FD-001 to FD-009 (typed databases, third scope, delivery kind, retention setting), FD-010 to FD-014 (SDK packaging), FD-020 to FD-031 (MCP and rate-limit conventions made explicit).
 - Crash: CR-001 to CR-004, CR-010 to CR-017, CR-020 to CR-030, CR-040 to CR-049, CR-050 to CR-053, CR-060 and CR-061, CR-070 and CR-071, CR-080 to CR-082, CR-090 to CR-103.
-- SDK: `inlet-sdk/crash` with node, browser and electron adapters; the feedback module of `inlet-sdk` may ship as a thin wrapper over the existing client API in the same release if cheap, otherwise Release 7.
+- SDK: `inlet-sdk/crash` with node, browser and electron adapters. The feedback module of `inlet-sdk` did not ship in this release; it is specified in Feedback Collection PRD section 25 as Release 7 — SDK.
 - HappyVibe integration: Appendix B.
 
-**Release 7 — Crash Reports, second pass.** Manual merge, opt-in breadcrumbs, debug-ID symbolication, tag indexing and filtering, object-storage envelope offload, streaming NDJSON export, manual release ordering, and the Sentry-compatibility decision.
+**A later Crash release.** Manual merge, opt-in breadcrumbs, debug-ID symbolication, tag indexing and filtering, object-storage envelope offload, streaming NDJSON export, manual release ordering, and the Sentry-compatibility decision.
 
 ## Appendix A — Landscape
 Research performed September 16, 2026. Footprints and prices as published on that date.
@@ -369,7 +369,7 @@ Research performed September 16, 2026. Footprints and prices as published on tha
 | PostHog errors | SaaS, hobby self-host | ClickHouse, Kafka, Postgres | client fingerprint → rules → auto | via properties | analytics person | yes | official, triage workflow | heavy stack; self-host discouraged |
 | TrackJS, Honeybadger, Airbrake, Raygun | SaaS | — | message/stack | deploy tracking | yes | yes | Raygun and Rollbar official; Honeybadger community | SaaS only |
 
-What the research changed in this PRD: normalized-message grouping with a frame upgrade and a grouping version; release-order regressions; aggregates on the group; a per-database cap with eviction instead of a time window alone; `429` with `Retry-After` and SDK pause; ten-function SDK with a persistent transport; the converged MCP tool vocabulary; debug-ID symbolication as the Release 7 path; and the recommendation, deferred, to accept Sentry envelopes.
+What the research changed in this PRD: normalized-message grouping with a frame upgrade and a grouping version; release-order regressions; aggregates on the group; a per-database cap with eviction instead of a time window alone; `429` with `Retry-After` and SDK pause; ten-function SDK with a persistent transport; the converged MCP tool vocabulary; debug-ID symbolication as the later path; and the recommendation, deferred, to accept Sentry envelopes.
 
 ## Appendix B — HappyVibe Integration Mapping
 | HappyVibe failure class (proposal §3) | SDK call | Kind |

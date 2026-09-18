@@ -1843,3 +1843,203 @@ regression test writes twenty alternating long and short values concurrently, te
 and was confirmed to fail against the old implementation with exactly the corruption seen in
 the wild. One pair of concurrent writes was not enough to reproduce it reliably on a fast disk,
 which is worth remembering: the first version of that test passed against the bug.
+
+## 25. Release 7: the feedback SDK
+
+Section 25 of the Feedback Collection PRD (`docs/prd/feedback-collection.md`) and FD-015 of
+the Foundations PRD. The module is `inlet-sdk/feedback`, a second subpath of the package
+Release 6 shipped, with the same `init` shape, the same persistence abstraction and the same
+four adapter entries. This section records the choices as they were made; each subsection
+names the requirements it serves and what was rejected.
+
+The framing decision, from which most of the rest follows: **the module ships no renderer.**
+Section 25.1 asks for a typed client and a framework-free controller, and the temptation with
+a form SDK is to ship a component and be done. A component would have made the package a
+styling argument with every integrator, would have needed one implementation per framework,
+and would have been the wrong dependency for the applications this is for — which have their
+own design system and want the form to look like the rest of the product. The controller is
+what a renderer needs and nothing more: a snapshot, a subscription, and eight actions.
+
+### 25.1 `@inlet/shared/feedback-core`: the rules, without Zod
+
+FR-195 asks that the client and the server validate answers with the same code, and FD-013
+forbids a runtime dependency. `@inlet/shared` depends on Zod, so the rules moved into
+`packages/shared/src/feedback-core.ts`, which imports only `limits.ts` and `errors.ts` and is
+what the package bundles at build — exactly the split `crash-core.ts` already had.
+
+- **The form types are written out, not inferred.** `form.ts` keeps the Zod schemas and
+  imports its types from `feedback-core.ts`. At the bottom of `form.ts` an `Exact<A, B>`
+  helper asserts mutual assignability between each `z.infer` and each declared type, so a
+  field added to a schema and not to the type, or the other way round, fails the build in
+  `@inlet/shared` rather than in somebody's client. *Rejected:* keeping `z.infer` as the
+  source of truth and duplicating the types in the SDK. Two declarations that agree today is
+  the thing FR-195 exists to prevent.
+- **`validateAnswers` takes a definition, so a page is a definition of one page.** The
+  controller checks the page a respondent is leaving by calling the same function with
+  `{ pages: [thatPage] }` and only that page's answers. No page-aware variant, no second
+  code path, and a question on a page nobody has reached cannot report itself unanswered.
+- **The client definition's injected limits are stripped before validation.** FR-046 adds
+  `acceptedMediaTypes` and `maxFileBytes` to every screenshot question on the way out; the
+  stored shape has neither. The controller removes them before calling the shared rules, so
+  the SDK runs the server's function over the server's data rather than over a near-miss.
+
+### 25.2 One store, two queues
+
+FD-012 asks for one transport shared by every module. The stores moved out of the crash
+module into `src/store.ts`, `src/store-node.ts` and `src/store-browser.ts`; the crash entries
+re-export them, so nothing an integrator imports changed. Crash keeps the keys `queue` and
+`dedupe`, feedback keeps `feedback-queue`, and an application using both configures
+persistence once.
+
+- **The queues themselves are not shared.** A crash report is fire-and-forget and goes fifty
+  to a request; a submission is one request whose answer a respondent may still be waiting
+  for, and the retry contract of section 9.2 has nothing to do with batching. What is shared
+  is everything that turned out to be the same: the pacing, the exponential backoff, the hard
+  stop on `429` with `Retry-After`, and the rule that an answered item is never resent.
+  *Rejected:* one generic queue with a per-module strategy object. That is an interface with
+  two implementations and a worse version of both.
+- **A queue entry records its feedback database and entries for another are ignored on load.**
+  One store may hold the queues of two clients in the same process.
+
+### 25.3 What "answered" means, and why a 5xx is not one
+
+FR-201 says a pending submission is never retried "once the server has answered with any
+status, including `400`, `409` and `410`". A `500` is read here as *not* an answer, which is
+the same line `Transport.send` already drew for crash reports and what FD-012 means by the
+word in both modules.
+
+The reasoning is FR-202's own: only the server can say whether a submission exists. A `410`
+or a `409` is the server saying something definite about this intent, and replaying cannot
+change it. A `503` is the server saying nothing at all — the intent is still active, the
+finalization never happened, and the intent is precisely what makes the replay safe. Dropping
+on a `503` would discard feedback over a deploy. This is the one place the implementation
+reads the PRD's wording rather than following it literally, and it is recorded here because
+a future reader will otherwise think it a slip.
+
+### 25.4 The controller
+
+- **The intent is obtained lazily and renewed invisibly** (FR-193, FR-200). `ensureIntent`
+  is called by the first upload and by `submit`, and renews when the intent is within thirty
+  seconds of expiry. The skew is there because an upload started at expiry minus one second
+  would otherwise be refused by the server; renewing early costs one request that would have
+  been made anyway.
+- **Screenshot bytes are kept in memory by default so a renewal can re-upload them.**
+  FR-200 wants a respondent not to be interrupted, and a screenshot they cannot re-attach —
+  because they took it from the clipboard — is feedback lost. The ceiling is the question's
+  own: at most five screenshots of at most ten megabytes. `retainScreenshotBytes: false`
+  turns it off and the snapshot then reports the attachments as `lost`, which is the same
+  path an Electron renderer takes when its bytes have gone over IPC.
+- **`submit` resolves, always.** FR-201 leaves a queued finalization pending until the server
+  answers, which may be after the page is gone. A promise that never settles is a trap in an
+  interface, so `submit` resolves `{ status: 'pending' }` once the queue has stopped trying
+  for now, and the session hears the real answer later through a second waiter on the same
+  queue entry. The snapshot, not the promise, is what a client renders while a submission is
+  in flight. *Rejected:* resolving only on the server's answer, and a timeout parameter —
+  the first hangs, the second makes every caller invent a number.
+- **A `submit` that the server refuses on the answers returns `invalid`, not `failed`**
+  (FR-196). The session goes back to `editing` on the page holding the first failing
+  question, which is a different outcome from a refusal the respondent can do nothing about,
+  and a caller that treated the two alike would show the wrong screen.
+- **Validation clears as the respondent types.** Marking a question wrong and leaving it
+  marked while it is being corrected is the most common small cruelty in form validation.
+- **`next()` emits one snapshot, not two.** The public `validatePage()` emits; the internal
+  check does not, so an action produces one notification and a React binding one render.
+
+### 25.5 Uploads, and the one place `fetch` is not enough
+
+FR-194 wants upload progress per screenshot question, and the Fetch standard still has no way
+to observe a request body being sent. The upload is therefore behind an `Uploader` seam: the
+default is `fetch` and reports the two ends, and the browser adapter injects an
+`XMLHttpRequest` implementation with `upload.onprogress`. A screenshot is up to ten megabytes
+and a respondent on a phone will watch it go, which is the whole argument for the older API
+appearing in exactly one function. Everything else, including the finalization that must
+survive a reload, goes through `fetch`.
+
+- **The bytes are copied out of the view before they become a `Blob`.** A Node `Buffer` is a
+  window onto a shared pool, so its backing `ArrayBuffer` holds unrelated allocations either
+  side of the image. Passing `.buffer` produced "That file is not a readable image" from the
+  server, which is what the end-to-end suite caught; passing the view, or a copy of it, is
+  correct and also settles the `SharedArrayBuffer` case `Blob` will not take.
+- **A bare `Buffer` is a valid screenshot** (FR-207), with its media type read from its first
+  bytes. Three magic numbers for the three types section 9.3 accepts; anything else returns
+  the empty string and is refused by the same check that refuses a GIF. The server validates
+  by content regardless, so this is about failing locally rather than about trust.
+
+### 25.6 Electron: the token stays in main too
+
+FR-208 asks that a renderer hold no key and make no HTTP request. The controller runs in the
+renderer — it needs no credential to hold pages, answers and validation — and its gateway is
+five requests over `ipcMain.handle`.
+
+- **The intent token is withheld from the renderer**, which FR-208 does not demand. Main
+  returns the intent with `token: ''` and keeps the real one in a map keyed by intent ID. The
+  token is the one credential that would otherwise let renderer code upload to Inlet by
+  itself, and there is no reason for it to cross the boundary.
+- **A second channel carries late answers.** `ipcMain.handle` is request and response, and a
+  submission the network lost is answered minutes later or on the next start, so there is no
+  response left to put it in. Main sends `inlet:feedback:settled` to the renderer that asked.
+  A renderer that does not subscribe stays in `submitting`, which is honest: main is still
+  trying.
+
+### 25.7 Cross-origin, widened by exactly four routes
+
+FD-015 extends the Release 6 exception to the four collection routes. The pattern in
+`app.ts` is anchored and segment-counted rather than prefix-matched, which is what keeps
+`/v1/feedback-databases/{id}/submissions` — the route that returns collected responses —
+shut while `/v1/feedback-databases/{id}/form` opens. `DELETE` joins the allowed methods for
+one route only, releasing a screenshot before submitting, and `x-inlet-intent-token` joins
+the allowed headers.
+
+`apps/api/test/integration/cors.test.ts` (renamed from `crash-cors.test.ts`) pins both halves
+of the boundary, and `e2e/api/sdk-feedback-browser.spec.ts` proves it in Chromium from a
+genuine second origin, including that reading responses from there is still blocked by the
+browser.
+
+- **`/v1/health` gains `feedback-cross-origin`** (FR-210). A deployment older than Release 7
+  serves the four routes but refuses the preflight, which reaches `fetch` as an
+  indistinguishable network failure; the capability is how the SDK says "upgrade your Inlet"
+  instead of "Inlet is down". Checked once per client, through `debug`, never as a throw.
+
+### 25.8 What was left out, deliberately
+
+- **No renderer, no components, no styles**, per section 25.7's "not in Release 7".
+- **No Vue or Svelte binding.** The React entry exists for parity with the crash module and
+  is fifteen lines over `subscribe`/`getSnapshot`; the README shows the same thing without a
+  framework, which is the honest way to present one binding among many.
+- **No partial-response saving and no respondent identity.** Both are product decisions, not
+  SDK ones, and neither is needed to integrate a form.
+- **A session cannot pin an older version.** FR-193 allows a client to name one, but the
+  `/form` route serves the active version only, so a session naming version 1 while version 2
+  is active would render one definition and finalize against another — the first mistake
+  section 25.1 names. `createSession({ formVersion })` therefore refuses with
+  `form_version_unknown` when the named version is not the active one, rather than
+  half-supporting it. Serving an arbitrary published version to a client is a change to the
+  API, and the PRD does not ask for one.
+
+### 25.9 The bug the tests found: a payload built before the intent
+
+`submit` originally built the finalization payload, ran `beforeSend` over it, and only then
+asked for an intent. That reads naturally and is wrong, because `ensureIntent` is not a
+read: FR-200 makes it renew an expired intent, and renewing re-uploads every screenshot
+under the new one, which changes the attachment IDs in `this.answers`. The payload had
+already been built from the old ones, and `answers` is replaced rather than mutated, so the
+object the payload held was the pre-renewal one.
+
+The result would have reached a respondent as `attachment_reference_invalid` from the
+server, at the moment they pressed Send, about a screenshot they could see on their own
+screen, with nothing they could do about it. It needed an intent to expire mid-session,
+which is exactly the case FR-200 exists for and exactly the case nobody exercises by hand.
+
+The fake server in the unit suite did not catch it — it does not check that an attachment
+belongs to the intent naming it — which is worth remembering about fakes: the assertion that
+found it is on the captured request body, not on the outcome. The end-to-end twin,
+`renews an expired intent mid-session and submits the screenshot it re-uploaded`, drives the
+real server with a clock moved half an hour forward and fails with the real refusal. Both
+were confirmed to fail against the old ordering before the fix landed.
+
+`submit` now asks for the intent first, re-runs the shared rules afterwards — a renewal that
+lost a screenshot can leave a required question unanswered, which is an `invalid` outcome and
+not a server refusal — and builds the payload from what is true after all that. The
+`clientContext` size check stayed in front of the intent, because an oversized context cannot
+be fixed by anything below it and spending an intent on it costs a rate-limit slot the
+respondent may need.

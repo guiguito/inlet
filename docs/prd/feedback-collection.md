@@ -1,17 +1,17 @@
 # Inlet — Feedback Collection PRD
 
 ## Document Status
-**Status:** Shipped through Release 5; requirements baseline for maintenance and Release 6 alignment
+**Status:** Shipped through Release 5, and Release 7 — SDK; requirements baseline for maintenance
 **Product:** Inlet — Feedback Collection capability
 **Language:** English
 **Foundations:** Every shared rule (accounts, roles, keys, notifications plumbing, export, deletion, deployment, brand, SDK and MCP conventions) is on the Foundations PRD and is not repeated here.
 **Notion page:** https://app.notion.com/p/3ddd33dfffca81c98977df8dac6975b0
 **Repository mirror:** `docs/prd/feedback-collection.md`
-**Last revised:** September 16, 2026 (split from the unified PRD)
+**Last revised:** September 18, 2026 (section 25 shipped as Release 7)
 
 > **Provenance.** This page absorbs sections 7.1–7.3, 8.4, 8.5, 8.6, 8.9, 8.10, 9.1–9.4, 10.5, 10.7–10.11, 10.13, 12.4, 13, 15, 21, 22 and 24 of the unified PRD, plus the feedback-specific lines of sections 3, 4, 6, 9.6, 11, 12.2, 12.3, 14, 16 and 17. Section 23 (notifications) moved to Foundations as a shared mechanism; what a response notification contains is still defined there (FR-159 to FR-161, FR-171).
 
-> Section numbers are preserved from the unified PRD (sections 1–24) so that cross-references in the text, in `docs/DECISIONS.md`, and in the code (`FR-xxx`) stay valid. A gap in the numbering means that section lives on the other page. New sections added by the 2026-09-16 split are numbered from 25 onward.
+> Section numbers are preserved from the unified PRD (sections 1–24) so that cross-references in the text, in `docs/DECISIONS.md`, and in the code (`FR-xxx`) stay valid. A gap in the numbering means that section lives on the other page. New sections added after the 2026-09-16 split are numbered from 25 onward; section 25 is the SDK module, added September 18, 2026.
 
 ## 1. Summary
 Feedback Collection is Inlet's first capability. A platform user designs a reusable, multi-page form once and collects responses two ways: from their own application through the client API, or from a shared link through a hosted form the platform serves. Responses are stored immutably against the exact form version the respondent saw, read in a list built around the response itself, exported as JSON or CSV, announced in Slack, and operated through MCP.
@@ -82,6 +82,8 @@ The following are outside the scope of this capability unless explicitly approve
 9. On the final page, the respondent selects **Submit**.
 10. The client finalizes the intent with all structured answers and attachment references in one request.
 11. The service validates and stores the submission, any voluntarily provided email address, and the referenced screenshots. Repeating finalization for the same intent with the same payload returns the original result.
+
+The SDK in section 25 performs the network and validation steps of this journey for a client; rendering and the respondent's actions stay with the client.
 ### 7.3 Review Collected Feedback
 1. An authorized user signs in.
 2. The user selects a project and feedback database.
@@ -623,3 +625,89 @@ A fourth problem is navigational rather than visual. A feedback database grew to
 **Release 5 — Reviewed.** Goal: a platform user can work through a morning's feedback in the list itself, reading each response without opening it, and can tell at a glance what arrived since they last looked.
 Includes the response row, the read marker and its explicit mark-read operation, the three list filters, resized screenshots on read, the four-group navigation with its sub-navigation and redirects, and the feedback-database switcher.
 Beyond Release 5: full-text search across responses, saved filters, assigning a response to a teammate, and any notion of a response being handled rather than merely seen.
+
+## 25. SDK — `inlet-sdk/feedback`
+> Added September 18, 2026, and shipped the same day as Release 7. Releases 1 to 5 collect feedback through the client API and the hosted form. Release 6 shipped `inlet-sdk`, with one module, `inlet-sdk/crash`, and the Crash Reports PRD left the feedback module to a later release. This section specifies it. Two points were settled in implementation and are recorded in section 25 of `docs/DECISIONS.md`: a `5xx` is not treated as the server having answered a pending finalization, since the intent is still active and the submission never happened; and `createSession({ formVersion })` refuses a version that is not the active one, because the form route serves the active definition only, and rendering one version while finalizing another is the first mistake 25.1 names.
+
+### 25.1 Rationale
+The client API is four calls, and the calls are not the hard part. What an integrator gets wrong, once each, is everything around them: rendering against one version and finalizing against another; the answer shape per question type; an intent that expires while the respondent is still typing; uploading a screenshot and then forgetting to reference it, or referencing one uploaded under a different intent; validating a required question differently from the server and learning the difference from a `400`; retrying a submission after a dropped connection and creating either a conflict or a duplicate; and, in Electron, shipping the key to a renderer. Each of these is a paragraph in `docs/API.md` and a bug in a client.
+The module encodes them once, in the package the integrator already installed for crashes. In one line: *fetch the form, drive the pages, upload, submit once, retry safely, send nothing you did not name.*
+It is agnostic of how the form is drawn. The module ships no renderer, no styles and no components: its core is a typed client and a framework-free **controller** that holds one respondent's session and tells any user interface what to show next. React, Vue, Svelte, a web component and a terminal all bind to it the same way, by subscribing to its state and calling its actions. A React entry exists for parity with the crash module and is a few lines over the controller; it is one example binding, not the way in.
+The SDK is **an additional way to integrate, not a replacement for the API or the hosted form**. All three collect on the same feedback database through the same intents and finalization. The hosted form is for a link with no engineer; the SDK is for a form inside the application's own interface and identity; the raw API is for anyone the SDK does not fit. Nothing in this section removes, deprecates or narrows either of the others.
+
+### 25.2 Concepts
+- **Session:** one respondent's pass through one form: the pinned version, the intent once obtained, the answers so far, the uploaded attachments, and the outcome. A session begins at creation and ends when it is submitted or abandoned.
+- **Controller:** the framework-free object that owns a session. It exposes a snapshot of the session's state and a small set of actions, and notifies subscribers when the snapshot changes. It renders nothing.
+- **Snapshot:** an immutable description of what a user interface should show now: the page, its ordered elements, the answers, validation per question, upload progress per screenshot question, and the session status.
+- **Answer model:** the typed form of the per-question answer shapes in section 9.2 and `docs/API.md`, so a client never writes `{"optionId": …}` by hand.
+- **Pending submission:** a finalization the shared transport holds because the network failed, until the server answers it. It is the only thing the module persists.
+
+### 25.3 Functional Requirements
+**Surface**
+- **FR-190:** The module shall expose `init`, `getForm`, `createSession`, `flush` and `close`, the controller and snapshot types, and the answer types, and one entry per adapter: `inlet-sdk/feedback/node`, `inlet-sdk/feedback/browser`, `inlet-sdk/feedback/electron` with `installElectronMain` and `createElectronRenderer`, and `inlet-sdk/feedback/react` with `useFeedbackSession`. No other public surface in Release 7.
+- **FR-191:** `init` shall take the base URL, the publishable key and the feedback database ID, and optionally a static `clientContext` merged into every submission, a `beforeSend` hook, a `debug` hook, a queue store or persistence directory, and a `fetch` implementation. It shall share the `init` shape and the transport of `inlet-sdk/crash`, so that an application using both modules configures the base URL and key once (Foundations FD-011, FD-012). A secret key shall be refused at `init`.
+- **FR-192:** `getForm` shall return the active published definition, typed element by element as section 9.1 describes it, cached for the life of the client with a way to refresh, and shall surface `form_not_published` as a typed result rather than an exception, so that a client can show a closed message without a try block.
+**The controller**
+- **FR-193:** A session shall pin one form version at creation, the active version by default or a version the client names. It shall obtain its submission intent lazily, on the first upload or the first submit, so that a form the respondent abandons on the first page costs no intent and no rate-limit budget.
+- **FR-194:** The snapshot shall carry the current page index and page count, the page's ordered elements, the answers given so far, the validation state of every question on the current page, the state of every screenshot question (each attachment's ID, stored dimensions and bytes, upload progress, and the number of further attachments the question accepts), and a status of `editing`, `uploading`, `submitting`, `submitted`, `failed` or `expired`.
+- **FR-195:** The controller shall validate answers against the pinned definition with the server's own rules before advancing a page and before submitting: required questions, a placeholder never satisfying one, character limits, no newline in a single-line question, email syntax, option membership, and screenshot count and media type. The rules shall come from `@inlet/shared` bundled into the package at build, exactly as the crash module bundles the fingerprint, so that the client and the server cannot disagree and the SDK still has no runtime dependency.
+- **FR-196:** A server `validation_failed` shall be mapped back onto the snapshot by question ID (FR-054), the page holding the first failing question shall become current, and the session shall stay in `editing`; a validation failure never consumes the intent (FR-092D).
+- **FR-197:** Page navigation shall belong to the controller, forwards and backwards, with no server call (FR-050). Answers shall survive navigation and be discarded on `abandon`.
+- **FR-198:** `addScreenshot(questionId, file)` shall check the file's media type and size against the question's `acceptedMediaTypes` and `maxFileBytes` from the definition before any request, upload it under the intent, report progress, and record the attachment as the server described it, at its stored dimensions and size rather than the source's. `removeScreenshot` shall drop the reference and release the upload through `DELETE …/attachments/{attachmentId}` on a best-effort basis; a failure to release is not an error, since an unreferenced upload expires with its intent. Screenshot bytes shall never be persisted by the module.
+- **FR-199:** `submit` shall finalize once, with every answer and the merged `clientContext`, treat a `duplicate` result as success, and return the submission ID and status. `submit` on a session already `submitted` shall return the original result without a request.
+- **FR-200:** When an intent expires while the session is still `editing`, the controller shall obtain a new intent against the same pinned version without involving the user interface, re-upload from memory any attachment whose bytes it still holds, and mark as lost any it does not, so that the snapshot tells the interface exactly which screenshot questions need re-attaching.
+**Transport and retry**
+- **FR-201:** A finalization that fails on transport shall become a pending submission in the shared transport: persisted on disk on Node and Electron and in IndexedDB in browsers, replayed on start and after every submit with exponential backoff, paused by `429` for its `Retry-After`, and never retried once the server has answered with any status, including `400`, `409` and `410`, since the intent guarantees that a replay of the same payload returns the same result and a different one is refused (FR-092C). While its finalization is pending the session stays `submitting`, and it becomes `submitted` or `failed` when the server answers. The transport holds at most 20 pending submissions.
+- **FR-202:** A pending submission shall not be dropped locally when its intent's `expiresAt` passes. The SDK cannot know whether the server finalized the intent before the response was lost, and a finalized intent never expires (FR-092F), so the replay is what settles it: the server answers with the original result when it had the submission, and with `intent_expired` when it never did, and either answer ends the retry. A pending submission the server has not answered within seven days shall be dropped with a message through the debug hook.
+- **FR-203:** The module shall never hold two finalizations for one intent. A `submit` whose payload differs from a pending one for the same intent shall be refused locally, so that `intent_payload_conflict` is never produced by the SDK's own retry.
+**What is sent**
+- **FR-204:** The module shall send only what the client API contract names: the answers the respondent gave, the attachment IDs, the pinned form version, and the `clientContext` the integrator supplied. It shall never send automatically the page address, the user agent, the referrer, the language, the viewport, cookies, timing, or any identifier (Foundations FD-014). The hosted form records such operational context because it is the client (FR-148); the SDK is a library inside somebody else's client and records nothing on its own.
+- **FR-205:** `beforeSend` shall receive the finalization payload before it is queued and may return it, a changed one, or `null` to drop it. `clientContext` shall be measured against its 16 KiB limit (FR-062A) before queueing, and an oversized one shall fail `submit` locally with a typed error rather than leaving a `400` for the server.
+**Adapters**
+- **FR-206:** `inlet-sdk/feedback/browser` shall use `fetch` and `FormData`, keep pending submissions in IndexedDB and fall back to memory for the life of the page when IndexedDB is unavailable, saying so through the debug hook. It runs on the integrator's origin and depends on the cross-origin exception in 25.4.
+- **FR-207:** `inlet-sdk/feedback/node` shall accept a `Buffer` or `Blob` for a screenshot, keep pending submissions under a directory the integrator names, and serve the server-to-server case in which the integrator's backend submits on behalf of its own application. The observed request IP is then the integrator's server, not the respondent (FR-062C), and the adapter's documentation shall say so.
+- **FR-208:** `inlet-sdk/feedback/electron` shall keep the key, the queue and the transport in the main process. `installElectronMain` shall own the client and listen on a named IPC channel; `createElectronRenderer` shall return a controller whose every network step is a request over that channel, screenshot bytes travelling as an `ArrayBuffer`. A renderer shall hold no key and make no HTTP request. The documented path is a preload bridge with context isolation on, as for the crash module.
+- **FR-209:** `inlet-sdk/feedback/react` shall export `useFeedbackSession`, which subscribes a component to a controller and returns the current snapshot with the actions bound. It shall take `React` as a parameter rather than importing it, so the package has no peer dependency and an application without React never loads it. The documentation shall present it as one binding of the controller among others and show a second framework using the controller directly.
+**Packaging**
+- **FR-210:** The module shall be a subpath of `inlet-sdk` under Foundations FD-010 to FD-014, versioned with the package, and shall perform the minimum-server check on first use by reading `/v1/health`, whose `capabilities` shall name cross-origin feedback collection so that a deployment older than Release 7 is told apart from an unreachable one.
+
+### 25.4 API and Foundations Additions
+No new endpoint, credential, role, notification kind or deployment service is required (Foundations FD-009). The credential matrix in 9.6 is unchanged: the SDK is a client of the four publishable-key rows and of nothing else.
+Two platform changes are required, both on the Foundations PRD:
+- **Cross-origin collection.** The browser adapter runs on the integrator's origin, and its requests carry a bearer key and a JSON body, so a preflight is unavoidable. Foundations FD-015 extends the exception introduced for crash ingest to the four publishable-key feedback routes: retrieve the published form, create an intent, upload and release an attachment under an intent, and finalize. Wildcard origin with credentials off, `Retry-After` exposed, and the preflight allowing the `X-Inlet-Intent-Token` request header, which the crash routes never needed. A management session cannot be replayed across origins because no cookie is ever attached, a secret key still reaches nothing cross-origin, and the hosted routes under `/v1/hosted/{slug}` stay closed because the hosted form is served by Inlet itself.
+- **Health capabilities.** `/v1/health` names the cross-origin feedback routes in its `capabilities`, for FR-210.
+
+### 25.5 Business Rules
+- A session pins exactly one form version for its life. A new active version does not move a session that has begun.
+- The SDK obtains an intent only when it is about to use one.
+- The SDK never issues two finalizations with different payloads for one intent.
+- A pending submission outlives the page and the process, until the server answers it.
+- There is no path to a stored submission other than finalization of an intent. The SDK adds none; it is a client of the same path the hosted form and the raw API use.
+- The SDK stores nothing about the respondent and sends nothing the integrator did not name.
+- Which framework draws the form is the integrator's decision and invisible to the platform.
+
+### 25.6 Acceptance Criteria
+- `init` with a secret key throws before any request. `init` with another project's publishable key succeeds, and the first call returns a typed `feedback_database_inaccessible`.
+- With the form unpublished, `getForm` returns a typed `form_not_published` result and no exception.
+- A required question left unanswered blocks advancing the page and blocks `submit`, naming the question ID; the same answers sent to the server by hand are refused naming the same question ID.
+- A free-text question whose placeholder was never touched does not satisfy its required flag through the controller.
+- A session is created against version 1, version 2 is published, and the session submits successfully against version 1.
+- A session created on the first page and abandoned there produces no intent on the server.
+- A browser client loses the network at `submit` and the page is reloaded; on the next load the submission is delivered and the server answers `accepted`; a further reload sends nothing.
+- A submission whose finalization succeeded but whose response was lost is replayed after the intent's expiry and answered with the original result; one whose intent expired before the server ever saw it is replayed once, answered `intent_expired`, and dropped with a debug message.
+- Two `submit` calls with different answers on one session cannot both reach the wire; the second is refused locally.
+- A `429` with `Retry-After: 30` pauses replay for thirty seconds and nothing is sent in between.
+- A file over the question's `maxFileBytes` or outside its `acceptedMediaTypes` is refused locally before any request; an accepted 3 MB PNG is uploaded and the snapshot reports the stored width, height and bytes from the server's response, not the source's.
+- An intent expires mid-session; the respondent is not interrupted; a screenshot whose bytes were still held is re-uploaded under the new intent, and one whose bytes were released is reported as needing re-attaching.
+- The Electron renderer bundle contains no publishable key and performs no HTTP request; every step is observed on the IPC channel.
+- `useFeedbackSession` re-renders on every snapshot change, and a second framework in the documentation drives the same controller with React absent from the installation.
+- A page on `https://app.example` retrieves the form, uploads and submits to `https://inlet.example` with no proxy; from the same origin, listing submissions still fails its preflight.
+- A captured finalization body contains exactly the form version, the answers, the attachment IDs and the integrator's `clientContext`, and nothing else.
+
+### 25.7 Release Plan
+**Release 7 — SDK.** Goal: a web, Node or Electron application integrates feedback in an afternoon with the package it already has for crashes, and `inlet-sdk` is published to npm with both modules.
+- Feedback: FR-190 to FR-210, this section.
+- Foundations: FD-015 (cross-origin for publishable-key collection routes), the health `capabilities` entry, and the release timeline in section 28.
+- Server: the cross-origin hook widened to the four feedback routes and the intent-token header, with the test that pins the closed set updated to match; the answer validation rules moved into `@inlet/shared` so the SDK can bundle them (FR-195); the Integrate panel of a feedback database gains an SDK snippet beside the existing API snippet, and keeps both.
+- Package: `inlet-sdk` with the `./feedback` entries; the README gains a Feedback section of the same shape as the Crash one: install, browser, Node, Electron, a React binding and a second binding, what gets sent, delivery, options.
+- Not in Release 7: a rendered widget or component library, partial-response saving, respondent identity, a script-tag build, and official Vue or Svelte bindings. Each is a separate decision, and none is needed to integrate a form.

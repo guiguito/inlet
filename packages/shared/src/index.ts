@@ -1,4 +1,5 @@
 export * from './answers.js';
+export * from './feedback-core.js';
 export * from './branding.js';
 export * from './errors.js';
 export * from './form.js';

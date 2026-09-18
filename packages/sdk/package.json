@@ -1,7 +1,7 @@
 {
   "name": "inlet-sdk",
   "version": "0.1.0",
-  "description": "The Inlet client SDK. Crash Reports module with Node, browser and Electron adapters.",
+  "description": "The Inlet client SDK. Feedback collection and crash reports, with Node, browser, Electron and React entries.",
   "license": "MIT",
   "author": "Guilhem Duch\u00e9",
   "homepage": "https://github.com/guiguito/inlet/tree/main/packages/sdk#readme",
@@ -15,6 +15,10 @@
   },
   "keywords": [
     "inlet",
+    "nps",
+    "survey",
+    "forms",
+    "feedback",
     "crash-reporting",
     "error-tracking",
     "error-reporting",
@@ -56,6 +60,31 @@
       "types": "./dist/crash/react.d.ts",
       "import": "./dist/crash/react.js",
       "require": "./dist/crash/react.cjs"
+    },
+    "./feedback": {
+      "types": "./dist/feedback/index.d.ts",
+      "import": "./dist/feedback/index.js",
+      "require": "./dist/feedback/index.cjs"
+    },
+    "./feedback/node": {
+      "types": "./dist/feedback/node.d.ts",
+      "import": "./dist/feedback/node.js",
+      "require": "./dist/feedback/node.cjs"
+    },
+    "./feedback/browser": {
+      "types": "./dist/feedback/browser.d.ts",
+      "import": "./dist/feedback/browser.js",
+      "require": "./dist/feedback/browser.cjs"
+    },
+    "./feedback/electron": {
+      "types": "./dist/feedback/electron.d.ts",
+      "import": "./dist/feedback/electron.js",
+      "require": "./dist/feedback/electron.cjs"
+    },
+    "./feedback/react": {
+      "types": "./dist/feedback/react.d.ts",
+      "import": "./dist/feedback/react.js",
+      "require": "./dist/feedback/react.cjs"
     }
   },
   "engines": {
@@ -65,7 +94,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "node build.mjs && tsc -p tsconfig.json --emitDeclarationOnly",
+    "build": "node build.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "prepack": "npm --prefix ../.. run build:shared && npm run build"

@@ -1,5 +1,6 @@
 import type { ErrorDetail } from './errors.js';
-import { formDefinitionSchema, isQuestion, type FormDefinition } from './form.js';
+import { formDefinitionSchema } from './form.js';
+import { isQuestion, type FormDefinition } from './feedback-core.js';
 import { LIMITS } from './limits.js';
 
 /**

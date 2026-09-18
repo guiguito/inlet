@@ -107,6 +107,13 @@ reference the private workspace package, so the tarball stands alone. Keep it th
 the SDK ever needs a real dependency, add it to `dependencies` deliberately and say why in
 `docs/DECISIONS.md` — Foundations FD-013 asks for zero.
 
+`tsc` cannot inline the way the bundler does: a public type that names a `@inlet/shared`
+declaration emits an import of a module the tarball does not contain. `build.mjs` therefore
+copies the declarations it needs into `dist/shared/`, rewrites the specifiers, and **fails
+the build** if any `@inlet/shared` import is left in a `.d.ts`. Name a new subpath in a
+public type and that check will stop you; add it to the `shared` list in `standAlone()`, or
+keep it out of the public types.
+
 Before publishing anything, check the tarball rather than trusting the manifest:
 
 ```

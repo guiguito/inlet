@@ -1,22 +1,322 @@
 # inlet-sdk
 
-The client SDK for [Inlet](../../README.md), the self-hosted feedback collector. This
-release ships one module, `inlet-sdk/crash`, which reports application failures to a
-crash database on your own Inlet. Zero runtime dependencies, ESM and CommonJS, Node 18 or
-later and evergreen browsers.
+The client SDK for [Inlet](../../README.md), the self-hosted place your applications
+report to. Two modules:
+
+- **`inlet-sdk/feedback`** collects a form's answers from inside your own interface.
+- **`inlet-sdk/crash`** reports application failures.
+
+Zero runtime dependencies, ESM and CommonJS, Node 18 or later and evergreen browsers. Each
+module has a Node, browser, Electron and React entry.
 
 If you have never seen Inlet: an Inlet **project** holds databases and owns two kinds of
 API key. A **publishable key** (`ipk_…`) can only send data in and is safe to ship in an
-application. A **crash database** (`cdb_…`) receives failure reports and groups them into
-one row per distinct bug, so that a crash loop is one line and one Slack message. The
-server's side of this is described in [docs/USING-INLET.md](../../docs/USING-INLET.md#crash-reports);
-the wire format in [docs/API.md](../../docs/API.md#crash-reports).
+application; a **secret key** reads what was collected and must never leave your servers.
+A **feedback database** (`fdb_…`) holds one form and the responses it collected. A **crash
+database** (`cdb_…`) receives failure reports and groups them into one row per distinct
+bug, so that a crash loop is one line and one Slack message.
+
+Your application does not have to share an origin with your Inlet: both modules' browser
+entries send cross-origin, with no cookie and no reverse proxy. The server's side of all
+this is described in [docs/USING-INLET.md](../../docs/USING-INLET.md); the wire format in
+[docs/API.md](../../docs/API.md).
 
 ## Install
 
 ```
 npm install inlet-sdk
 ```
+
+---
+
+# Feedback
+
+A form in Inlet is pages of questions. Collecting a response is four calls — read the
+published form, open a submission intent, upload any screenshots under it, finalize once —
+and the calls are not the hard part. What this module does is everything around them:
+pinning one version from render to submit, the answer shape per question type, an intent
+that expires while somebody is still typing, validating a required question exactly as the
+server does, and retrying a lost submission without creating a duplicate.
+
+It draws nothing. There is no component, no stylesheet and no framework requirement: you
+get a **controller** that holds one respondent's session and tells your interface what to
+show next, and you draw it however the rest of your product is drawn.
+
+The SDK is one of three ways to collect. The **hosted form** is a link with no engineer,
+the **HTTP API** is for anything the SDK does not fit, and this is for a form inside your
+own application's interface and identity. All three write to the same feedback database.
+
+## Browser
+
+```ts
+import * as feedback from 'inlet-sdk/feedback/browser';
+
+feedback.init({
+  baseUrl: 'https://inlet.example.com',
+  publishableKey: 'ipk_…',
+  feedbackDatabaseId: 'fdb_…',
+});
+
+const form = await feedback.getForm();
+if (!form.ok) return;            // e.g. form.error.code === 'form_not_published'
+
+const session = await feedback.createSession();
+if (!session.ok) return;
+const controller = session.value;
+```
+
+`getForm` returns a result rather than throwing, so "nobody has published this form yet"
+is a message you show, not an exception you catch.
+
+## The controller
+
+Subscribe to it, read its snapshot, call its actions. That is the whole interface.
+
+```ts
+controller.subscribe((snapshot) => render(snapshot));
+
+const snapshot = controller.getSnapshot();
+// snapshot.page.elements  — what to draw now, in authored order
+// snapshot.pageIndex, snapshot.pageCount, snapshot.isFirstPage, snapshot.isLastPage
+// snapshot.answers        — what has been answered so far
+// snapshot.validation     — { [questionId]: { valid: false, code, message } } for this page
+// snapshot.screenshots    — { [questionId]: { attachments, uploads, remaining, lost } }
+// snapshot.status         — editing | uploading | submitting | submitted | failed | expired
+// snapshot.result         — { submissionId, formVersion, createdAt } once submitted
+// snapshot.error          — the last refusal, if any
+```
+
+The actions:
+
+```ts
+controller.setAnswer(questionId, answer);   // undefined clears it
+controller.next();                          // validates this page; false if it failed
+controller.back();
+controller.validatePage();                  // check without moving
+await controller.addScreenshot(questionId, file);
+await controller.removeScreenshot(questionId, attachmentId);
+await controller.submit();
+controller.abandon();                       // discards everything; sends nothing
+```
+
+The answer shape follows the question's type in the published form, so you never write it
+twice:
+
+| Question type | Answer |
+| --- | --- |
+| `choice`, single-select | `{ optionId: 'op_…' }` |
+| `choice`, multi-select | `{ optionIds: ['op_…', 'op_…'] }` |
+| `text` | `{ value: 'It hung on save' }` |
+| `email` | `{ value: 'someone@example.com' }` |
+| `screenshot` | managed for you by `addScreenshot` |
+
+`next()` and `submit()` validate with the server's own rules, bundled into this package at
+build: required questions, character limits, no newline in a single-line question, email
+syntax, option membership, screenshot count and media type. A placeholder nobody typed
+into never satisfies a required question. So a respondent is told what is wrong before a
+request goes out, in the same words the server would have used.
+
+## Screenshots
+
+```ts
+const result = await controller.addScreenshot(questionId, file);   // a File, Blob or Buffer
+if (!result.ok) showMessage(result.error.message);                 // refused before any upload
+```
+
+The file's media type and size are checked against that question's own limits first, so an
+oversized image fails instantly instead of after a ten-megabyte upload. What comes back is
+the image **as Inlet stored it** — re-encoded, usually smaller, with its real dimensions —
+which is what you should show in a thumbnail. `snapshot.screenshots[questionId].uploads`
+carries a `progress` from 0 to 1 while it is going up, and `remaining` says how many more
+that question will take. Screenshot bytes are never persisted by this module.
+
+## Submitting
+
+```ts
+const outcome = await controller.submit();
+switch (outcome.status) {
+  case 'accepted':
+  case 'duplicate':  // already stored, this is its original result — treat as success
+    thankThem(outcome.submissionId);
+    break;
+  case 'invalid':    // the server refused an answer; the controller is back on that page
+    break;
+  case 'pending':    // the network failed; it is queued and will be delivered
+    break;
+  case 'failed':
+    showMessage(outcome.error.message);
+    break;
+}
+```
+
+`submit` always resolves. If the network drops, the finalization is queued and `submit`
+returns `pending` rather than hanging; the session stays `submitting` and its snapshot
+becomes `submitted` or `failed` when the server finally answers — on this page, or after a
+restart. Render the snapshot, not the promise.
+
+## Node
+
+```ts
+import * as feedback from 'inlet-sdk/feedback/node';
+
+feedback.init({
+  baseUrl, publishableKey, feedbackDatabaseId,
+  queueDir: '/var/lib/myapp/inlet-feedback',   // where an undelivered submission waits
+});
+```
+
+A screenshot may be a `Buffer` (its type is read from its first bytes), a `Blob`, or
+`{ data, mediaType, filename }`.
+
+This is the server-to-server case: your backend submitting on behalf of your application.
+The address Inlet records with the submission is then your server's, not the respondent's.
+If that matters, collect from the browser entry or from a hosted form instead.
+
+## Electron
+
+The key, the queue and the network live in the main process; the renderer drives the
+session over IPC and never holds a credential.
+
+Main, during `app.whenReady()`:
+
+```ts
+import { installElectronMain } from 'inlet-sdk/feedback/electron';
+
+await installElectronMain({ baseUrl, publishableKey, feedbackDatabaseId });
+// the queue defaults to <userData>/inlet-feedback
+```
+
+Preload, with context isolation on:
+
+```ts
+import { contextBridge, ipcRenderer } from 'electron';
+contextBridge.exposeInMainWorld('inletFeedback', {
+  invoke: (channel: string, request: unknown) => ipcRenderer.invoke(channel, request),
+  on: (channel: string, listener: (payload: unknown) => void) =>
+    ipcRenderer.on(channel, (_event, payload) => listener(payload)),
+});
+```
+
+Renderer:
+
+```ts
+import { createElectronRenderer } from 'inlet-sdk/feedback/electron';
+
+const inlet = createElectronRenderer();          // uses window.inletFeedback
+const session = await inlet.createSession();     // same controller as everywhere else
+```
+
+`on` is what lets the renderer hear about a submission main delivered minutes later. Leave
+it out and the session simply stays `submitting`.
+
+## React, and any other framework
+
+```tsx
+import React from 'react';
+import { useFeedbackSession } from 'inlet-sdk/feedback/react';
+
+function FeedbackForm({ controller }) {
+  const form = useFeedbackSession(React, controller);   // snapshot + bound actions
+  return (
+    <form onSubmit={(e) => { e.preventDefault(); form.submit(); }}>
+      {form.page.elements.map((element) => renderElement(element, form))}
+      {!form.isFirstPage && <button type="button" onClick={form.back}>Back</button>}
+      {form.isLastPage
+        ? <button type="submit" disabled={form.status !== 'editing'}>Send</button>
+        : <button type="button" onClick={form.next}>Next</button>}
+    </form>
+  );
+}
+```
+
+React is passed in rather than imported, so this package has no peer dependency and an
+application without React never loads that file.
+
+Nothing about the controller is React-shaped. Any framework binds to it the same way — and
+so does no framework at all:
+
+```ts
+// Svelte
+export const session = { subscribe: (run) => (run(controller.getSnapshot()), controller.subscribe(run)) };
+
+// Vue
+const snapshot = shallowRef(controller.getSnapshot());
+controller.subscribe((next) => { snapshot.value = next; });
+
+// Plain DOM
+controller.subscribe(render);
+render(controller.getSnapshot());
+```
+
+## What gets sent
+
+Exactly four things, at finalization:
+
+- the form version this session pinned;
+- the answers, keyed by question ID;
+- the IDs of screenshots uploaded under this session's intent;
+- the `clientContext` you supplied, if any.
+
+Never sent automatically: the page address, the user agent, the referrer, the language,
+the viewport, cookies, timing, or any identifier. A hosted form records operational
+context because it *is* the client; this is a library inside somebody else's client and
+records nothing on its own.
+
+```ts
+feedback.init({ …, clientContext: { appVersion, plan: 'team' } });     // on every submission
+await feedback.createSession({ clientContext: { screen: 'billing' } }); // and per session
+```
+
+`clientContext` is arbitrary JSON up to 16 KiB; an oversized one fails `submit` locally
+with a typed error rather than leaving a `413` for the respondent to wait for. `beforeSend`
+gets the whole payload before it is queued and may change it or return `null` to drop it.
+
+## Delivery
+
+Every finalization is attempted immediately, so the ordinary case is one round trip. If it
+does not complete, it is held — on disk in Node and Electron, in IndexedDB in browsers —
+and replayed on start and after every submit, with exponential backoff, paused by a `429`
+for its `Retry-After`. It is kept until the server answers, whatever the answer is.
+
+That last part is the point. A request that vanished after the server stored the response
+looks exactly like one that never arrived, and only the server can tell them apart: the
+submission intent guarantees that replaying the same payload returns the original result
+and that a different payload is refused. So the SDK never guesses. Even after the intent's
+expiry has passed the replay still happens, because a finalized intent never expires: the
+server answers with the original result if it had the submission, and `intent_expired` if
+it never did, and either answer ends the retry. At most twenty submissions wait at once,
+and one the server has never answered in seven days is dropped with a message through
+`debug`.
+
+Two finalizations for one intent are impossible: a `submit` whose payload differs from one
+already queued is refused locally, so this module can never be the cause of an
+`intent_payload_conflict`.
+
+## Feedback options
+
+| Option | Purpose |
+| --- | --- |
+| `baseUrl`, `publishableKey`, `feedbackDatabaseId` | Required. A secret key throws at `init`. |
+| `clientContext` | Merged into every submission. A session's own keys win. |
+| `beforeSend(payload)` | Return the payload, a changed one, or `null` to drop it. |
+| `queueDir` (Node, Electron) / `store` | Where an undelivered submission waits. |
+| `fetch` | Your own implementation, for tests or a proxy. |
+| `debug(message, detail)` | Warnings and transport events. Silent by default. |
+
+Per session, on `createSession`:
+
+| Option | Purpose |
+| --- | --- |
+| `clientContext` | Merged over the client's. |
+| `retainScreenshotBytes` | Default true. Keeps uploaded bytes in memory so an expired intent can re-upload them instead of asking the respondent again. |
+
+---
+
+# Crash reports
+
+Reports an application's failures to a crash database, which groups them into one row per
+distinct bug. Everything below is independent of the feedback module; if you use both,
+`baseUrl` and `publishableKey` are the same values and the two share one place on disk.
 
 ## Node
 
@@ -147,7 +447,7 @@ sent once per 24 hours, and at most five reports go out per hour, both persisted
 restarts, so a crash loop that restarts your application sends one report. Loosen it with
 `dedupe: { perFingerprintMs, perHour }` or disable it with `dedupe: false`.
 
-## Options
+## Crash options
 
 | Option | Purpose |
 | --- | --- |

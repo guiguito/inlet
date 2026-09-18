@@ -97,7 +97,7 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
         await ctx.db.execute('select 1');
         // FD-013: what this server can do, so an SDK can tell an old deployment from a
         // reachable one before it queues reports the server would refuse.
-        return { status: 'ok', capabilities: ['feedback', 'crash'] };
+        return { status: 'ok', capabilities: ['feedback', 'crash', CROSS_ORIGIN_FEEDBACK] };
       });
 
       await v1.register(authRoutes(ctx), { prefix: '/auth' });
@@ -146,27 +146,46 @@ async function registerDocs(app: FastifyInstance, ctx: AppContext): Promise<void
 }
 
 /**
- * The collection surface a browser on another origin may reach: crash ingest, and the
- * health probe the browser SDK reads before its first send (CR-010, FD-013).
+ * The collection surface a browser on another origin may reach (FD-015).
  *
  * Everything else in Inlet stays same-origin, which is what section 13 of DECISIONS.md
- * describes and why there is no CORS plugin here. This is the one exception, and it is
- * three paths wide: `inlet-sdk/crash/browser` runs on the integrator's own origin by
- * definition, and its transport sends `authorization` and `content-type: application/json`,
- * both of which force a preflight. Without this the preflight 404s and the browser never
- * sends the report at all.
+ * describes and why there is no CORS plugin here. This is the one exception, and FD-015
+ * enumerates it in this one place: the health probe, crash ingest, and the four feedback
+ * collection routes. Both browser adapters of `inlet-sdk` run on the integrator's own
+ * origin by definition, and both send an `authorization` header, which forces a
+ * preflight. Without this the preflight 404s and the browser never sends anything at all.
  *
- * Two details are load-bearing:
+ * Widening this set is a change to the Foundations PRD first, and
+ * `apps/api/test/integration/cors.test.ts` pins both halves of the boundary.
  *
- * The hook goes on the root instance, not in a scope around the ingest routes. A preflight
+ * Three details are load-bearing:
+ *
+ * The hook goes on the root instance, not in a scope around the routes. A preflight
  * matches no route — `OPTIONS` is never declared — so Fastify serves it from the 404
  * context, and that context is built from the *root* instance's hooks. A hook registered
  * inside an encapsulated child would never run for the request that needs it most.
  *
  * The path is matched on `request.url` rather than on the resolved route, for the same
  * reason: an unmatched preflight has no route to read.
+ *
+ * And the pattern is anchored and segment-counted rather than prefix-matched, so that
+ * `/v1/feedback-databases/{id}/submissions` — the route that returns collected responses
+ * — stays shut while `/v1/feedback-databases/{id}/form` opens.
  */
-const CROSS_ORIGIN_COLLECTION = /^\/v1\/(health|crash-databases\/[^/]+\/reports(\/batch)?)$/;
+const CROSS_ORIGIN_FEEDBACK = 'feedback-cross-origin';
+
+const CROSS_ORIGIN_COLLECTION = new RegExp(
+  [
+    '^/v1/(',
+    'health',
+    // Crash Reports (CR-010): one report, or a batch.
+    '|crash-databases/[^/]+/reports(/batch)?',
+    // Feedback Collection (FR-090 to FR-099A): the published form, an intent, an
+    // attachment under that intent, and finalization.
+    '|feedback-databases/[^/]+/(form|submission-intents(/[^/]+/(attachments(/[^/]+)?|submit))?)',
+    ')$',
+  ].join(''),
+);
 
 function registerCrossOriginCollection(app: FastifyInstance): void {
   app.addHook('onRequest', (request, reply, done) => {
@@ -192,11 +211,13 @@ function registerCrossOriginCollection(app: FastifyInstance): void {
     if (request.method !== 'OPTIONS') return done();
 
     reply
-      .header('access-control-allow-methods', 'POST, GET, OPTIONS')
-      // Exactly what the transport sends. A static list rather than an echo of
-      // `access-control-request-headers`, so a client that adds a header gets a clean
-      // preflight failure instead of a silently widened surface.
-      .header('access-control-allow-headers', 'authorization, content-type')
+      // DELETE is here for one route only: releasing a screenshot before submitting.
+      .header('access-control-allow-methods', 'POST, GET, DELETE, OPTIONS')
+      // Exactly what the two modules send, and no more. A static list rather than an
+      // echo of `access-control-request-headers`, so a client that adds a header gets a
+      // clean preflight failure instead of a silently widened surface. The intent token
+      // is the feedback module's; the crash routes never needed it.
+      .header('access-control-allow-headers', 'authorization, content-type, x-inlet-intent-token')
       .header('access-control-max-age', '86400')
       .code(204)
       .send();

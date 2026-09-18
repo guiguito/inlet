@@ -1,12 +1,12 @@
 # Inlet — Foundations PRD
 
 ## Document Status
-**Status:** Baseline for every Inlet capability — Feedback Collection shipped (Releases 1–5), Crash Reports in design, UX Analytics not started
+**Status:** Baseline for every Inlet capability — Feedback Collection shipped (Releases 1–5), Crash Reports shipped (Release 6), SDK shipped (Release 7), UX Analytics not started (Release 8)
 **Product:** Inlet, the self-hosted place your applications report to
 **Language:** English
 **Notion page:** https://app.notion.com/p/3ddd33dfffca813c87daf018eec9aeb4
 **Repository mirror:** `docs/prd/foundations.md`
-**Last revised:** September 16, 2026 (split of the unified PRD into Foundations and capability PRDs)
+**Last revised:** September 18, 2026 (FD-015 cross-origin collection; Release 7 — SDK shipped)
 **Capability PRDs:** Feedback Collection · Crash Reports · UX Analytics (TODO)
 
 > **Provenance.** This page absorbs sections 1, 2, 5, 7.4, 8.1, 8.2, 8.3, 8.7, 8.8, 8.11, 9.5, 10.1–10.4, 10.6, 10.12, 12.1, 12.5, 12.6, 18, 20 and 23 of the unified PRD, plus the platform-level lines of sections 3, 4, 6, 11, 12.2, 12.3, 14, 16 and 17. Section 19 (next steps, all done) and the old section 21 release plan are replaced by section 28. Everything about forms, responses, hosted forms and reviewing responses is on the Feedback Collection page.
@@ -476,6 +476,7 @@ Beyond Release 4: notification destinations other than Slack, a digest instead o
 - **FD-012:** The SDK shall have one transport shared by every module: a persistent offline queue (disk on Node and Electron, IndexedDB in browsers), replay on start, exponential backoff on transport failure, a hard stop on `429` that honours `Retry-After` before replay resumes, at least 100 ms between replayed events, and no retry of an individual event the server has answered. Size limits are enforced before an event is queued.
 - **FD-013:** The SDK shall have zero runtime dependencies, ship ESM and CommonJS with type declarations, support Node 18 or later and evergreen browsers, and be versioned independently of the server with a minimum-server-version check on first use.
 - **FD-014:** Nothing the SDK sends automatically may contain content the integrator did not name in the capability's envelope. Each module documents its allowlist and exposes a `beforeSend` hook for redaction.
+- **FD-015:** A collection route authenticated by a publishable key may answer cross-origin requests, with a wildcard origin, credentials off and `Retry-After` exposed, because the browser adapters of the SDK run on the integrator's origin and a publishable key was always meant to travel in public code. Nothing else answers cross-origin: not the management interface, not a route a secret key reads, not the hosted form routes. The set of open routes is enumerated in one place in the API and pinned by a test, and widening it is a change to this page first. As of Release 7 the set is crash ingest, the health probe, and the four feedback collection routes (retrieve the published form, create an intent, upload or release an attachment under it, finalize). `/v1/health` names each open capability so an SDK can tell an old deployment from an unreachable one.
 
 ## 27. MCP and Rate-Limit Conventions
 - **FD-020:** MCP shall authenticate with a secret server key and act with project Admin authority within one project. Per-user MCP is not supported.
@@ -493,8 +494,9 @@ Beyond Release 4: notification destinations other than Slack, a digest instead o
 | 2 — Team | Foundations + Feedback | Invitations, roles at two scopes, draft revisions, rollback and unpublish, CSV, MCP, malware scanning | Shipped September 2026 |
 | 3 — Shareable | Feedback | Hosted forms with branding, slugs, embedding | Shipped September 2026 |
 | 4 — Notified | Foundations | Slack notifications: settings, queue, retries, test message | Shipped September 2026 |
-| 6 — Crash Reports | Crash | Crash databases, ingest, grouping, groups UI, new-group and regression notifications, MCP, `inlet-sdk/crash` with node, browser and electron adapters | In design, see the Crash Reports PRD |
-| 7 — UX Analytics | Analytics | To be brainstormed | Not started |
+| 6 — Crash Reports | Crash | Crash databases, ingest, grouping, groups UI, new-group and regression notifications, MCP, `inlet-sdk/crash` with node, browser, electron and react entries | Shipped September 17, 2026, see the Crash Reports PRD |
+| 7 — SDK | Feedback + Foundations | `inlet-sdk/feedback` with node, browser, electron and react entries (Feedback Collection PRD section 25), FD-015 cross-origin collection routes, npm publication of `inlet-sdk` with both modules | Shipped September 18, 2026, see section 25 of the Feedback Collection PRD |
+| 8 — UX Analytics | Analytics | To be brainstormed | Not started |
 
 Release 5 — Reviewed (the response as the row, per-reader read markers, four-tab navigation, database switcher) shipped in September 2026 between Releases 4 and 6 and is specified in section 24 of the Feedback Collection PRD.
 

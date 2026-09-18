@@ -13,6 +13,10 @@
     "./crash-core": {
       "types": "./dist/crash-core.d.ts",
       "default": "./dist/crash-core.js"
+    },
+    "./feedback-core": {
+      "types": "./dist/feedback-core.d.ts",
+      "default": "./dist/feedback-core.js"
     }
   },
   "scripts": {

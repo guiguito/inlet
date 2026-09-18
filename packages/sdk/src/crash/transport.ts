@@ -1,5 +1,7 @@
 import { CRASH_LIMITS } from '@inlet/shared/crash-core';
-import type { CrashEnvelope, QueueStore } from './types.js';
+export { MemoryStore } from '../store.js';
+import type { QueueStore } from '../store.js';
+import type { CrashEnvelope } from './types.js';
 
 /**
  * The persistent transport (CR-097, CR-098, Foundations FD-012).
@@ -272,22 +274,5 @@ export class Transport {
     } catch (error) {
       this.options.debug('Inlet is not reachable; reports will queue.', error);
     }
-  }
-}
-
-/** The default store: memory only. Adapters replace it with disk or IndexedDB. */
-export class MemoryStore implements QueueStore {
-  private readonly values = new Map<string, string>();
-  get(key: string): string | null {
-    return this.values.get(key) ?? null;
-  }
-  getSync(key: string): string | null {
-    return this.values.get(key) ?? null;
-  }
-  set(key: string, value: string): void {
-    this.values.set(key, value);
-  }
-  setSync(key: string, value: string): void {
-    this.values.set(key, value);
   }
 }

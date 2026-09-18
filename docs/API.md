@@ -61,6 +61,24 @@ credential's project. A key pointed at another project's database gets
 
 ## The client feedback flow
 
+Four calls collect one response. `inlet-sdk/feedback` makes all four for you and is
+documented in [packages/sdk/README.md](../packages/sdk/README.md#feedback); what follows
+is the contract underneath it, for any language or runtime the SDK does not cover.
+
+**These four routes answer cross-origin requests**, so a browser on
+`https://app.example.com` can collect into `https://inlet.example.com` with no reverse
+proxy in between. They answer `Access-Control-Allow-Origin: *`, and a preflight asking for
+`authorization`, `content-type` and `x-inlet-intent-token`; `Retry-After` is exposed, so a
+browser client can honour a `429` rather than guess at it. Credentials are never allowed:
+no `Access-Control-Allow-Credentials` is sent, so an Inlet session cookie is unusable from
+another origin, and these routes authenticate with a publishable key only.
+
+The exception is exactly these four routes, `GET /v1/health` and crash ingest. **Reading
+collected responses is not among them**, nor is anything a secret key reads, nor the
+management interface, nor the hosted form routes. `GET /v1/health` lists what a deployment
+opens in its `capabilities`, so a client can tell an old Inlet from an unreachable one:
+`feedback-cross-origin` means the four routes below answer a preflight.
+
 ### 1. Read the published form
 
 ```
@@ -904,14 +922,9 @@ Rate limits are per key (300 in five minutes, 2,000 an hour) and per key and fin
 `Retry-After` header in seconds; the refused reports are counted on the database. A
 publishable key is one bucket, so every browser running your application shares it.
 
-**These two routes and `GET /v1/health` are the only cross-origin routes in Inlet.** They
-answer `Access-Control-Allow-Origin: *`, and a preflight asking for `authorization` and
-`content-type`, so a browser SDK can report from your own site without putting Inlet behind
-your domain. `Retry-After` is exposed, so a browser client can honour a `429` rather than
-guess at it. Credentials are never allowed: no `Access-Control-Allow-Credentials` is sent,
-an Inlet session cookie is therefore unusable from another origin, and ingest authenticates
-with a publishable key only. Every other route, crash database management included, stays
-same-origin.
+**These two routes answer cross-origin requests**, along with `GET /v1/health` and the four
+feedback collection routes listed under [the client feedback flow](#the-client-feedback-flow).
+See that section for what the exception is and is not.
 
 ### The envelope
 

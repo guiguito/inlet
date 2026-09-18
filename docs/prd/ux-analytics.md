@@ -1,12 +1,12 @@
 # Inlet — UX Analytics PRD (TODO)
 
 ## Document Status
-**Status:** Not started. Placeholder so the platform shape is visible.
+**Status:** Not started; Release 8, after Release 7 — SDK. Placeholder so the platform shape is visible.
 **Product:** Inlet — UX Analytics capability
 **Foundations:** Accounts, roles, keys, notifications, export, deletion, deployment, brand, SDK packaging and MCP conventions are on the Foundations PRD.
 **Notion page:** https://app.notion.com/p/3ddd33dfffca813bb4ffc83baa908d65
 **Repository mirror:** `docs/prd/ux-analytics.md`
-**Last revised:** September 16, 2026
+**Last revised:** September 18, 2026 (renumbered to Release 8)
 
 ## Purpose
 Answer "how is the product used" with the same stance as the other capabilities: self-hosted, privacy-first, content-free by construction, no session replay, no third party. Product usage events from an application, aggregated into counts and funnels a small team can read, operated through MCP.

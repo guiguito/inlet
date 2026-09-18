@@ -209,6 +209,15 @@ test.describe('the management interface', () => {
     expect(publishableKey).toMatch(/^ipk_/);
     await page.getByRole('button', { name: 'Done' }).click();
 
+    // The Integrate tab offers both paths, with the real key in each snippet. The SDK is
+    // additive: the API snippet beside it is what a runtime the SDK does not cover uses.
+    await page.goto(`/databases/${databaseId}?tab=integrate`);
+    await expect(page.getByText('Collect with the SDK')).toBeVisible();
+    await expect(page.getByText('Collect with the API')).toBeVisible();
+    await expect(page.getByText(`import * as feedback from 'inlet-sdk/feedback/browser';`)).toBeVisible();
+    await expect(page.getByText(`feedbackDatabaseId: '${databaseId}'`)).toBeVisible();
+    await expect(page.locator('pre', { hasText: 'curl' }).first()).toContainText(publishableKey);
+
     // --- Submit through the reference renderer ------------------------------
     await page.goto(`/render/${databaseId}?key=${encodeURIComponent(publishableKey)}`);
     await expect(page.getByRole('heading', { name: 'Tell us how it went' })).toBeVisible();

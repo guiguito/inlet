@@ -64,19 +64,9 @@ export type CaptureOptions = {
  */
 export type RedactionPolicy = (message: string) => string;
 
-/**
- * The persistent store behind the queue and the dedupe state (CR-097, CR-099). One
- * key-value store; the SDK uses the keys `queue` and `dedupe`. `setSync` is what a fatal
- * handler calls before any network, so a crash that takes the process down still leaves
- * its report on disk. A store without it (browsers) persists asynchronously.
- */
-export type QueueStore = {
-  get(key: string): Promise<string | null> | string | null;
-  set(key: string, value: string): Promise<void> | void;
-  /** Synchronous read and write, for the fatal path. Disk stores have them; IndexedDB cannot. */
-  getSync?(key: string): string | null;
-  setSync?(key: string, value: string): void;
-};
+import type { QueueStore } from '../store.js';
+
+export type { QueueStore } from '../store.js';
 
 export type DedupeOptions = {
   /** Events with the same fingerprint within this window send once. Default 24 hours. */

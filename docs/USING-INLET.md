@@ -54,8 +54,26 @@ arrived. Use one, or both at once.
 
 **From your app** — your application renders the form itself and posts the answers
 back. You control the design completely, and the form appears where the feedback is
-actually happening. Four API calls, described in [API.md](API.md). This is the right
-choice inside a product.
+actually happening. This is the right choice inside a product.
+
+The shortest route is the SDK: `npm install inlet-sdk`, then
+[`inlet-sdk/feedback`](../packages/sdk/README.md#feedback) drives the whole flow and
+hands your interface a snapshot to draw. It ships no components, so the form still looks
+like your product, and it handles the parts that are easy to get wrong — pinning one form
+version from render to submit, validating with this server's own rules, and retrying a
+submission the network lost without ever creating a duplicate. It works in browsers, in
+Node, in Electron, with or without React, and your application does not have to share an
+origin with Inlet.
+
+```ts
+import * as feedback from 'inlet-sdk/feedback/browser';
+
+feedback.init({ baseUrl: 'https://inlet.example.com', publishableKey: 'ipk_…', feedbackDatabaseId: 'fdb_…' });
+const session = await feedback.createSession();
+```
+
+Underneath it is four API calls, described in [API.md](API.md), which you can make
+yourself from any language.
 
 **From a shared link** — Inlet serves a branded page at `/f/your-address`. No code at
 all. Put it in an email, a webview, a QR code, or an iframe. Respondents need no

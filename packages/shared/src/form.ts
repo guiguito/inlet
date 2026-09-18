@@ -1,13 +1,31 @@
 import { z } from 'zod';
-import { ACCEPTED_IMAGE_MEDIA_TYPES, LIMITS } from './limits.js';
+import type {
+  BodyTextElement,
+  ChoiceOption,
+  ChoiceQuestion,
+  EmailQuestion,
+  FormDefinition,
+  FormElement,
+  FormPage,
+  ScreenshotQuestion,
+  SubtitleElement,
+  TextQuestion,
+  TitleElement,
+} from './feedback-core.js';
+import { LIMITS } from './limits.js';
 
 /**
- * The form definition (PRD sections 6, 8.4, 10.7 to 10.9).
+ * The form definition schemas (PRD sections 6, 8.4, 10.7 to 10.9), on top of the
+ * dependency-free contract in `feedback-core.ts`.
  *
  * A form is an ordered list of pages; a page is one ordered list of elements
  * (FR-032); an element is either a content block or a question (FR-033 to FR-049).
  * Page, element and option identifiers are stable inside a published version
  * (FR-041) so historical answers stay interpretable.
+ *
+ * The types live in `feedback-core.ts`, which the SDK bundles without Zod (FR-195).
+ * `Exact` at the bottom of this file is what keeps the two halves honest: change a
+ * schema without changing the type and the build fails here rather than in a client.
  */
 
 /** Stable identifiers: a short typed prefix plus 12 base32 characters. */
@@ -128,71 +146,23 @@ export const formDefinitionSchema = z
   .object({ pages: z.array(pageSchema).max(LIMITS.formMaxPages) })
   .strict();
 
-export type TitleElement = z.infer<typeof titleElementSchema>;
-export type SubtitleElement = z.infer<typeof subtitleElementSchema>;
-export type BodyTextElement = z.infer<typeof bodyTextElementSchema>;
-export type ChoiceOption = z.infer<typeof choiceOptionSchema>;
-export type ChoiceQuestion = z.infer<typeof choiceQuestionSchema>;
-export type TextQuestion = z.infer<typeof textQuestionSchema>;
-export type EmailQuestion = z.infer<typeof emailQuestionSchema>;
-export type ScreenshotQuestion = z.infer<typeof screenshotQuestionSchema>;
-export type FormElement = z.infer<typeof elementSchema>;
-export type FormPage = z.infer<typeof pageSchema>;
-export type FormDefinition = z.infer<typeof formDefinitionSchema>;
-
-export type QuestionElement = ChoiceQuestion | TextQuestion | EmailQuestion | ScreenshotQuestion;
-export type ContentElement = TitleElement | SubtitleElement | BodyTextElement;
-
-export const QUESTION_TYPES = ['choice', 'text', 'email', 'screenshot'] as const;
-export const CONTENT_TYPES = ['title', 'subtitle', 'body_text'] as const;
-export type QuestionType = (typeof QUESTION_TYPES)[number];
-export type ElementType = FormElement['type'];
-
-export function isQuestion(element: FormElement): element is QuestionElement {
-  return (QUESTION_TYPES as readonly string[]).includes(element.type);
-}
-
-export function isContentBlock(element: FormElement): element is ContentElement {
-  return (CONTENT_TYPES as readonly string[]).includes(element.type);
-}
-
-/** Every question in the definition, in authored order. */
-export function listQuestions(definition: FormDefinition): QuestionElement[] {
-  return definition.pages.flatMap((page) => page.elements.filter(isQuestion));
-}
-
-/** Questions by stable ID, for answer validation and submission rendering. */
-export function questionsById(definition: FormDefinition): Map<string, QuestionElement> {
-  return new Map(listQuestions(definition).map((q) => [q.id, q]));
-}
-
 /**
- * The client-facing shape of a screenshot question: the stored definition plus the
- * platform-owned limits required by FR-046.
+ * Compile-time proof that each schema still produces the type declared in
+ * `feedback-core.ts`. Mutual assignability, so a field added on either side is caught:
+ * a schema that gains a key no longer extends the type, and a type that gains one is no
+ * longer satisfied by the schema.
  */
-export type ClientScreenshotQuestion = ScreenshotQuestion & {
-  acceptedMediaTypes: readonly string[];
-  maxFileBytes: number;
-};
-
-export type ClientFormElement = Exclude<FormElement, ScreenshotQuestion> | ClientScreenshotQuestion;
-export type ClientFormPage = { id: string; elements: ClientFormElement[] };
-export type ClientFormDefinition = { pages: ClientFormPage[] };
-
-/** Injects the platform-owned upload limits into every screenshot question (FR-046). */
-export function toClientDefinition(definition: FormDefinition): ClientFormDefinition {
-  return {
-    pages: definition.pages.map((page) => ({
-      id: page.id,
-      elements: page.elements.map((element) =>
-        element.type === 'screenshot'
-          ? {
-              ...element,
-              acceptedMediaTypes: ACCEPTED_IMAGE_MEDIA_TYPES,
-              maxFileBytes: LIMITS.imageMaxSourceBytes,
-            }
-          : element,
-      ),
-    })),
-  };
-}
+type Exact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
+type _SchemasMatchTheTypes = [
+  Exact<z.infer<typeof titleElementSchema>, TitleElement>,
+  Exact<z.infer<typeof subtitleElementSchema>, SubtitleElement>,
+  Exact<z.infer<typeof bodyTextElementSchema>, BodyTextElement>,
+  Exact<z.infer<typeof choiceOptionSchema>, ChoiceOption>,
+  Exact<z.infer<typeof choiceQuestionSchema>, ChoiceQuestion>,
+  Exact<z.infer<typeof textQuestionSchema>, TextQuestion>,
+  Exact<z.infer<typeof emailQuestionSchema>, EmailQuestion>,
+  Exact<z.infer<typeof screenshotQuestionSchema>, ScreenshotQuestion>,
+  Exact<z.infer<typeof elementSchema>, FormElement>,
+  Exact<z.infer<typeof pageSchema>, FormPage>,
+  Exact<z.infer<typeof formDefinitionSchema>, FormDefinition>,
+];

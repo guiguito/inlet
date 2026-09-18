@@ -657,9 +657,45 @@ function IntegrateTab({ databaseId, projectId }: { databaseId: string; projectId
 
       <Card>
         <CardHeader>
-          <CardTitle>Collect feedback in four calls</CardTitle>
+          <CardTitle>Collect with the SDK</CardTitle>
           <CardDescription>
-            Read the form, open an intent, attach any screenshots, then submit everything at once.
+            The inlet-sdk package drives the four calls for you and hands your interface a
+            snapshot to draw. It ships no components, so the form looks like your application.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <pre className="overflow-x-auto rounded-md border bg-muted/40 p-4 font-mono text-xs leading-relaxed">
+{`npm install inlet-sdk
+
+import * as feedback from 'inlet-sdk/feedback/browser';
+
+feedback.init({
+  baseUrl: '${origin}',
+  publishableKey: '${key}',
+  feedbackDatabaseId: '${databaseId}',
+});
+
+const session = await feedback.createSession();
+if (session.ok) {
+  const form = session.value;      // subscribe(), getSnapshot(), and the actions
+  form.setAnswer(questionId, { value: 'It works' });
+  form.next();                     // validates with this server's own rules
+  await form.submit();             // retried safely if the network drops
+}`}
+          </pre>
+          <p className="text-xs text-muted-foreground">
+            Node, Electron and React entries exist too. Your application does not have to share an
+            origin with this server.
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Collect with the API</CardTitle>
+          <CardDescription>
+            The same four calls by hand, for a language or a runtime the SDK does not cover. Read
+            the form, open an intent, attach any screenshots, then submit everything at once.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">

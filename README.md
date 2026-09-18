@@ -66,9 +66,12 @@ hands it back as JSON or CSV whenever you ask.
 - **Crashes arrive grouped, not in a flood.** Server-side fingerprinting on the failure
   kind, the normalized message and your own stack frames, with line numbers deliberately
   ignored. Resolve a bug in a release and Inlet tells you if it comes back on a later one.
-- **One SDK, four adapters.** `inlet-sdk/crash` for Node, browsers, and Electron's main and
-  renderer processes. Zero runtime dependencies, a queue that survives restarts, messages
-  redacted before they leave, and client-side dedupe so a crash loop sends once.
+- **One SDK, two modules.** `inlet-sdk/feedback` collects a form's answers from inside your
+  own interface — a framework-free controller that drives the pages and draws nothing, so
+  the form looks like your product. `inlet-sdk/crash` reports failures, with messages
+  redacted before they leave and client-side dedupe so a crash loop sends once. Each has a
+  Node, browser, Electron and React entry; both have zero runtime dependencies and a queue
+  that survives restarts, and together they take one configuration.
 - **It talks to AI agents.** An MCP server with 55 tools, so Claude can summarise your
   week's feedback, or triage a crash group and resolve it in the release that fixes it.
 - **Every choice is written down.** [DECISIONS.md](docs/DECISIONS.md) records what was
@@ -204,7 +207,7 @@ image ships, so what is tested is what is deployed.
 | Path | What lives there |
 | --- | --- |
 | `packages/shared` | Form definitions, answer validation, the crash envelope and its fingerprint, limits, error codes. Shared by the API, the web app and the SDK so the contract cannot drift. |
-| `packages/sdk` | `inlet-sdk`, the client SDK. `crash` with Node, browser and Electron adapters. |
+| `packages/sdk` | `inlet-sdk`, the client SDK. `feedback` and `crash`, each with Node, browser, Electron and React entries. |
 | `apps/api` | Fastify server, Drizzle schema and migrations, services, routes, tests. |
 | `apps/web` | React management interface, form builder, hosted form page, reference renderer. |
 | `apps/mcp` | `inlet-mcp`, a thin layer over the HTTP API. |
@@ -220,7 +223,7 @@ image ships, so what is tested is what is deployed.
 | [DEPLOYMENT.md](docs/DEPLOYMENT.md) | Configuration, reverse proxies, managed PostgreSQL and S3, backups, upgrades. |
 | [API.md](docs/API.md) | The integration guide, with the retry contract in full. |
 | [MCP.md](docs/MCP.md) | Every MCP tool and what it may do. |
-| [packages/sdk](packages/sdk/README.md) | `inlet-sdk` for integrators: install, capture, what is sent and what never is. |
+| [packages/sdk](packages/sdk/README.md) | `inlet-sdk` for integrators: collecting feedback, capturing crashes, what is sent and what never is. |
 | [PRD.md](docs/PRD.md) | The product requirements, split into [Foundations](docs/prd/foundations.md), [Feedback Collection](docs/prd/feedback-collection.md), [Crash Reports](docs/prd/crash-reports.md) and [UX Analytics](docs/prd/ux-analytics.md); cited by ID throughout the source. |
 | [DECISIONS.md](docs/DECISIONS.md) | Every technical choice, its reasoning, and the rejected alternatives. |
 
