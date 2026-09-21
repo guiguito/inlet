@@ -64,6 +64,24 @@ export type CaptureOptions = {
  */
 export type RedactionPolicy = (message: string) => string;
 
+/** CR-105: what the server answered for one accepted report. */
+export type SentReport = {
+  reportId: string;
+  groupId: string;
+  isNewGroup: boolean;
+  isRegression: boolean;
+};
+
+/** CR-108: why a report never reached the server. */
+export type DropReason =
+  | 'disabled'
+  | 'sampled'
+  | 'bounds'
+  | 'dedupe'
+  | 'beforeSend'
+  | 'queue-full'
+  | 'refused';
+
 import type { QueueStore } from '../store.js';
 
 export type { QueueStore } from '../store.js';
@@ -91,8 +109,28 @@ export type CrashInitOptions = {
   platform?: CrashPlatform;
   /** 0 to 1. Events are dropped at random above this fraction. Default 1. */
   sampleRate?: number;
+  /**
+   * CR-104: start capturing or not. Default true. Initialising while off beats branching
+   * around `init`, which would lose every other code path too. Flip it with `setEnabled`.
+   */
+  enabled?: boolean;
   /** Runs on every envelope before queueing. Return null to drop it (FD-014). */
   beforeSend?: (envelope: CrashEnvelope) => CrashEnvelope | null | Promise<CrashEnvelope | null>;
+  /**
+   * CR-107: the synchronous sibling of `beforeSend`, and the only hook that can run on the
+   * fatal path. Runs on every envelope, before `beforeSend`. Return null to drop it. Define
+   * only this one and the filter covers uncaught exceptions too.
+   */
+  beforeSendSync?: (envelope: CrashEnvelope) => CrashEnvelope | null;
+  /**
+   * CR-105: called once per report the server accepted, including each accepted entry of a
+   * batch, with the envelope that produced it. For writing the server's ids into an audit row.
+   */
+  onSent?: (sent: SentReport, envelope: CrashEnvelope) => void;
+  /** CR-108: called whenever a report is dropped, with a structured reason. */
+  onDrop?: (reason: DropReason, detail?: unknown) => void;
+  /** CR-106: per-request timeout in milliseconds. Default 20000. */
+  timeoutMs?: number;
   /** Queue ceiling; the oldest is dropped past it. Default 200, at most 200 (CR-097). */
   queueSize?: number;
   /** Where the queue lives across restarts. Adapters supply one; the default is memory. */

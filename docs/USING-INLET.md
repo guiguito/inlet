@@ -197,7 +197,7 @@ database ID, your project's publishable key, and an install snippet for Node, br
 Electron's main process and Electron's renderer:
 
 ```ts
-import * as crash from 'inlet-sdk/crash';
+import * as crash from 'inlet-sdk/crash/node';
 
 crash.init({
   baseUrl: 'https://inlet.example.com',
@@ -207,6 +207,17 @@ crash.init({
 });
 crash.installNodeHandlers();
 ```
+
+Each adapter is its own entry point, and the installer lives on that entry:
+`inlet-sdk/crash/node`, `/browser`, `/electron` for the main process and
+`/electron-renderer` for a renderer. `inlet-sdk/crash` on its own gives you `init` and the
+`capture*` functions, which is what a shared module should import.
+
+By default an exception message is sent only when it matches a shape the runtime generates;
+anything else becomes `<redacted>`, because that field routinely carries what someone typed.
+Pass `redaction: keepMessages` if you know yours are safe, or `redactExcept([...])` to add
+your own shapes. You can start with crash reporting off (`enabled: false`) and turn it on
+when someone opts in, with `setEnabled(true)`.
 
 Press **Send a test report** to see one land before you ship anything. If your
 application is not JavaScript, any HTTP client can post the envelope documented in

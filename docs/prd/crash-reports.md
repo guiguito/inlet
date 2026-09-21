@@ -1,14 +1,14 @@
 # Inlet — Crash Reports PRD
 
 ## Document Status
-**Status:** Implemented as Release 6 on September 17, 2026: server, interface, MCP tools and `inlet-sdk/crash` with Node, browser and Electron adapters. Technical choices and rejected alternatives: `docs/DECISIONS.md` section 24. `inlet-sdk/feedback`, which section 15 allowed to slip, is specified in Feedback Collection PRD section 25 as Release 7 — SDK.
+**Status:** Implemented as Release 6 on September 17, 2026: server, interface, MCP tools and `inlet-sdk/crash` with Node, browser and Electron adapters, published to npm as `inlet-sdk` (the `@inlet` scope belongs to an unrelated party). Technical choices and rejected alternatives: `docs/DECISIONS.md` section 24. `inlet-sdk/feedback`, which section 15 allowed to slip, is specified in Feedback Collection PRD section 25 as Release 7 — SDK.
 **Product:** Inlet — Crash Reports capability
 **Language:** English
 **Foundations:** Accounts, roles, keys, notifications plumbing, export, deletion, deployment, brand, SDK packaging and MCP conventions are on the Foundations PRD and are not repeated here.
 **Sources:** the HappyVibe "Crashreporting?" proposal (revised September 16, 2026), the competitor research in Appendix A, and the Inlet codebase as of Release 5.
 **Notion page:** https://app.notion.com/p/3ddd33dfffca81129df2c8a1e4af25cb
 **Repository mirror:** `docs/prd/crash-reports.md`
-**Last revised:** September 18, 2026 (release numbering after Release 7 — SDK)
+**Last revised:** September 21, 2026 (`inlet-sdk` 0.1.2: CR-090, CR-094, CR-096 and CR-100 amended, CR-104 to CR-113 added)
 
 > **Positioning in one line.** Collect, group, notify, hand off. Inlet tells you that your application broke, how often, on which versions and systems, and for how many users, then hands the developer a content-free report and gets out of the way. It is not Sentry: it never receives a minidump, never symbolicates, never traces, never replays, and never stores a line of your users' content.
 
@@ -139,20 +139,30 @@ The first consumer, the HappyVibe desktop application, measured the gap directly
 - **CR-082:** Eviction shall never change a group's count, first seen, last seen, releases, systems, affected users or rollups.
 
 ### 6.9 SDK — `inlet-sdk/crash`
-- **CR-090:** The module shall expose `init`, `captureException`, `captureMessage`, `captureReport`, `setUser`, `setTag`, `setTags`, `flush` and `close`, and one handler installer per adapter: `installNodeHandlers`, `installBrowserHandlers`, `installElectronMain`, `installElectronRenderer`. No other public surface in Release 6.
+- **CR-090:** The module shall expose `init`, `captureException`, `captureMessage`, `captureReport`, `setUser`, `setTag`, `setTags`, `setEnabled`, `flush` and `close`, and one handler installer per adapter: `installNodeHandlers`, `installBrowserHandlers`, `installElectronMain`, `installElectronRenderer`. `installElectronRenderer` shall be published from its own browser-safe entry (CR-109). Beyond this list, only what CR-104 to CR-113 add.
 - **CR-091:** `init` shall take the base URL, the publishable key, the crash database ID, the release, and optionally an environment, a sample rate, a `beforeSend` hook, a queue size, a persistence directory or store, and a redaction policy.
 - **CR-092:** `captureException` shall build an envelope of kind `exception` from an `Error`, with frames parsed from its stack, and accept optional kind, tags, context and fingerprint overrides. `captureMessage` shall build a kind `message` envelope with no frames. `captureReport` shall accept a complete envelope the integrator built, for failure classes the SDK cannot observe itself, such as a parsed native crash summary or an unclean-exit sentinel.
 - **CR-093:** The SDK shall mark frames inside the application bundle as in-app and shall replace the file of every other frame with `<external>`. The application bundle is detected per adapter and may be overridden at `init`.
-- **CR-094:** The SDK shall pass exception messages through a redaction policy before sending. The default policy keeps messages matching a small set of known-safe shapes and replaces every other message with its first token followed by `<redacted>`. Integrators may replace the policy, including with one that keeps messages verbatim.
+- **CR-094:** The SDK shall pass exception messages through a redaction policy before sending. The default policy keeps messages matching a small set of known-safe shapes and replaces every other message with `<redacted>`. It shall keep the leading token only where that token is errno-shaped — all capitals, digits and underscores, optionally followed by a colon, as in `ENOENT:` or `ERR_MODULE_NOT_FOUND` — which carries triage value and cannot carry a payload. It shall never ship the leading token otherwise: whether a message was protected must not depend on its word order. Integrators may replace the policy, and the policies ship as named exports so that relaxing redaction is a deliberate choice (CR-113): `keepMessages` sends messages verbatim, `redactExcept` takes the integrator's own safe shapes.
 - **CR-095:** The SDK shall never send automatically: environment variables, command-line arguments, request URLs or headers, local variables, source lines, console output, file paths outside the bundle, or anything from `process.env`, `window.location` or `document`.
-- **CR-096:** The SDK shall enforce the envelope bounds of section 9.1 before queueing, truncating where the envelope permits and dropping the event otherwise, with a warning through the debug hook.
+- **CR-096:** The SDK shall enforce the envelope bounds of section 9.1 before queueing, truncating where the envelope permits and dropping the event otherwise, with a warning through the debug hook. The bounds shall be enforced again after `beforeSendSync` and `beforeSend` have run, on what will actually be sent, so that a hook which adds bytes cannot push the envelope past the cap: the server answers such an envelope with 413, which is an answer, so the transport would drop it as refused rather than retry it.
 - **CR-097:** The SDK shall persist queued events across restarts: on disk under a directory the integrator names on Node and Electron, and in IndexedDB in browsers. Fatal-path handlers shall write to the persistent queue synchronously before any network call. The queue holds at most 200 events and drops the oldest.
 - **CR-098:** The SDK shall replay the queue after start, batch up to 50 events per request, honour `429` and `Retry-After` by pausing replay, back off exponentially on transport failure, and never retry an event the server has answered.
 - **CR-099:** The SDK shall dedupe on the client: at most one event per computed fingerprint per 24 hours and five events per hour overall, persisted across restarts, so that a crash loop that restarts the application sends once. Integrators may loosen or disable this.
-- **CR-100:** `installNodeHandlers` shall observe `uncaughtException` and `unhandledRejection`. `installBrowserHandlers` shall observe `error` and `unhandledrejection` on `window`. `installElectronMain` shall observe the main-process handlers, `render-process-gone` on every window and `child-process-gone`, shall accept envelopes from renderers over a named IPC channel, and shall keep its queue in the application's user-data directory. `installElectronRenderer` shall route every capture through main and shall export a React error-boundary helper separately.
+- **CR-100:** `installNodeHandlers` shall observe `uncaughtException` and `unhandledRejection`. `installBrowserHandlers` shall observe `error` and `unhandledrejection` on `window`. `installElectronMain` shall observe the main-process handlers, `render-process-gone` on every window and `child-process-gone`, shall accept reports from renderers over a named IPC channel (CR-111), and shall keep its queue in the application's user-data directory. It shall not terminate the process by default, because exiting the Electron main process takes every renderer and child process with it; an application that wants Node's exit asks for it. `installElectronRenderer` shall route every capture through main and shall export a React error-boundary helper separately. Every installer shall return an uninstaller that removes every listener it registered, so that repeated installs do not stack in tests or on hot reload.
 - **CR-101:** `setUser(id)` shall attach an opaque user ID of at most 128 characters to subsequent events; `setUser(null)` shall clear it. The SDK shall accept nothing else about the user.
 - **CR-102:** The SDK shall refuse a secret key at `init` and shall refuse to run when the release is empty.
 - **CR-103:** The SDK shall be a module of `inlet-sdk` under the packaging rules of Foundations FD-010 to FD-014.
+- **CR-104:** `init` shall accept `enabled`, defaulting true, so that an application can initialise the client while off rather than branching around `init` and losing every other code path. `setEnabled(false)` shall stop capture so that every `capture*` returns null, shall stop replay, and shall not flush — an opt-out that flushed would send the very reports the person just declined. With `dropQueue` it shall also discard the persisted queue and the dedupe state. `setEnabled(true)` shall resume and schedule a flush.
+- **CR-105:** The SDK shall report each accepted report to an `onSent` callback exactly once, including each accepted entry of a batch, paired with the envelope that produced it, carrying the server's report ID, group ID, new-group flag and regression flag. A batch answer alone cannot say which crash was new, so the pairing is the requirement.
+- **CR-106:** Every request shall carry a timeout, 20 seconds by default and configurable, applied per request and independent of the caller's `flush` timeout. A `flush` timeout bounds how long the caller waits, not how long the socket stays open.
+- **CR-107:** The SDK shall accept a synchronous envelope hook that runs on both the fatal and the ordinary path, before the asynchronous hook, so that an integrator's filter covers uncaught exceptions — the reports that matter most. The asynchronous hook remains and runs only on the ordinary path.
+- **CR-108:** Every drop shall be reported through an `onDrop` callback with a structured reason: `disabled`, `sampled`, `bounds`, `dedupe`, `beforeSend`, `queue-full` or `refused`.
+- **CR-109:** Entries intended for a browser or an Electron renderer shall contain no Node imports, direct or transitive, and the Electron renderer installer shall be published from such an entry. The build shall fail if any of them gains one.
+- **CR-110:** The SDK shall hold one client per application whatever entry point initialised it, and a capture made before `init` shall warn rather than return null in silence.
+- **CR-111:** The IPC channel is a trust boundary, because a renderer may run remote content. The main process shall read only the kind, the exception, the context, the tags and the fingerprint from a renderer's payload and shall ignore every other field, so that a renderer cannot forge the release, environment, operating system, runtime, user ID, event ID or timestamp and thereby corrupt grouping and regression detection. It shall accept only the kinds a renderer can legitimately produce, bound tag count and key and value lengths, and accept an optional tag allowlist from the host.
+- **CR-112:** The package shall have a root export, so that importing `inlet-sdk` resolves.
+- **CR-113:** The SDK shall export its redaction policies by name — the private default, a builder taking the integrator's own safe shapes, and one that sends messages verbatim — so that relaxing redaction is a deliberate and greppable choice rather than an inline function.
 
 ## 7. API Contract Direction
 Endpoint paths are proposals; the flows are requirements.
@@ -306,7 +316,7 @@ Indexes: unique `(database_id, fingerprint)` on groups; `(database_id, state, la
 
 ## 13. Risks and Mitigations
 - **Over-grouping or under-grouping:** a normalization that is too aggressive merges distinct bugs, too weak splits one bug across groups. Mitigation: Bugsink-style normalization plus five frames, a grouping version so tuning never shatters history, and a client fingerprint override; manual merge in a later Crash release.
-- **Content leaking through `context` or messages:** the integrator can put anything in `context`. Mitigation: the SDK never fills it automatically, messages are redacted by default on the client and truncated on the server, the interface labels `context` as integrator-supplied, and Slack never carries either.
+- **Content leaking through context or messages:** the integrator can put anything in `context`. Mitigation: the SDK never fills it automatically, messages are redacted by default on the client and truncated on the server, the interface labels `context` as integrator-supplied, and Slack never carries either.
 - **Crash-loop storms:** one machine in a loop could flood ingest. Mitigation: client dedupe persisted across restarts, per-fingerprint server limits, new-group-only notifications, inline eviction.
 - **Storage growth:** a popular app at its cap on many databases. Mitigation: per-database caps with platform bounds, a 12 KB budget per report, the object-storage and partitioning upgrade paths.
 - **Regression false positives:** version strings that are not monotonic (hotfix branches) reorder releases. Mitigation: first-seen ordering is documented; a resolved-in release is optional; a later Crash release may add manual release ordering.
@@ -331,6 +341,13 @@ Indexes: unique `(database_id, fingerprint)` on groups; `(database_id, state, la
 - No request IP on crash reports.
 - Breadcrumbs, symbolication and merge deferred to a later Crash release.
 
+**Decided September 21, 2026, from the first external integration review of inlet-sdk 0.1.0**
+- *Redaction emits the marker alone.* Keeping a message's first token meant `alice@corp.com is not a valid address` shipped the address behind a marker that read as redacted, and `/Users/alice/secret.docx could not be opened` shipped the path. Whether a message was protected depended on its word order, which is luck rather than a rule. The escape hatch already existed, so the gap was a default that did not deliver what its marker claimed; privacy by default stays, the mechanism is fixed, and the opt-out becomes a named export rather than a lambda documented only in a source comment. Accepted consequence: unmatched messages no longer differ by leading token, so grouping coarsens slightly. It is bounded — CR-021 normalization already replaces emails, paths, URLs and quoted strings before hashing, and in-app frames still separate distinct sites — and a team wanting finer grouping should add its own safe shapes, which is a per-shape decision rather than a blanket one.
+- *Electron main does not inherit Node's exit.* Exiting is right for a CLI and wrong for a desktop application, where it takes every renderer and child process down with it.
+- *Bounds are re-checked after the hooks.* Checking only before them let a hook breach the cap, and the server's 413 is an answer, so the report was dropped rather than retried.
+- *The IPC channel is sanitised at the boundary, not in the envelope builder.* Main-process callers legitimately set the release, environment and user; a renderer does not. Fixing it in `completeEnvelope` would have taken the capability away from both.
+- *Minidump reading is deferred to a later Crash release.* The `native` kind exists and nothing produces it, so an Electron adopter writes the same hundred lines. It needs no symbols, no server work and no binary upload, but it is a binary-format parser, nobody is blocked on it, and it is purely additive.
+
 **Recommended defaults, adjustable in technical design**
 - Envelope 64 KiB; message 200 characters; 30 frames; 20 tags; context 16 KiB.
 - Retention cap 10,000 reports, age 90 days.
@@ -342,6 +359,7 @@ Indexes: unique `(database_id, fingerprint)` on groups; `(database_id, state, la
 - *Symbolication:* a bundler plugin injects a debug ID into each bundle and its source map; maps are uploaded to object storage keyed by debug ID with a secret key; frames carry the debug ID; the server symbolicates on read, never at ingest. No release association needed.
 - *Breadcrumbs:* opt-in at `init`, at most 20, category and message only, message through the redaction policy.
 - *Merge:* fold group B into A, keep B's fingerprint pointing at A so future reports follow, reversible.
+- *Minidump reading:* an `inlet-sdk/crash/minidump` export that returns the fault type, the faulting module and the process type from a dump buffer, which the application turns into a `native` report on the next launch. No symbols, no server work, no binary upload.
 
 ## 15. Release Plan
 **Release 6 — Crash Reports.** Goal: HappyVibe reports every failure class to its own Inlet, the developer triages from Slack, the interface or an agent, and a second application can integrate with the SDK in an afternoon.
@@ -350,7 +368,9 @@ Indexes: unique `(database_id, fingerprint)` on groups; `(database_id, state, la
 - SDK: `inlet-sdk/crash` with node, browser and electron adapters. The feedback module of `inlet-sdk` did not ship in this release; it is specified in Feedback Collection PRD section 25 as Release 7 — SDK.
 - HappyVibe integration: Appendix B.
 
-**A later Crash release.** Manual merge, opt-in breadcrumbs, debug-ID symbolication, tag indexing and filtering, object-storage envelope offload, streaming NDJSON export, manual release ordering, and the Sentry-compatibility decision.
+**inlet-sdk 0.1.2 — crash SDK integration feedback.** Not a numbered Inlet release; the server is untouched. From the first external integration review of 0.1.0. CR-090, CR-094, CR-096 and CR-100 amended; CR-104 to CR-113 added. Four behaviours change for an application already on 0.1.0: Electron main no longer exits by default, the default redaction no longer emits a message's leading token, an envelope a hook grew past the cap is now dropped rather than refused by the server, and the IPC channel ignores renderer-supplied envelope fields it used to pass through.
+
+**A later Crash release.** Manual merge, opt-in breadcrumbs, debug-ID symbolication, minidump reading, tag indexing and filtering, object-storage envelope offload, streaming NDJSON export, manual release ordering, and the Sentry-compatibility decision.
 
 ## Appendix A — Landscape
 Research performed September 16, 2026. Footprints and prices as published on that date.

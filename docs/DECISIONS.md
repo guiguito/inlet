@@ -2043,3 +2043,103 @@ not a server refusal — and builds the payload from what is true after all that
 `clientContext` size check stayed in front of the intent, because an oversized context cannot
 be fixed by anything below it and spending an intent on it costs a rate-limit slot the
 respondent may need.
+
+## 26. `inlet-sdk` 0.1.2: what the first external integration found
+
+`inlet-sdk` 0.1.0 went to npm on September 21, 2026. The first team to integrate it read the
+source and came back the same day with fourteen items. Most were taken as filed; this section
+records the four where the reported diagnosis or the proposed fix was wrong, because the
+right fix was not the obvious one, and the two where a fix was declined.
+
+### 26.1 The singleton: a global symbol, not a shared module
+
+**Reported:** `crash/electron` inlines `client.ts`, so it holds a different `current` than
+`crash`. Move the singleton to a shared module.
+
+The first half is right about the shipped artifact and wrong about the source. There has only
+ever been one `let current`, in `src/crash/index.ts`, and every adapter imports `getClient`
+from it. The duplication is made by the build: `build.mjs` runs esbuild once per entry with
+`bundle: true` and no code splitting, so `index.ts`'s module state is inlined into
+`dist/crash/index.js`, `node.js`, `browser.js` and `electron.js` alike — four independent
+`current` variables. An application that called `installElectronMain` from one entry and
+`captureException` from another set one and read another, and the read returned
+`Promise.resolve(null)` with no warning.
+
+Moving the singleton to a shared module would not have fixed anything: that module is inlined
+into every bundle too. The two real options were esbuild `splitting: true` with a shared
+chunk, and a well-known key on `globalThis`. Splitting was rejected — it is ESM-only, so the
+`.cjs` half of every entry would still have had its own copy, and it changes the output layout
+for something that is not a bundling problem. `globalThis[Symbol.for('inlet-sdk.crash.current')]`
+is three lines, survives any bundler, and is the standard answer to the dual-package hazard.
+The silent no-op became a one-time `console.warn` at the same time, because the silence is
+what made the entry-point mistake undiagnosable.
+
+The web interface was teaching the mistake: the Collect tab's four snippets all read
+`import * as crash from 'inlet-sdk/crash'` and then called `crash.installNodeHandlers()`,
+which is not exported there. Fixed with the rest.
+
+### 26.2 The purity check had to be written, not extended
+
+**Reported:** extend the existing `standAlone()` build check to fail if a browser-safe entry
+gains a `node:` import.
+
+There was no such check. `standAlone()` verifies that emitted `.d.ts` files do not import
+`@inlet/shared`, which is about declaration self-containment and has never had anything to do
+with Node imports. Nothing anywhere checked bundle purity, there is no CI workflow, and
+`node:*` is in esbuild's `external` list — so a stray Node import is passed straight through
+to the output and surfaces only in the integrator's bundler. `browserSafe()` in `build.mjs` is
+new. It matches an import or require of a `node:` module rather than the bare string, because
+the in-app frame filter in `browser.js` and `react.js` legitimately tests for that prefix.
+
+### 26.3 Redaction: the leak was in the requirement
+
+CR-094 specified that an unmatched message is replaced by "its first token followed by
+`<redacted>`". So `alice@corp.com is not a valid address` shipped the address and
+`/Users/alice/secret.docx could not be opened` shipped the path, each behind a marker
+asserting the opposite. Whether a message was protected depended on its word order.
+
+The escape hatch already existed — `init` takes a `redaction` policy, and the source comment
+spelled out the identity function — so the suggestion of "keep it as is and let developers
+disable it" described what already shipped. The gap was a default that did not deliver what
+its marker claimed, so the default was fixed rather than the opt-out re-advertised. The
+leading token survives only when errno-shaped (`/^[A-Z][A-Z0-9_]{2,}:?$/`); the trailing `:?`
+matters, because `ENOENT:` carries the colon and the regex as proposed would have dropped it.
+`keepMessages` was added so that relaxing redaction is greppable rather than an inline lambda.
+
+Accepted cost: unmatched messages no longer differ by leading token, so grouping coarsens
+slightly. It is bounded — CR-021 normalization already replaces emails, paths, URLs and quoted
+strings before hashing, and five in-app frames still separate distinct sites — and group
+titles never came from the message anyway (CR-051).
+
+### 26.4 The IPC boundary, not the envelope builder
+
+**Reported:** the IPC entry validates only that `kind` is a string, so a renderer can post
+arbitrary context and tags.
+
+It is wider than that. `completeEnvelope` lets a report override `eventId`, `timestamp`,
+`platform`, `release`, `environment`, `os`, `runtime` and `user.id`, so a compromised renderer
+could file a crash against a release that never shipped and corrupt regression detection
+server-side — a data-integrity problem, not only a content one.
+
+The fix is at the boundary, not in `completeEnvelope`: main-process callers legitimately set
+the release and the user, and taking that away to defend against renderers would have broken
+the adapter's own use. `sanitizeRendererReport` reads `kind`, `exception`, `context`, `tags`
+and `fingerprint` and nothing else, and restricts kinds to the four a renderer can produce —
+`renderer-gone`, `child-exit`, `native` and `unclean-exit` are main's observations.
+
+### 26.5 Declined: `beforeSendSync` over stripping context
+
+The alternative offered for the fatal path was to strip context and unlisted tags in the sync
+path by default. Rejected: it silently changes what is sent, and it leaves fatal reports
+undroppable, so a host filtering out a noisy module still receives its crashes. A synchronous
+hook that runs on *both* paths means an integrator who defines only that one gets uniform
+filtering, which is the honest contract.
+
+### 26.6 Deferred: the minidump reader
+
+The `native` kind exists, is validated, fingerprinted and exported, and has exactly one
+producer in the whole repository — a hand-written call in the test suite. A reader would save
+every Electron adopter the same hundred lines and needs no symbols, no server work and no
+binary upload. It is still a binary-format parser, nobody is blocked on it, and it is purely
+additive, so it goes to a later Crash release rather than into a point release whose job is to
+unblock an integration.

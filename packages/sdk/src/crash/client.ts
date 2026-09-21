@@ -15,11 +15,12 @@ import type {
   CrashInitOptions,
   CrashReportInput,
   DedupeOptions,
+  DropReason,
   QueueStore,
 } from './types.js';
 
 export const SDK_NAME = 'inlet-sdk';
-export const SDK_VERSION = '0.1.0';
+export const SDK_VERSION = '0.1.2';
 
 const DEDUPE_KEY = 'dedupe';
 type DedupeState = { byFingerprint: Record<string, number>; recent: number[] };
@@ -40,10 +41,12 @@ export class CrashClient {
   private readonly now: () => number;
   private readonly redaction: (message: string) => string;
   private readonly dedupe: Required<DedupeOptions> | null;
+  private readonly onDrop: (reason: DropReason, detail?: unknown) => void;
   private dedupeState: DedupeState | null = null;
   private userId: string | null = null;
   private tags: Record<string, string>;
   private closed = false;
+  private enabled: boolean;
 
   constructor(options: CrashInitOptions) {
     if (typeof options.publishableKey !== 'string' || !options.publishableKey.startsWith('ipk_')) {
@@ -63,6 +66,15 @@ export class CrashClient {
     this.store = options.store ?? new MemoryStore();
     this.redaction = options.redaction ?? defaultRedaction;
     this.tags = { ...(options.tags ?? {}) };
+    this.enabled = options.enabled ?? true;
+    // CR-108. A callback that throws must never take a crash report down with it.
+    this.onDrop = (reason, detail) => {
+      try {
+        options.onDrop?.(reason, detail);
+      } catch (error) {
+        this.debug('onDrop threw.', error);
+      }
+    };
     this.dedupe =
       options.dedupe === false
         ? null
@@ -76,7 +88,21 @@ export class CrashClient {
       queueSize: Math.min(200, Math.max(1, options.queueSize ?? 200)),
       debug: this.debug,
       now: this.now,
+      timeoutMs: options.timeoutMs,
+      onDrop: this.onDrop,
+      ...(options.onSent
+        ? {
+            onSent: (sent, envelope) => {
+              try {
+                options.onSent!(sent, envelope);
+              } catch (error) {
+                this.debug('onSent threw.', error);
+              }
+            },
+          }
+        : {}),
     });
+    this.transport.setPaused(!this.enabled);
     // CR-098: replay whatever a previous run left behind, without blocking `init`.
     void this.transport.load().then(() => this.scheduleFlush());
   }
@@ -148,6 +174,41 @@ export class CrashClient {
     await this.flush(timeoutMs);
     this.closed = true;
     this.transport.close();
+  }
+
+  /**
+   * CR-104: the opposite of `close`. `false` stops capture so every `capture*` returns null
+   * and stops replay, without flushing — an opt-out that flushed would send the very reports
+   * the user just declined. `dropQueue` additionally discards what is already queued and the
+   * dedupe state. `true` resumes and schedules a flush.
+   */
+  async setEnabled(enabled: boolean, opts: { dropQueue?: boolean } = {}): Promise<void> {
+    this.enabled = enabled;
+    this.transport.setPaused(!enabled);
+    if (enabled) {
+      this.scheduleFlush();
+      return;
+    }
+    if (opts.dropQueue) await this.discard();
+  }
+
+  /** Whether capture is on. False before the first `setEnabled(true)` when `init` was given `enabled: false`. */
+  get isEnabled(): boolean {
+    return this.enabled && !this.closed;
+  }
+
+  /**
+   * Empties the queue and the dedupe state, in memory and in the store. `QueueStore` has no
+   * delete, and does not need one: writing the empty value is the same thing to every reader.
+   */
+  private async discard(): Promise<void> {
+    this.dedupeState = null;
+    await this.transport.clear();
+    try {
+      await this.store.set(DEDUPE_KEY, JSON.stringify({ byFingerprint: {}, recent: [] } satisfies DedupeState));
+    } catch (error) {
+      this.debug('The dedupe state could not be cleared.', error);
+    }
   }
 
   // --- Envelope building -----------------------------------------------------------
@@ -254,50 +315,113 @@ export class CrashClient {
     return null;
   }
 
-  private async capture(envelope: CrashEnvelope, _mode: { sync: false }): Promise<string | null> {
-    if (this.closed) return null;
-    if (!this.sampled()) return null;
-    const problem = this.checkBounds(envelope);
-    if (problem) {
-      this.debug(`Crash report dropped: ${problem}.`);
-      return null;
-    }
-    let final: CrashEnvelope | null = envelope;
-    if (this.options.beforeSend) {
-      try {
-        final = await this.options.beforeSend(envelope);
-      } catch (error) {
-        this.debug('beforeSend threw; the report was dropped.', error);
+  /**
+   * CR-107. Runs on both capture paths, so an integrator who defines only this one filters
+   * uncaught exceptions too — the reports that matter most and the ones `beforeSend` can
+   * never see.
+   */
+  private runBeforeSendSync(envelope: CrashEnvelope): CrashEnvelope | null {
+    if (!this.options.beforeSendSync) return envelope;
+    try {
+      const next = this.options.beforeSendSync(envelope);
+      if (!next) {
+        this.onDrop('beforeSend');
         return null;
       }
-      if (!final) return null;
+      return next;
+    } catch (error) {
+      this.debug('beforeSendSync threw; the report was dropped.', error);
+      this.onDrop('beforeSend', error);
+      return null;
+    }
+  }
+
+  private async capture(envelope: CrashEnvelope, _mode: { sync: false }): Promise<string | null> {
+    if (this.closed || !this.enabled) {
+      this.onDrop('disabled');
+      return null;
+    }
+    if (!this.sampled()) {
+      this.onDrop('sampled');
+      return null;
+    }
+    let problem = this.checkBounds(envelope);
+    if (problem) {
+      this.debug(`Crash report dropped: ${problem}.`);
+      this.onDrop('bounds', problem);
+      return null;
+    }
+    let final: CrashEnvelope | null = this.runBeforeSendSync(envelope);
+    if (!final) return null;
+    if (this.options.beforeSend) {
+      try {
+        final = await this.options.beforeSend(final);
+      } catch (error) {
+        this.debug('beforeSend threw; the report was dropped.', error);
+        this.onDrop('beforeSend', error);
+        return null;
+      }
+      if (!final) {
+        this.onDrop('beforeSend');
+        return null;
+      }
+    }
+    // CR-096: checked again on what will actually be sent. A hook that adds bytes could
+    // otherwise push the envelope past 64 KiB, and the server's 413 is an answer, so the
+    // transport would drop it as refused rather than retry.
+    problem = this.checkBounds(final);
+    if (problem) {
+      this.debug(`Crash report dropped after beforeSend: ${problem}.`);
+      this.onDrop('bounds', problem);
+      return null;
     }
     const fingerprint = await computeFingerprint(effectiveFingerprintParts(final));
-    if (!(await this.admit(fingerprint))) return null;
+    if (!(await this.admit(fingerprint))) {
+      this.onDrop('dedupe', fingerprint);
+      return null;
+    }
     await this.transport.enqueue({ envelope: final, fingerprint, queuedAt: this.now() });
     this.scheduleFlush();
     return final.eventId;
   }
 
   private captureSync(envelope: CrashEnvelope): string | null {
-    if (this.closed) return null;
-    if (!this.sampled()) return null;
-    const problem = this.checkBounds(envelope);
-    if (problem) {
-      this.debug(`Crash report dropped: ${problem}.`);
+    if (this.closed || !this.enabled) {
+      this.onDrop('disabled');
       return null;
     }
-    // beforeSend is asynchronous by contract and cannot run on the fatal path; the
-    // envelope is written as built. Redaction has already applied.
+    if (!this.sampled()) {
+      this.onDrop('sampled');
+      return null;
+    }
+    let problem = this.checkBounds(envelope);
+    if (problem) {
+      this.debug(`Crash report dropped: ${problem}.`);
+      this.onDrop('bounds', problem);
+      return null;
+    }
+    // CR-107: only the synchronous hook can run here. `beforeSend` is asynchronous by
+    // contract and the process may not survive a microtask. Redaction has already applied.
+    const final = this.runBeforeSendSync(envelope);
+    if (!final) return null;
+    problem = this.checkBounds(final);
+    if (problem) {
+      this.debug(`Crash report dropped after beforeSendSync: ${problem}.`);
+      this.onDrop('bounds', problem);
+      return null;
+    }
     let fingerprint = 'unhashed';
     if (this.options.hash) {
-      const parts = effectiveFingerprintParts(envelope);
+      const parts = effectiveFingerprintParts(final);
       fingerprint = this.options.hash(new TextEncoder().encode(parts.map((part) => `${part.length}:${part}`).join('\n')));
-      if (!this.admitSync(fingerprint)) return null;
+      if (!this.admitSync(fingerprint)) {
+        this.onDrop('dedupe', fingerprint);
+        return null;
+      }
     }
-    this.transport.enqueueSync({ envelope, fingerprint, queuedAt: this.now() });
+    this.transport.enqueueSync({ envelope: final, fingerprint, queuedAt: this.now() });
     void this.transport.flush(2_000);
-    return envelope.eventId;
+    return final.eventId;
   }
 
   private sampled(): boolean {
@@ -306,7 +430,7 @@ export class CrashClient {
   }
 
   private scheduleFlush(): void {
-    if (this.closed) return;
+    if (this.closed || !this.enabled) return;
     const timer = setTimeout(() => void this.transport.flush(), 0);
     (timer as { unref?: () => void }).unref?.();
   }

@@ -611,13 +611,17 @@ function CollectTab({ databaseId, projectId }: { databaseId: string; projectId: 
     onError: (error) => toast.error(error instanceof ApiError ? error.message : 'The test report was not accepted.'),
   });
 
-  const init = `import * as crash from 'inlet-sdk/crash';
-
-crash.init({
-  baseUrl: '${origin}',
+  // Each adapter is its own entry point, and the installer only exists on that entry:
+  // `installNodeHandlers` is not exported from `inlet-sdk/crash`. Every snippet below names
+  // the entry it actually needs.
+  const options = (release: string) => `  baseUrl: '${origin}',
   publishableKey: '${key}',
   crashDatabaseId: '${databaseId}',
-  release: app.getVersion(),
+  release: ${release},`;
+  const init = (entry: string, release: string) => `import * as crash from 'inlet-sdk/crash/${entry}';
+
+crash.init({
+${options(release)}
 });`;
 
   return (
@@ -653,10 +657,16 @@ crash.init({
 
       {(
         [
-          ['Node', `${init}\ncrash.installNodeHandlers();`],
-          ['Browser', `${init.replace('app.getVersion()', "'1.0.0'")}\ncrash.installBrowserHandlers();`],
-          ['Electron main', `${init}\ncrash.installElectronMain({ userDataDir: app.getPath('userData') });`],
-          ['Electron renderer', `import * as crash from 'inlet-sdk/crash';\n\n// Every capture routes through the main process over IPC.\ncrash.installElectronRenderer();`],
+          ['Node', `${init('node', 'app.getVersion()')}\n\ncrash.installNodeHandlers();`],
+          ['Browser', `${init('browser', "'1.0.0'")}\n\ncrash.installBrowserHandlers();`],
+          [
+            'Electron main',
+            `import { installElectronMain } from 'inlet-sdk/crash/electron';\n\n// Initialises the client itself, with the release, app roots and a queue\n// under userData. Await it inside app.whenReady().\nawait installElectronMain({\n${options("app.getVersion()")}\n});`,
+          ],
+          [
+            'Electron renderer',
+            `import { installElectronRenderer } from 'inlet-sdk/crash/electron-renderer';\n\n// Its own entry, with no Node imports, so a renderer bundler can take it.\n// Every capture routes through the main process over IPC; a renderer holds\n// no key and no queue.\nconst crash = installElectronRenderer();`,
+          ],
         ] as const
       ).map(([label, snippet]) => (
         <Card key={label}>

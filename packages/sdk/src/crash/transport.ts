@@ -1,7 +1,7 @@
 import { CRASH_LIMITS } from '@inlet/shared/crash-core';
 export { MemoryStore } from '../store.js';
 import type { QueueStore } from '../store.js';
-import type { CrashEnvelope } from './types.js';
+import type { CrashEnvelope, DropReason, SentReport } from './types.js';
 
 /**
  * The persistent transport (CR-097, CR-098, Foundations FD-012).
@@ -35,6 +35,12 @@ export type TransportOptions = {
   backoffMaxMs?: number;
   /** Tests replace the timer. */
   sleep?: (ms: number) => Promise<void>;
+  /** CR-106: per-request timeout in milliseconds. Default 20000. */
+  timeoutMs?: number;
+  /** CR-105: one call per accepted report, with the envelope that produced it. */
+  onSent?: (sent: SentReport, envelope: CrashEnvelope) => void;
+  /** CR-108: queue overflow and server refusals. */
+  onDrop?: (reason: DropReason, detail?: unknown) => void;
 };
 
 export type BatchResult =
@@ -50,14 +56,17 @@ export class Transport {
   private pausedUntil = 0;
   private failures = 0;
   private closed = false;
+  private paused = false;
   private serverChecked = false;
   private readonly paceMs: number;
+  private readonly timeoutMs: number;
   private readonly backoffBaseMs: number;
   private readonly backoffMaxMs: number;
   private readonly sleep: (ms: number) => Promise<void>;
 
   constructor(private readonly options: TransportOptions) {
     this.paceMs = options.paceMs ?? 100;
+    this.timeoutMs = options.timeoutMs ?? 20_000;
     this.backoffBaseMs = options.backoffBaseMs ?? 1_000;
     this.backoffMaxMs = options.backoffMaxMs ?? 5 * 60_000;
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
@@ -139,6 +148,7 @@ export class Transport {
       const dropped = this.items.length - this.options.queueSize;
       this.items.splice(0, dropped);
       this.options.debug(`Crash queue full; dropped the ${dropped} oldest event${dropped === 1 ? '' : 's'}.`);
+      this.options.onDrop?.('queue-full', { dropped });
     }
   }
 
@@ -169,10 +179,25 @@ export class Transport {
     this.closed = true;
   }
 
+  /** CR-104: stops replay without discarding anything. A paused transport keeps its queue. */
+  setPaused(paused: boolean): void {
+    this.paused = paused;
+  }
+
+  /**
+   * CR-104: throws the queue away. Loads first, so a queue left on disk by a previous run is
+   * discarded too rather than merged back in by the next read.
+   */
+  async clear(): Promise<void> {
+    await this.load();
+    this.items = [];
+    await this.persist();
+  }
+
   private async run(): Promise<void> {
     await this.load();
     let first = true;
-    while (this.items.length > 0 && !this.closed) {
+    while (this.items.length > 0 && !this.closed && !this.paused) {
       const now = this.options.now();
       if (now < this.pausedUntil) {
         this.options.debug(`Crash replay paused for ${Math.ceil((this.pausedUntil - now) / 1000)} s by the server.`);
@@ -187,7 +212,20 @@ export class Transport {
         this.items = this.items.filter((item) => !batch.includes(item));
         await this.persist();
         for (const result of outcome.results) {
-          if (!result.ok) this.options.debug(`The server refused a crash report: ${result.error.code}.`, result.error);
+          // `index` is the position in the batch we submitted (the server preserves order),
+          // so it pairs each answer with the envelope that produced it.
+          const envelope = batch[result.index]?.envelope;
+          if (result.ok) {
+            if (envelope) {
+              this.options.onSent?.(
+                { reportId: result.reportId, groupId: result.groupId, isNewGroup: result.isNewGroup, isRegression: result.isRegression },
+                envelope,
+              );
+            }
+            continue;
+          }
+          this.options.debug(`The server refused a crash report: ${result.error.code}.`, result.error);
+          this.options.onDrop?.('refused', { ...result.error, ...(envelope ? { eventId: envelope.eventId } : {}) });
         }
         continue;
       }
@@ -215,8 +253,8 @@ export class Transport {
     try {
       response =
         batch.length === 1
-          ? await this.options.fetch(base, { method: 'POST', headers, body: JSON.stringify(batch[0]!.envelope) })
-          : await this.options.fetch(`${base}/batch`, { method: 'POST', headers, body: JSON.stringify({ reports: batch.map((item) => item.envelope) }) });
+          ? await this.options.fetch(base, { method: 'POST', headers, body: JSON.stringify(batch[0]!.envelope), ...this.abort() })
+          : await this.options.fetch(`${base}/batch`, { method: 'POST', headers, body: JSON.stringify({ reports: batch.map((item) => item.envelope) }), ...this.abort() });
     } catch (error) {
       return { kind: 'failed', reason: error instanceof Error ? error.message : 'network' };
     }
@@ -254,6 +292,17 @@ export class Transport {
   }
 
   /**
+   * CR-106: bounds every request. Without it a hung socket is bounded only by whatever
+   * `flush(timeoutMs)` the caller passed, and that races the flush promise rather than the
+   * request — the socket stays open and the replay loop never moves on. `AbortSignal.timeout`
+   * is stdlib on Node 18 and every browser target; the guard is for exotic runtimes.
+   */
+  private abort(): { signal?: AbortSignal } {
+    if (typeof AbortSignal === 'undefined' || typeof AbortSignal.timeout !== 'function') return {};
+    return { signal: AbortSignal.timeout(this.timeoutMs) };
+  }
+
+  /**
    * FD-013: a minimum-server-version check on first use. A deployment without the crash
    * routes answers 404 to the database read; the SDK says so once and carries on, because
    * queueing until the server is upgraded is the right behaviour, not failing.
@@ -262,7 +311,7 @@ export class Transport {
     if (this.serverChecked) return;
     this.serverChecked = true;
     try {
-      const response = await this.options.fetch(`${this.options.baseUrl.replace(/\/$/, '')}/v1/health`, { method: 'GET' });
+      const response = await this.options.fetch(`${this.options.baseUrl.replace(/\/$/, '')}/v1/health`, { method: 'GET', ...this.abort() });
       if (!response.ok) {
         this.options.debug(`Inlet answered ${response.status} to a health check; reports will queue until it is reachable.`);
         return;

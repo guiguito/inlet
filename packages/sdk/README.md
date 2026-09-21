@@ -383,15 +383,27 @@ contextBridge.exposeInMainWorld('inletCrash', {
 Renderer:
 
 ```ts
-import { installElectronRenderer } from 'inlet-sdk/crash/electron';
+import { installElectronRenderer } from 'inlet-sdk/crash/electron-renderer';
 import { createErrorBoundary } from 'inlet-sdk/crash/react';
 import React from 'react';
 
 const renderer = installElectronRenderer(); // uses window.inletCrash.send
 const ErrorBoundary = createErrorBoundary(React, (report) => renderer.captureReport(report));
+
+renderer.uninstall(); // takes the window listeners off again, for hot reload and tests
 ```
 
-A renderer never holds the key or a queue; everything goes through main.
+`inlet-sdk/crash/electron-renderer` is its own entry, with no Node imports, so a renderer
+bundler can take it. `inlet-sdk/crash/electron` pulls in the Node adapter and the on-disk
+queue, which Vite will not bundle for a renderer; it re-exports `installElectronRenderer`
+only so a main-process module keeps working.
+
+A renderer never holds the key or a queue; everything goes through main. Main treats the
+channel as a trust boundary: it reads only `kind`, `exception`, `context`, `tags` and
+`fingerprint`, and fills in the release, environment, system and user itself, so a renderer
+running remote content cannot file a crash against a release that never shipped. Kinds are
+limited to `exception`, `unhandled-rejection`, `render-error` and `message`; widen that with
+`allowedKinds`, and restrict tag keys with `tagAllowlist`.
 
 ## What gets sent
 
@@ -447,6 +459,57 @@ sent once per 24 hours, and at most five reports go out per hour, both persisted
 restarts, so a crash loop that restarts your application sends one report. Loosen it with
 `dedupe: { perFingerprintMs, perHour }` or disable it with `dedupe: false`.
 
+Every request carries a timeout, 20 seconds by default (`timeoutMs`). `onSent` is called
+once per report the server accepted — including each accepted entry of a batch — with the
+server's ids and the envelope that produced it, which is what lets you write an audit row
+that knows whether the crash was new:
+
+```ts
+init({
+  ...,
+  onSent: ({ reportId, groupId, isNewGroup }, envelope) => audit(envelope.eventId, reportId, groupId, isNewGroup),
+  onDrop: (reason, detail) => log(`crash report dropped: ${reason}`, detail),
+});
+```
+
+`onDrop` names why a report never reached the server: `disabled`, `sampled`, `bounds`,
+`dedupe`, `beforeSend`, `queue-full` or `refused`. Without it every drop is invisible unless
+you also passed `debug`.
+
+## Turning it off
+
+```ts
+init({ ..., enabled: false });        // start off; no branching around init
+await setEnabled(true);               // start capturing
+await setEnabled(false);              // stop capturing and stop replay, keep the queue
+await setEnabled(false, { dropQueue: true }); // and discard what is queued
+```
+
+This is the opposite of `close()`, which flushes. An opt-out that flushed would send the
+very reports the person just declined, so `setEnabled(false)` never does.
+
+## Redaction
+
+An exception message is the one field that routinely carries what a user typed, so the
+default policy sends it only when it matches a shape the runtime generates, and replaces
+everything else with `<redacted>`. Three policies ship:
+
+| Policy | What it sends |
+| --- | --- |
+| `defaultRedaction` | The default. Known-safe shapes verbatim; everything else `<redacted>`, keeping an errno-shaped leading token (`ENOENT:`, `ERR_MODULE_NOT_FOUND`). |
+| `redactExcept([/^…/])` | Your own safe shapes verbatim; everything else as above. |
+| `keepMessages` | Everything verbatim. For applications that know their messages carry no user data. |
+
+```ts
+import { keepMessages, redactExcept } from 'inlet-sdk/crash';
+
+init({ ..., redaction: keepMessages });
+init({ ..., redaction: redactExcept([/^Payment declined: [a-z_]+$/]) });
+```
+
+Group titles do not depend on the message — they come from the error type and the top
+in-app frame — so redacting hard costs less than it looks.
+
 ## Crash options
 
 | Option | Purpose |
@@ -454,10 +517,16 @@ restarts, so a crash loop that restarts your application sends one report. Loose
 | `baseUrl`, `publishableKey`, `crashDatabaseId`, `release` | Required. A secret key or an empty release throws at `init`. |
 | `build`, `channel`, `environment` | Reported with every envelope. `environment` defaults to `production`. |
 | `sampleRate` | 0 to 1. |
-| `beforeSend(envelope)` | Return the envelope, a changed one, or `null` to drop it. Not run on the fatal path. |
+| `enabled` | Start capturing or not. Default true. Flip it with `setEnabled`. |
+| `beforeSend(envelope)` | Return the envelope, a changed one, or `null` to drop it. Asynchronous, so it cannot run on the fatal path. |
+| `beforeSendSync(envelope)` | The same, synchronous, and the only hook that runs on the fatal path. Runs on every capture, before `beforeSend`. Define only this one and your filter covers uncaught exceptions too. |
+| `onSent(sent, envelope)` | Once per accepted report, with the server's ids and the envelope that produced it. |
+| `onDrop(reason, detail)` | Why a report was dropped. |
+| `timeoutMs` | Per-request timeout. Default 20000. |
 | `redaction(message)` | See above. |
 | `appRoots` | Paths or URL prefixes that are your code. Adapters detect a default. |
 | `dedupe` | See above. |
 | `queueSize`, `store` | The queue ceiling (at most 200) and where it lives. |
 | `tags` | Attached to every event. |
+| `allowedKinds`, `tagAllowlist` | Electron main only: what the IPC channel accepts from a renderer. |
 | `debug(message, detail)` | Receives warnings and transport events. Silent by default. |
