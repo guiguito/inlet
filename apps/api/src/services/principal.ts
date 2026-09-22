@@ -15,7 +15,7 @@ import { findCredential, type Principal } from './access.js';
  * integrator debugging in a signed-in browser means.
  */
 
-function bearerToken(request: FastifyRequest): string | null {
+export function bearerToken(request: FastifyRequest): string | null {
   const header = request.headers.authorization;
   if (!header) return null;
   const match = /^Bearer\s+(.+)$/i.exec(header.trim());

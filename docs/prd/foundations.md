@@ -6,7 +6,7 @@
 **Language:** English
 **Notion page:** https://app.notion.com/p/3ddd33dfffca813c87daf018eec9aeb4
 **Repository mirror:** `docs/prd/foundations.md`
-**Last revised:** September 18, 2026 (FD-015 cross-origin collection; Release 7 — SDK shipped)
+**Last revised:** September 22, 2026 (FR-126, FR-127 and FD-025, the MCP endpoint at `/v1/mcp`; FR-120 and the MCP Server glossary entry amended to name both transports)
 **Capability PRDs:** Feedback Collection · Crash Reports · UX Analytics (TODO)
 
 > **Provenance.** This page absorbs sections 1, 2, 5, 7.4, 8.1, 8.2, 8.3, 8.7, 8.8, 8.11, 9.5, 10.1–10.4, 10.6, 10.12, 12.1, 12.5, 12.6, 18, 20 and 23 of the unified PRD, plus the platform-level lines of sections 3, 4, 6, 11, 12.2, 12.3, 14, 16 and 17. Section 19 (next steps, all done) and the old section 21 release plan are replaced by section 28. Everything about forms, responses, hosted forms and reviewing responses is on the Feedback Collection page.
@@ -74,7 +74,7 @@ A Viewer can:
 - **Database:** A typed collection inside a project. The type is `feedback`, `crash` or `analytics`. Every database has a stable public ID, a name, database-level memberships, notification settings, an export, a retention rule and a deletion path. The type decides the collection endpoint, the stored record, the reading interface and the retention default.
 - **Database ID:** The stable public identifier a client combines with a project credential to target one database. Prefixed by type (`fdb_`, `cdb_`, `adb_`).
 - **Notification Settings:** Per-database configuration that decides whether, where and how an event in that database is announced. Slack incoming webhooks are the only destination today.
-- **MCP Server:** `inlet-mcp`, a stdio server that authenticates with a secret server key and exposes one tool per permitted HTTP operation.
+- **MCP Server:** `inlet-mcp`, a stdio server that authenticates with a secret server key and exposes one tool per permitted HTTP operation. The platform serves the same tools over Streamable HTTP at `/v1/mcp`, for clients that connect to a URL rather than spawn a process.
 - **SDK:** `inlet-sdk`, the TypeScript client that integrators embed. One package, one transport, one module per capability.
 
 ## 7. Platform User Journeys
@@ -137,12 +137,14 @@ Journeys 7.1 to 7.3 are on the Feedback Collection page.
 - **FR-087:** The MVP shall not provide user-configurable scopes, expiration dates, origin restrictions, or usage quotas.
 - **FR-088:** Non-configurable platform security rate limits shall apply to both credential types, invitation redemption, and public submission-intent creation.
 ### 8.11 MCP Access
-- **FR-120:** MCP shall authenticate with a secret server key and therefore acts with project Admin authority within one project. Per-user MCP access is outside the MVP.
+- **FR-120:** MCP shall authenticate with a secret server key and therefore acts with project Admin authority within one project, whether it is reached over stdio or over the platform's HTTP endpoint. Per-user MCP access is outside the MVP.
 - **FR-121:** MCP shall expose the operations marked for MCP in the section 9.6 matrix and no others.
 - **FR-122:** MCP responses shall expose raw permitted data, including collected email addresses, client context, and stable authenticated screenshot URLs.
 - **FR-123:** MCP access shall enforce platform permissions and must not bypass project scope.
 - **FR-124:** MCP shall not modify finalized submissions or their answers. Submissions are immutable; the only write against a submission is deletion.
 - **FR-125:** The exact tool names and schemas are defined in the technical specification.
+- **FR-126:** The platform shall serve the MCP tools over MCP Streamable HTTP at `/v1/mcp`, authenticated by a secret server key presented as a bearer token, with exactly the authority FR-120 to FR-125 describe. An agent that can only reach a URL shall therefore be able to operate a project without running a local process.
+- **FR-127:** The MCP endpoint shall refuse a publishable client key and a session cookie, and shall not answer cross-origin requests. It is a server-to-server surface.
 
 ## 9. API Contract Direction
 Endpoint paths and payload names are finalized during technical design, but the authentication and request flows below are MVP requirements.
@@ -264,7 +266,7 @@ What every capability inherits, shipped in Releases 1–4:
 - Slack notifications per database: write-only webhook, queued delivery with retries, test message, visible outcome.
 - Export in the formats each type defines, deletion with a warning and an export offer, asynchronous object purge.
 - Non-configurable security rate limits.
-- An MCP server authenticated by secret server key with one tool per permitted operation.
+- An MCP server authenticated by secret server key with one tool per permitted operation, reachable over stdio and at `/v1/mcp`.
 - One Docker deployment beside PostgreSQL and S3-compatible storage, with external providers by configuration only.
 - One brand and one voice.
 
@@ -281,6 +283,7 @@ What every capability inherits, shipped in Releases 1–4:
 - Deleting a feedback database removes its records immediately and its assets become unretrievable; the UI reports completion without waiting for object purge.
 - An MCP client authenticated with a secret server key can perform the matrix operations within that project and cannot edit finalized submissions.
 - MCP access does not expose or mutate resources outside the key's project.
+- A client that connects to `/v1/mcp` with a secret server key lists and calls the same tools the stdio server exposes. The same endpoint refuses a publishable key, a session cookie and a request carrying no credential.
 - Restarting the bundled Docker deployment preserves all data. Pointing the deployment at external PostgreSQL and S3 requires only configuration changes.
 - A project holding a feedback database and a crash database shows both on the project page and in the database switcher, and the same publishable key collects into both.
 - A database-level invitation for a crash database grants exactly that role on that database and nothing on the project's feedback databases.
@@ -484,6 +487,7 @@ Beyond Release 4: notification destinations other than Slack, a digest instead o
 - **FD-022:** A destructive tool shall demand that the caller echo the exact name, address or identifier of what it destroys, and shall fail with `confirmation_mismatch` otherwise.
 - **FD-023:** A failed tool call shall carry the stable error code of the underlying API error in its message.
 - **FD-024:** MCP shall not accept binary bodies. Uploads stay on the HTTP API.
+- **FD-025:** The MCP endpoint of FR-126 shall be stateless: no session identifier, and every call answered with a JSON body rather than a held-open stream. A tool call made through it shall travel the platform's own HTTP layer, meeting the same routing, authentication and validation an external caller meets, so that FR-123 holds by construction on both transports.
 - **FD-030:** Collection endpoints shall be rate limited per credential over short and hourly windows. Where a capability defines a fingerprint for what it collects, it shall also limit per credential and fingerprint. Exceeding a limit returns `429` with `Retry-After`.
 - **FD-031:** Rate-limit state is in memory on one API instance today. A shared store is the documented upgrade path and changes no contract.
 
@@ -496,6 +500,7 @@ Beyond Release 4: notification destinations other than Slack, a digest instead o
 | 4 — Notified | Foundations | Slack notifications: settings, queue, retries, test message | Shipped September 2026 |
 | 6 — Crash Reports | Crash | Crash databases, ingest, grouping, groups UI, new-group and regression notifications, MCP, `inlet-sdk/crash` with node, browser, electron and react entries | Shipped September 17, 2026, see the Crash Reports PRD |
 | 7 — SDK | Feedback + Foundations | `inlet-sdk/feedback` with node, browser, electron and react entries (Feedback Collection PRD section 25), FD-015 cross-origin collection routes, npm publication of `inlet-sdk` with both modules | Shipped September 18, 2026, see section 25 of the Feedback Collection PRD |
+| 7.1 — Remote MCP | Foundations | The MCP tools served over Streamable HTTP at `/v1/mcp`, authenticated by a secret server key (FR-126, FR-127, FD-025) | Shipped September 22, 2026 |
 | 8 — UX Analytics | Analytics | To be brainstormed | Not started |
 
 Release 5 — Reviewed (the response as the row, per-reader read markers, four-tab navigation, database switcher) shipped in September 2026 between Releases 4 and 6 and is specified in section 24 of the Feedback Collection PRD.

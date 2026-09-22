@@ -32,14 +32,14 @@
     "apps/*"
   ],
   "scripts": {
-    "dev": "npm run build:shared && npm-run-all --parallel dev:api dev:web",
+    "dev": "npm run build:deps && npm-run-all --parallel dev:api dev:web",
     "dev:api": "npm run dev -w @inlet/api",
     "dev:web": "npm run dev -w @inlet/web",
-    "build": "npm run build -w @inlet/shared && npm run build -w inlet-sdk && npm run build -w @inlet/api && npm run build -w @inlet/mcp && npm run build -w @inlet/web",
-    "typecheck": "npm run build:shared && npm run typecheck -w inlet-sdk && npm run typecheck -w @inlet/api && npm run typecheck -w @inlet/mcp && npm run typecheck -w @inlet/web",
-    "test": "npm run build:shared && npm run test -w inlet-sdk && npm run test -w @inlet/api && npm run test -w @inlet/mcp",
-    "test:unit": "npm run build:shared && npm run test:unit -w @inlet/api && npm run test -w @inlet/mcp",
-    "test:integration": "npm run build:shared && npm run test:integration -w @inlet/api",
+    "build": "npm run build -w @inlet/shared && npm run build -w inlet-sdk && npm run build -w @inlet/mcp && npm run build -w @inlet/api && npm run build -w @inlet/web",
+    "typecheck": "npm run build:deps && npm run typecheck -w inlet-sdk && npm run typecheck -w @inlet/mcp && npm run typecheck -w @inlet/api && npm run typecheck -w @inlet/web",
+    "test": "npm run build:deps && npm run test -w inlet-sdk && npm run test -w @inlet/api && npm run test -w @inlet/mcp",
+    "test:unit": "npm run build:deps && npm run test:unit -w @inlet/api && npm run test -w @inlet/mcp",
+    "test:integration": "npm run build:deps && npm run test:integration -w @inlet/api",
     "test:e2e": "playwright test",
     "test:all": "npm run test:unit && npm run test:integration && npm run test:e2e",
     "db:generate": "npm run db:generate -w @inlet/api",
@@ -49,7 +49,8 @@
     "services:down": "node scripts/services-down.mjs",
     "docker:up": "docker compose up -d --build",
     "docker:down": "docker compose down",
-    "build:shared": "npm run build -w @inlet/shared"
+    "build:shared": "npm run build -w @inlet/shared",
+    "build:deps": "npm run build -w @inlet/shared && npm run build -w @inlet/mcp"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",

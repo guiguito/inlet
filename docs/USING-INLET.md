@@ -312,6 +312,14 @@ Inlet ships an MCP server, so an AI agent can read and manage it in your own wor
 "summarise this week's feedback and group it by theme".
 
 ```bash
+claude mcp add --transport http inlet https://inlet.example.com/v1/mcp \
+  --header "Authorization: Bearer isk_your_secret_server_key"
+```
+
+Your deployment serves it at `/v1/mcp`, so nothing needs installing. The same tools also
+run as a local process, for a deployment your client cannot reach:
+
+```bash
 npm install && npm run build
 
 claude mcp add inlet \

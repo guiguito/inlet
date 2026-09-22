@@ -28,17 +28,27 @@ export type ClientOptions = {
   /** A secret server key (`isk_…`). Carries project Admin authority in one project. */
   secretKey: string;
   timeoutMs?: number;
+  /**
+   * How the request is made. Defaults to the global `fetch`, which is what the stdio
+   * server uses against a remote deployment. The API substitutes one that re-enters its
+   * own HTTP stack when it serves these tools over Streamable HTTP, so a tool call still
+   * travels the whole HTTP layer — routing, authentication, validation — and cannot
+   * reach the services or the database directly (FR-123, DECISIONS 27).
+   */
+  fetch?: typeof globalThis.fetch;
 };
 
 export class InletClient {
   private readonly baseUrl: string;
   private readonly secretKey: string;
   private readonly timeoutMs: number;
+  private readonly fetch: typeof globalThis.fetch;
 
   constructor(options: ClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/$/, '');
     this.secretKey = options.secretKey;
     this.timeoutMs = options.timeoutMs ?? 30_000;
+    this.fetch = options.fetch ?? globalThis.fetch;
   }
 
   async request<T>(
@@ -126,7 +136,7 @@ export class InletClient {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
-      return await fetch(`${this.baseUrl}${path}`, {
+      return await this.fetch(`${this.baseUrl}${path}`, {
         method,
         headers: {
           authorization: `Bearer ${this.secretKey}`,

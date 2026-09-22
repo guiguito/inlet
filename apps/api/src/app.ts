@@ -37,6 +37,7 @@ import { memberRoutes } from './routes/members.js';
 import { crashRoutes } from './routes/crashes.js';
 import { crashReadRoutes } from './routes/crash-reads.js';
 import { requireCrashDatabase } from './services/access.js';
+import { mcpRoutes } from './routes/mcp.js';
 import { projectRoutes } from './routes/projects.js';
 import { attachmentRoutes, submissionRoutes } from './routes/submissions.js';
 import { openapiDocument } from './openapi.js';
@@ -97,7 +98,9 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
         await ctx.db.execute('select 1');
         // FD-013: what this server can do, so an SDK can tell an old deployment from a
         // reachable one before it queues reports the server would refuse.
-        return { status: 'ok', capabilities: ['feedback', 'crash', CROSS_ORIGIN_FEEDBACK] };
+        // 'mcp' announces the Streamable HTTP endpoint at /v1/mcp (FR-126), so a client
+        // can tell a deployment that serves MCP from one that only ships the binary.
+        return { status: 'ok', capabilities: ['feedback', 'crash', CROSS_ORIGIN_FEEDBACK, 'mcp'] };
       });
 
       await v1.register(authRoutes(ctx), { prefix: '/auth' });
@@ -112,6 +115,7 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
       await v1.register(memberRoutes(ctx));
       await v1.register(crashRoutes(ctx));
       await v1.register(crashReadRoutes(ctx));
+      await v1.register(mcpRoutes(ctx, app));
       // The shared Slack settings plugin, a second time, for crash databases (CR-050).
       await v1.register(
         slackNotificationRoutes(ctx, async (principal, databaseId) => {

@@ -54,6 +54,8 @@ describe('the credential matrix', () => {
       [`/v1/feedback-databases/${ctx.databaseId}/submissions/export?format=json`, 'GET'],
       [`/v1/feedback-databases/${ctx.databaseId}/submissions/export?format=csv`, 'GET'],
       [`/v1/feedback-databases/${ctx.databaseId}/deletion-impact`, 'GET'],
+      // FR-127: the MCP endpoint is a management surface too.
+      ['/v1/mcp', 'POST', { jsonrpc: '2.0', id: 1, method: 'tools/list' }],
     ];
   }
 
@@ -218,11 +220,17 @@ describe('the credential matrix', () => {
     expect(response.statusCode).toBe(404);
   });
 
-  it('exposes no MCP surface in this release', async () => {
-    for (const url of ['/v1/mcp', '/mcp', '/v1/mcp/tools']) {
+  it('exposes exactly one MCP URL (FR-126)', async () => {
+    // The endpoint is `/v1/mcp` and nothing else; the tools are JSON-RPC methods, not
+    // paths, so there is no surface to discover around it.
+    for (const url of ['/mcp', '/v1/mcp/tools']) {
       for (const key of [ctx.secretKey, ctx.publishableKey]) {
         expect((await withKey(h.app, key, 'POST', url, {})).statusCode).toBe(404);
       }
     }
+    // A secret key reaches the transport, which then holds the caller to the MCP
+    // content negotiation `withKey` does not perform. Covered in full in mcp.test.ts.
+    const reached = await withKey(h.app, ctx.secretKey, 'POST', '/v1/mcp', {});
+    expect(reached.statusCode).toBe(406);
   });
 });

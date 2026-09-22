@@ -8,11 +8,44 @@ It authenticates with a **secret server key**, so it acts with project Admin aut
 inside exactly one project and cannot reach outside it. Per-user MCP is not part of
 this release.
 
+The same tools are reachable two ways: over **HTTP**, from your deployment, which needs
+nothing installed; or over **stdio**, as a local process, which works against a
+deployment you cannot reach from your client.
+
 ## Set it up
 
 Create a secret server key under the project's API keys tab. It is shown once.
 
-Then point an MCP client at the server. For Claude Code:
+### Over HTTP
+
+Your deployment serves MCP at `/v1/mcp`. Point a client at it with the key as a bearer
+token:
+
+```bash
+claude mcp add --transport http inlet https://inlet.example.com/v1/mcp \
+  --header "Authorization: Bearer isk_your_secret_server_key"
+```
+
+Or, in a client that reads a JSON config:
+
+```json
+{
+  "mcpServers": {
+    "inlet": {
+      "type": "http",
+      "url": "https://inlet.example.com/v1/mcp",
+      "headers": { "Authorization": "Bearer isk_your_secret_server_key" }
+    }
+  }
+}
+```
+
+`GET /v1/health` lists `mcp` among its capabilities when a deployment serves this
+endpoint. The endpoint is server-to-server: it refuses a publishable client key and a
+session cookie, and it answers no cross-origin request, so a client running in a browser
+cannot reach it.
+
+### Over stdio
 
 The server is not published to npm, so build it from a checkout of this repository
 first:
@@ -59,8 +92,10 @@ INLET_URL=https://inlet.example.com INLET_SECRET_KEY=isk_... node apps/mcp/dist/
 | `INLET_SECRET_KEY` | A secret server key (`isk_…`). Required. A publishable key is refused at startup with an explanation. |
 | `INLET_TIMEOUT_MS` | How long to wait for Inlet. Default 30000. |
 
-The server speaks MCP over stdio and writes only protocol traffic to stdout, so
-diagnostics go to stderr.
+This process writes only protocol traffic to stdout, so diagnostics go to stderr.
+
+Either way the tools are identical, and so is the authority: over HTTP the key you send
+as a bearer token is the key each tool re-presents on its own request.
 
 ## The tools
 
