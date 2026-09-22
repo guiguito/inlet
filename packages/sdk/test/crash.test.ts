@@ -755,3 +755,38 @@ describe('the grouping that empty roots destroyed (CR-115)', () => {
     expect(separateA).not.toBe(collidedA);
   });
 });
+
+describe('the reporter must not make a crash worse (CR-115)', () => {
+  function withLocation<T>(value: unknown, body: () => T): T {
+    const previous = Object.getOwnPropertyDescriptor(globalThis, 'location');
+    Object.defineProperty(globalThis, 'location', { value, configurable: true, writable: true });
+    try {
+      return body();
+    } finally {
+      if (previous) Object.defineProperty(globalThis, 'location', previous);
+      else delete (globalThis as { location?: unknown }).location;
+    }
+  }
+
+  it('derives nothing rather than throwing on a torn-down location', () => {
+    // `typeof location === 'undefined'` is not enough: a test environment that tears down
+    // globals leaves null, which is defined and has no protocol. defaultAppRoots runs inside
+    // componentDidCatch, so throwing there would turn a handled render error into an
+    // unhandled one — the reporter making the crash worse.
+    for (const value of [null, undefined, {}, 42, 'file://']) {
+      expect(withLocation(value, () => defaultAppRoots())).toEqual([]);
+    }
+  });
+
+  it('an error boundary swallows its own failure rather than rethrowing', async () => {
+    const { createErrorBoundary } = await import('../src/crash/react.js');
+    const React = { Component: class {}, createElement: () => null } as never;
+    const Boundary = createErrorBoundary(React, () => {
+      throw new Error('the integrator capture callback is broken');
+    });
+    const instance = new (Boundary as unknown as new () => { componentDidCatch: (e: Error, i: { componentStack?: string }) => void })();
+    // React is already handling an error here; throwing again replaces a contained failure
+    // with an uncontained one.
+    expect(() => instance.componentDidCatch(new Error('render blew up'), { componentStack: '\n    at Checkout' })).not.toThrow();
+  });
+});

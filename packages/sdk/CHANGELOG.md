@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.5 — September 22, 2026
+
+Two hardening fixes on the path 0.1.4 added. Found by a smoke test of the published 0.1.4
+tarball, not by a report.
+
+- **`defaultAppRoots()` could throw on a torn-down `location`.** It guarded with
+  `typeof location === 'undefined'`, which is false when a test environment sets `location` to
+  `null` — defined, but with no `protocol` to read. It now returns `[]` for anything that is not
+  a usable location. This matters more than it looks: `defaultAppRoots()` runs inside
+  `componentDidCatch`, so throwing there turned a contained React render error into an unhandled
+  one. A crash reporter must never make a crash worse.
+- **An error boundary no longer rethrows if reporting fails.** `componentDidCatch` now contains
+  its own failure, including a `capture` callback of yours that throws. React is already
+  handling an error at that point; failing again replaces a contained problem with an
+  uncontained one, which is strictly worse than not reporting.
+
+No API change, and nothing about what gets reported. If you are on 0.1.4 and your renderer runs
+in a real browser, neither of these can have affected you.
+
 ## 0.1.4 — September 22, 2026
 
 A follow-up to 0.1.3, which fixed one of four places that decide what counts as your code.

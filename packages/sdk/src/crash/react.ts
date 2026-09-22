@@ -68,6 +68,17 @@ export function createErrorBoundary(
     }
 
     componentDidCatch(error: Error, info: { componentStack?: string | null }): void {
+      // Nothing here may throw. React is already handling an error; a reporter that fails in
+      // this method replaces a contained render error with an unhandled one, which is strictly
+      // worse than not reporting. `capture` is the integrator's function and is included.
+      try {
+        this.report(error, info);
+      } catch {
+        // Deliberately silent: there is no channel left that is safe to use from here.
+      }
+    }
+
+    report(error: Error, info: { componentStack?: string | null }): void {
       const frames = componentStackToFrames(info.componentStack, options.appRoots ?? defaultAppRoots());
       capture({
         kind: 'render-error',

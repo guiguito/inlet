@@ -100,9 +100,15 @@ function normalizeRoot(root: string): string {
  * `/C:/app/x.js` once `file://` is gone, and so does `pathname`.
  */
 export function defaultAppRoots(): string[] {
-  if (typeof location === 'undefined') return [];
-  if (location.protocol !== 'file:') return [location.origin];
-  const dir = location.pathname.replace(/\/[^/]*$/, '');
+  // Total by construction. This runs inside `componentDidCatch` (react.ts) and while a client
+  // is being built to report a crash, so it must not be able to throw: a reporter that fails
+  // there turns a handled error into an unhandled one. `typeof location` alone is not enough —
+  // a test environment that tears down globals leaves it null, which is defined and not an
+  // object with a protocol.
+  const here = typeof location === 'undefined' ? null : (location as Location | null);
+  if (!here || typeof here.pathname !== 'string' || typeof here.protocol !== 'string') return [];
+  if (here.protocol !== 'file:') return typeof here.origin === 'string' && here.origin ? [here.origin] : [];
+  const dir = here.pathname.replace(/\/[^/]*$/, '');
   if (!dir) return [];
   let decoded = dir;
   try {
