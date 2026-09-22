@@ -33,6 +33,10 @@ places where the PRD deliberately left the decision to technical design.
 21. [Release 4: Slack notifications](#21-release-4-slack-notifications)
 22. [The mark, and the responses list](#22-the-mark-and-the-responses-list)
 23. [What the PRD conformance audit found](#23-what-the-prd-conformance-audit-found)
+24. [Release 6: Crash Reports](#24-release-6-crash-reports)
+25. [Release 7: the feedback SDK](#25-release-7-the-feedback-sdk)
+26. [`inlet-sdk` 0.1.2: what the first external integration found](#26-inlet-sdk-012-what-the-first-external-integration-found)
+27. [Remote MCP](#27-remote-mcp)
 
 ---
 
@@ -730,7 +734,8 @@ means the MCP surface can change without redeploying the API.
 Rejected: mounting a streamable-HTTP MCP transport inside the API. It would have shared
 the process, which sounds simpler, but it would also have made it possible to reach past
 the HTTP layer into the services, and the guarantee above is worth more than one fewer
-process.
+process. *Superseded by section 27, which mounts the transport while keeping every tool
+on the HTTP layer, so the guarantee holds and a remote client can connect.*
 
 **Thirty tools, bounded by the matrix.** FR-121 is an upper bound: exactly the section
 9.6 rows marked for a secret server key. So there is deliberately no tool to create a
@@ -2143,3 +2148,62 @@ every Electron adopter the same hundred lines and needs no symbols, no server wo
 binary upload. It is still a binary-format parser, nobody is blocked on it, and it is purely
 additive, so it goes to a later Crash release rather than into a point release whose job is to
 unblock an integration.
+
+---
+
+## 27. Remote MCP
+
+**This reverses 19.3.** That section rejected mounting a streamable-HTTP MCP transport in the
+API, on one ground: sharing the process "would also have made it possible to reach past the
+HTTP layer into the services", and FR-123 holds by construction only because every tool is an
+authenticated HTTP request. The ground was sound, and the price turned out to be higher than
+it looked — an MCP server reachable only over stdio is usable only by an agent that can spawn a
+subprocess from a checkout with a built `dist`. Claude on the web, a hosted client, a colleague
+with a URL and a key: none of them could reach a deployment at all.
+
+**So the API serves the transport and the tools keep going over HTTP.** `apps/api` mounts
+`/v1/mcp`, but the `InletClient` it hands to `createServer` is given a `fetch` backed by
+`app.inject`, which runs the whole Fastify stack — routing, hooks, authentication, validation,
+serialization — without a socket. A tool call is still an ordinary API request that meets the
+same authorization an external caller meets. Nothing in `apps/mcp` can see `ctx.db`, the
+storage client or a service function, so the construction guarantee 19.3 was protecting
+survives intact; only the socket is gone. That is why `injectFetch` is the one piece of the
+route with a comment naming the invariant it exists to hold.
+
+**The bearer key is the whole auth story.** FR-126 takes the same `isk_` secret server key the
+stdio server takes, presented as `Authorization: Bearer`. It resolves through
+`requireProjectCredential`, exactly like every other API caller, and the route refuses anything
+that is not a secret key. A tool then re-presents that same key on its own request, which is
+what makes the authority identical on both transports rather than merely similar.
+
+*Rejected: OAuth 2.1 with per-user consent*, which is what the MCP authorization spec asks for.
+It is the right long-term answer and it is a release of its own: discovery metadata, dynamic
+client registration, authorization codes, token storage and lifetime, a consent screen, and a
+per-user authority model the product does not have yet — FR-120 still says MCP acts with
+project Admin authority. Shipping a bearer endpoint now changes no trust model: a secret server
+key already carries this authority, and a leaked one was already a full compromise of its
+project. Per-user MCP remains a platform non-goal until there is a reason to move it.
+
+*Rejected: a loopback `fetch` to `INLET_PUBLIC_URL`.* It would have kept the client untouched,
+at the cost of an address that has to be right: a deployment behind a reverse proxy does not
+necessarily reach itself at its public URL, a test app that never calls `listen` has no address
+at all, and every tool call would leave and re-enter the process through the network stack for
+nothing.
+
+*Rejected: SSE.* The transport runs stateless with `enableJsonResponse`, so every call is a
+plain JSON body and no stream is ever held open. The API has never had a long-lived connection,
+and the keep-alive, proxy-buffering and rate-limit-accounting questions one brings are not
+worth answering for a request/response tool call. A session ID would also have meant
+server-side state, which is the other thing a single-process deployment should not grow
+casually.
+
+**No CORS.** The endpoint is deliberately absent from the cross-origin allowlist (FD-015). MCP
+clients are servers; a browser-based one would need `mcp-session-id` and
+`mcp-protocol-version` on the allowed headers, and widening that set is a change to the
+Foundations PRD before it is a change to the code.
+
+**Known ceilings.** One MCP request costs two rate-limit tokens, the outer call and the inner
+one, both keyed on the same bearer; the global ceiling is 1000/minute, so a client would have to
+be pathological to notice. And the 55 tools are registered per request, which is zod object
+construction and measures as noise beside a database round trip. Both have the same upgrade
+path — cache the server per key — and neither is worth the state today.

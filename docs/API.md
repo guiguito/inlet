@@ -20,6 +20,7 @@ Everything is under `/v1`. Requests and responses are JSON unless stated otherwi
 - [Crash reports](#crash-reports)
 - [Errors](#errors)
 - [Limits](#limits)
+- [MCP over HTTP](#mcp-over-http)
 - [What each credential may do](#what-each-credential-may-do)
 
 ## Authentication
@@ -1131,6 +1132,21 @@ creation, uploads and finalization are all throttled. The public hosted form rou
 carry their own limits, applied per requesting address and per slug. A throttled request returns
 `429 rate_limit_exceeded`.
 
+## MCP over HTTP
+
+```
+POST /v1/mcp
+Authorization: Bearer <secret server key>
+Accept: application/json, text/event-stream
+```
+
+The MCP Streamable HTTP endpoint. It speaks JSON-RPC, not REST, so it is not in the
+OpenAPI document and its operations are tool names rather than paths; `GET /v1/health`
+lists `mcp` in its `capabilities` when a deployment serves it. The tools are the ones in
+[MCP.md](MCP.md), and a tool call carries exactly the authority the key it presented
+carries anywhere else in this API. A publishable key, a session cookie and a
+cross-origin request are all refused.
+
 ## What each credential may do
 
 | Resource and action | Publishable key | Secret server key | Signed-in user |
@@ -1170,3 +1186,4 @@ carry their own limits, applied per requesting address and per slug. A throttled
 | Create, rename a crash database | No | Yes | Creator or Admin |
 | Delete a crash database | No | Yes | Admin |
 | Edit or delete one crash report | No | No | Not supported |
+| Connect an MCP client to `/v1/mcp` | No | Yes | No |

@@ -72,8 +72,9 @@ hands it back as JSON or CSV whenever you ask.
   redacted before they leave and client-side dedupe so a crash loop sends once. Each has a
   Node, browser, Electron and React entry; both have zero runtime dependencies and a queue
   that survives restarts, and together they take one configuration.
-- **It talks to AI agents.** An MCP server with 55 tools, so Claude can summarise your
-  week's feedback, or triage a crash group and resolve it in the release that fixes it.
+- **It talks to AI agents.** An MCP server with 55 tools, at a URL or as a local process,
+  so Claude can summarise your week's feedback, or triage a crash group and resolve it in
+  the release that fixes it.
 - **Every choice is written down.** [DECISIONS.md](docs/DECISIONS.md) records what was
   built, why, and what was rejected — including the bugs the tests found.
 
@@ -161,8 +162,16 @@ configured, so it always clears WCAG AA contrast.
 
 ## Using it with Claude
 
-The MCP server is not published to npm yet, so build it from this repository and point
-your client at the result:
+Your deployment serves MCP at `/v1/mcp`. Point a client at it with a secret server key,
+and there is nothing to install:
+
+```bash
+claude mcp add --transport http inlet https://inlet.example.com/v1/mcp \
+  --header "Authorization: Bearer isk_your_secret_server_key"
+```
+
+The same tools also run as a local process, for a deployment your client cannot reach.
+That server is not published to npm yet, so build it from this repository:
 
 ```bash
 npm install && npm run build
@@ -210,7 +219,7 @@ image ships, so what is tested is what is deployed.
 | `packages/sdk` | `inlet-sdk`, the client SDK. `feedback` and `crash`, each with Node, browser, Electron and React entries. |
 | `apps/api` | Fastify server, Drizzle schema and migrations, services, routes, tests. |
 | `apps/web` | React management interface, form builder, hosted form page, reference renderer. |
-| `apps/mcp` | `inlet-mcp`, a thin layer over the HTTP API. |
+| `apps/mcp` | `inlet-mcp`, a thin layer over the HTTP API. Runs as a stdio process, and the API serves the same tools at `/v1/mcp`. |
 | `e2e` | Playwright suites: the HTTP contract, the SDK in Node and in a real browser, and the interface in a browser. |
 | `docs` | PRD, API guide, MCP guide, deployment guide, technical decisions, generated OpenAPI. |
 | `scripts` | Local PostgreSQL and MinIO, and the end-to-end server. |

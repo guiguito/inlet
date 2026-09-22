@@ -1,8 +1,12 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { InletClient } from './client.js';
+import { InletClient, type ClientOptions } from './client.js';
 import { registerTools } from './tools.js';
 
-export type McpConfig = { baseUrl: string; secretKey: string; timeoutMs?: number };
+/**
+ * Everything the client needs, including the optional `fetch` the API supplies when it
+ * serves these same tools over Streamable HTTP (DECISIONS 27).
+ */
+export type McpConfig = ClientOptions;
 
 /**
  * Reads and checks the configuration, with messages an operator can act on rather
