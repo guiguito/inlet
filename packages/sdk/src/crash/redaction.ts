@@ -78,3 +78,42 @@ export function redactExcept(safe: RegExp[]): RedactionPolicy {
  * greps, an inline `(message) => message` does not.
  */
 export const keepMessages: RedactionPolicy = (message) => message;
+
+/**
+ * CR-117: an application-oriented policy, for messages your own code writes.
+ *
+ * `defaultRedaction` allowlists by *shape*, which fits messages the engine generates and is
+ * inverted for messages an application authors. Measured over a realistic sample: every
+ * engine message survived and every application message became a bare `<redacted>` — the
+ * diagnostic half, which usually carries no user data at all. A database of `<redacted>` reads
+ * as a broken integration, and that misdiagnosis costs a round to disprove.
+ *
+ * This redacts by *pattern* instead: the things that actually carry user data are removed and
+ * the sentence around them survives. It is not the default, because the default has already
+ * changed once and a reporting tool that keeps changing what it reports is worse than one with
+ * an awkward default.
+ *
+ * `'Wallet sync failed after 3 retries'` survives intact;
+ * `'/Users/alice/secret.docx could not be opened'` becomes `'<path> could not be opened'`.
+ */
+const SENSITIVE: [RegExp, string][] = [
+  // URLs first: one contains slashes and would otherwise be eaten by the path pattern.
+  [/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, '<url>'],
+  [/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g, '<email>'],
+  // An absolute path: at least two segments after a leading separator or drive letter, and it
+  // must start at a boundary — otherwise `2026/09/22` and `3/4` match, and a character class
+  // containing a space runs straight through the rest of the sentence. The boundary is captured
+  // and put back rather than matched with a lookbehind, which would be a parse error in older
+  // Safari and this module loads in the browser entry. A path containing spaces is therefore
+  // redacted only up to the first one, which still removes the user's name.
+  [/(^|[\s(<"'])((?:[A-Za-z]:)?(?:[/\\][\w.~%-]+){2,})/g, '$1<path>'],
+  [/\b\d{1,3}(?:\.\d{1,3}){3}\b/g, '<ip>'],
+  // Keys, hashes, JWT segments, session ids: long and opaque enough that no prose looks like it.
+  [/\b[A-Za-z0-9_-]{24,}\b/g, '<token>'],
+];
+
+export const redactPatterns: RedactionPolicy = (message) => {
+  const trimmed = message.trim();
+  if (trimmed === '') return '';
+  return SENSITIVE.reduce((text, [pattern, marker]) => text.replace(pattern, marker), trimmed);
+};

@@ -214,10 +214,15 @@ Each adapter is its own entry point, and the installer lives on that entry:
 `capture*` functions, which is what a shared module should import.
 
 By default an exception message is sent only when it matches a shape the runtime generates;
-anything else becomes `<redacted>`, because that field routinely carries what someone typed.
-Pass `redaction: keepMessages` if you know yours are safe, or `redactExcept([...])` to add
-your own shapes. You can start with crash reporting off (`enabled: false`) and turn it on
-when someone opts in, with `setEnabled(true)`.
+**anything your own code wrote becomes `<redacted>`**, because that field routinely carries
+what someone typed. A first run therefore shows a column of `<redacted>`, which is the default
+working rather than a fault. Pass `redaction: redactPatterns` to keep your own sentences and
+strip only paths, addresses, URLs and tokens; `keepMessages` if you know yours are safe; or
+`redactExcept([...])` to add your own shapes. You can start with crash reporting off
+(`enabled: false`) and turn it on when someone opts in, with `setEnabled(true)`.
+
+On Electron, closing a window is not reported as a crash, and `uncleanExit: true` catches the
+hangs, Force Quits and power losses that leave nothing behind.
 
 Press **Send a test report** to see one land before you ship anything. If your
 application is not JavaScript, any HTTP client can post the envelope documented in

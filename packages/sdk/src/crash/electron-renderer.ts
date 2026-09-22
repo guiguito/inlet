@@ -18,7 +18,7 @@ export const IPC_CHANNEL = 'inlet:crash';
 export type ElectronRendererOptions = {
   /** How to reach main. Defaults to the preload bridge, then `ipcRenderer.send`. */
   send?: (channel: string, envelope: CrashReportInput) => void;
-  /** URL prefixes that are the application's own code (CR-093). Defaults to `location.origin`. */
+  /** Paths or URL prefixes that are the application's own code (CR-093, CR-115). Detected per protocol. */
   appRoots?: string[];
 };
 
@@ -29,7 +29,7 @@ export type ElectronRendererOptions = {
  */
 export function installElectronRenderer(options: ElectronRendererOptions = {}): RendererCapture {
   const send = options.send ?? defaultRendererSend();
-  const capture = new RendererCapture(send, options.appRoots ?? (typeof location !== 'undefined' ? [location.origin] : []));
+  const capture = new RendererCapture(send, options.appRoots ?? defaultAppRoots());
   if (typeof window === 'undefined') return capture;
 
   const onError = (event: ErrorEvent) => capture.captureException(event.error ?? event.message, { kind: 'exception', handled: false });
@@ -43,6 +43,34 @@ export function installElectronRenderer(options: ElectronRendererOptions = {}): 
     window.removeEventListener('unhandledrejection', onRejection);
   };
   return capture;
+}
+
+/**
+ * CR-115: the application's own code, as this renderer sees it.
+ *
+ * Under `file:` — which is every packaged Electron app — `location.origin` is the string
+ * `"file://"`, which `normalizeRoot` in stack.ts reduces to `"file:"`, which matches nothing.
+ * Meanwhile `cleanFile` strips `file://` off every frame, so the frames are plain paths. The
+ * two ends disagreed and every frame in a packaged renderer came out `<external>` — unreadable
+ * in production, and only in production, because a dev renderer is served over http.
+ *
+ * Both the raw and the decoded directory are returned: V8 reports file URLs percent-encoded
+ * while `pathname` may hand back either, and `markFrames` takes the first root that matches,
+ * so a second entry costs nothing. The leading slash stays — on Windows a frame reads
+ * `/C:/app/x.js` once `file://` is gone, and so does `pathname`.
+ */
+function defaultAppRoots(): string[] {
+  if (typeof location === 'undefined') return [];
+  if (location.protocol !== 'file:') return [location.origin];
+  const dir = location.pathname.replace(/\/[^/]*$/, '');
+  if (!dir) return [];
+  let decoded = dir;
+  try {
+    decoded = decodeURIComponent(dir);
+  } catch {
+    // A malformed escape: the raw form is still the better root.
+  }
+  return decoded === dir ? [dir] : [dir, decoded];
 }
 
 function defaultRendererSend(): (channel: string, envelope: CrashReportInput) => void {

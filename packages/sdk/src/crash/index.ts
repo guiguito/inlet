@@ -99,7 +99,7 @@ export async function close(timeoutMs?: number): Promise<void> {
 }
 
 export { CrashClient } from './client.js';
-export { defaultRedaction, keepMessages, redactExcept } from './redaction.js';
+export { defaultRedaction, keepMessages, redactExcept, redactPatterns } from './redaction.js';
 export { MemoryStore } from './transport.js';
 export type {
   CaptureOptions,

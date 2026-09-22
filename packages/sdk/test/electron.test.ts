@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -11,7 +11,7 @@ import type { CrashEnvelope, CrashReportInput } from '../src/crash/types.js';
  * handlers and the IPC listener and keeps its queue under user data; a renderer routes
  * captures through the channel.
  */
-function fakeElectron(userData: string) {
+function fakeElectron(userData: string, packaged = false) {
   const listeners = new Map<string, (...args: unknown[]) => void>();
   const ipc = new Map<string, (event: unknown, payload: unknown) => void>();
   const electron: ElectronModule = {
@@ -21,6 +21,7 @@ function fakeElectron(userData: string) {
       getAppPath: () => '/Applications/HappyVibe.app/Contents/Resources/app',
       on: ((event: string, listener: (...args: unknown[]) => void) => void listeners.set(event, listener)) as ElectronModule['app']['on'],
       off: (event: string) => void listeners.delete(event),
+      isPackaged: packaged,
     },
     ipcMain: { on: (channel, listener) => void ipc.set(channel, listener), off: (channel: string) => void ipc.delete(channel) },
   };
@@ -28,8 +29,8 @@ function fakeElectron(userData: string) {
 }
 
 /** A main install wired to a fetch that accepts everything, for the tests that only care about wiring. */
-async function install(userData: string, options: Record<string, unknown> = {}, handlers?: Record<string, unknown>) {
-  const { electron, listeners, ipc } = fakeElectron(userData);
+async function install(userData: string, options: Record<string, unknown> = {}, handlers?: Record<string, unknown>, packaged = false) {
+  const { electron, listeners, ipc } = fakeElectron(userData, packaged);
   const sent: CrashEnvelope[] = [];
   const installed = await installElectronMain(
     {
@@ -92,7 +93,7 @@ describe('Electron main (CR-100)', () => {
     expect(client.options.platform).toBe('electron');
 
     listeners.get('render-process-gone')!({}, {}, { reason: 'crashed', exitCode: 5 });
-    listeners.get('child-process-gone')!({}, { type: 'Utility', reason: 'killed', exitCode: 9, name: 'pi-engine' });
+    listeners.get('child-process-gone')!({}, { type: 'Utility', reason: 'crashed', exitCode: 9, name: 'pi-engine' });
     ipc.get(IPC_CHANNEL)!({}, { kind: 'render-error', exception: { type: 'TypeError', message: 'x is not a function', handled: true, frames: [{ function: 'Checkout', inApp: true }] } } satisfies CrashReportInput);
     ipc.get(IPC_CHANNEL)!({}, 'not an envelope');
     // The handlers capture asynchronously — fingerprint, then the store — and return no
@@ -111,7 +112,7 @@ describe('Electron main (CR-100)', () => {
 
     expect(sent.map((e) => e.kind).sort()).toEqual(['child-exit', 'render-error', 'renderer-gone']);
     expect(sent.find((e) => e.kind === 'renderer-gone')!.exit).toEqual({ reason: 'crashed', code: 5 });
-    expect(sent.find((e) => e.kind === 'child-exit')!.exit).toEqual({ reason: 'killed', code: 9, name: 'pi-engine' });
+    expect(sent.find((e) => e.kind === 'child-exit')!.exit).toEqual({ reason: 'crashed', code: 9, name: 'pi-engine' });
     expect(sent.find((e) => e.kind === 'render-error')!.exception).toMatchObject({ type: 'TypeError', frames: [{ function: 'Checkout', inApp: true }] });
     expect(sent.every((e) => e.release.version === '2.3.4' && e.platform === 'electron')).toBe(true);
 
@@ -294,5 +295,200 @@ describe('the renderer entry is browser-safe (CR-109)', () => {
     // installElectronRenderer used to return nothing to take the window listeners off with.
     expect(typeof renderer.uninstall).toBe('function');
     renderer.uninstall();
+  });
+});
+
+describe('exit reasons that are not crashes (CR-114)', () => {
+  const dirs: string[] = [];
+  afterEach(async () => {
+    await close(50);
+    for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
+    dirs.length = 0;
+  });
+
+  function dir() {
+    const d = mkdtempSync(join(tmpdir(), 'inlet-electron-'));
+    dirs.push(d);
+    return d;
+  }
+
+  /** Fires one renderer and one child exit, then settles. Returns the kinds actually reported. */
+  async function reasons(userData: string, rendererReason: string, childReason: string, options: Record<string, unknown> = {}) {
+    const { client, listeners, sent, uninstall } = await install(userData, options);
+    listeners.get('render-process-gone')!({}, {}, { reason: rendererReason, exitCode: 0 });
+    listeners.get('child-process-gone')!({}, { type: 'Utility', reason: childReason, exitCode: 0 });
+    // Nothing to poll for when the expectation is silence, so settle the capture path the way
+    // the handlers themselves do — a flush after the microtasks the captures queue.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await client.flush(2_000);
+    uninstall();
+    return sent.map((e) => e.kind).sort();
+  }
+
+  it('a user closing a window is not a crash', async () => {
+    // clean-exit is "exited with an exit code of zero". Reporting it filed a crash every time
+    // anyone closed a window, which was the highest-volume noise source in the feature.
+    expect(await reasons(dir(), 'clean-exit', 'clean-exit')).toEqual([]);
+  });
+
+  it('a killed renderer is reported and a killed child is not', async () => {
+    // The asymmetry is the point: the OS took the renderer away (an OOM kill), while a killed
+    // child is usually the application calling kill() on its own sidecar.
+    expect(await reasons(dir(), 'killed', 'killed')).toEqual(['renderer-gone']);
+  });
+
+  it('still reports the reasons that are crashes', async () => {
+    expect(await reasons(dir(), 'crashed', 'crashed')).toEqual(['child-exit', 'renderer-gone']);
+    expect(await reasons(dir(), 'oom', 'oom')).toEqual(['child-exit', 'renderer-gone']);
+    // Newer than the SDK: proactive termination ahead of an OOM. A real user-visible failure.
+    expect(await reasons(dir(), 'memory-eviction', 'memory-eviction')).toEqual(['child-exit', 'renderer-gone']);
+  });
+
+  it('an empty ignore list restores the old behaviour', async () => {
+    expect(await reasons(dir(), 'clean-exit', 'clean-exit', { ignoreRendererReasons: [], ignoreChildReasons: [] })).toEqual([
+      'child-exit',
+      'renderer-gone',
+    ]);
+  });
+});
+
+describe('the unclean-exit sentinel (CR-116)', () => {
+  const dirs: string[] = [];
+  afterEach(async () => {
+    await close(50);
+    for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
+    dirs.length = 0;
+  });
+
+  function dir() {
+    const d = mkdtempSync(join(tmpdir(), 'inlet-electron-'));
+    dirs.push(d);
+    return d;
+  }
+
+  const sentinelAt = (userData: string) => join(userData, 'inlet-crash', 'running.json');
+
+  it('writes nothing in a development build, however the option is set', async () => {
+    const userData = dir();
+    const { uninstall, listeners } = await install(userData, { uncleanExit: true }, undefined, false);
+    // A dev runner restarts main constantly; arming there would report the dev loop itself.
+    expect(existsSync(sentinelAt(userData))).toBe(false);
+    expect(listeners.has('will-quit')).toBe(false);
+    uninstall();
+  });
+
+  it('arms in a packaged build and disarms on a clean quit', async () => {
+    const userData = dir();
+    const { uninstall, listeners } = await install(userData, { uncleanExit: true }, undefined, true);
+    expect(existsSync(sentinelAt(userData))).toBe(true);
+    expect(JSON.parse(readFileSync(sentinelAt(userData), 'utf8')).startedAt).toBeTypeOf('number');
+
+    listeners.get('will-quit')!();
+    expect(existsSync(sentinelAt(userData))).toBe(false);
+    uninstall();
+  });
+
+  it('reports a run that never quit, with the uptime it managed', async () => {
+    const userData = dir();
+    // A previous run that started 90 seconds before it was last seen alive.
+    const file = sentinelAt(userData);
+    mkdirSync(join(userData, 'inlet-crash'), { recursive: true });
+    const startedAt = Date.now() - 90_000;
+    writeFileSync(file, JSON.stringify({ startedAt }));
+
+    const { client, sent, uninstall } = await install(userData, { uncleanExit: true }, undefined, true);
+    await expect.poll(async () => { await client.flush(2_000); return sent.length; }, { timeout: 10_000 }).toBe(1);
+    expect(sent[0]!.kind).toBe('unclean-exit');
+    expect(sent[0]!.exit!.reason).toBe('unclean-exit');
+    expect(sent[0]!.exit!.lastUptimeMs).toBeGreaterThanOrEqual(89_000);
+    // It re-arms for this run rather than leaving the evidence it just consumed.
+    expect(existsSync(file)).toBe(true);
+    uninstall();
+  });
+
+  it('still reports when the sentinel is corrupt, under its own reason', async () => {
+    const userData = dir();
+    mkdirSync(join(userData, 'inlet-crash'), { recursive: true });
+    writeFileSync(sentinelAt(userData), 'not json at all');
+
+    const { client, sent, uninstall } = await install(userData, { uncleanExit: true }, undefined, true);
+    await expect.poll(async () => { await client.flush(2_000); return sent.length; }, { timeout: 10_000 }).toBe(1);
+    // The crash happened either way; discarding it is the one outcome that loses information.
+    expect(sent[0]!.kind).toBe('unclean-exit');
+    expect(sent[0]!.exit!.reason).toBe('unclean-exit-corrupt-sentinel');
+    expect(sent[0]!.exit!.lastUptimeMs).toBeUndefined();
+    uninstall();
+  });
+
+  it('uninstall removes the file, so the next launch reports nothing', async () => {
+    const userData = dir();
+    const { uninstall } = await install(userData, { uncleanExit: true }, undefined, true);
+    expect(existsSync(sentinelAt(userData))).toBe(true);
+    uninstall();
+    expect(existsSync(sentinelAt(userData))).toBe(false);
+  });
+
+  it('is off unless asked for', async () => {
+    const userData = dir();
+    const { uninstall } = await install(userData, {}, undefined, true);
+    expect(existsSync(sentinelAt(userData))).toBe(false);
+    uninstall();
+  });
+});
+
+describe('the renderer knows where a packaged app lives (CR-115)', () => {
+  /** Stands a renderer up under a given location, captures one error, returns its frames. */
+  function framesUnder(href: { protocol: string; origin: string; pathname: string }, stack: string) {
+    const previous = Object.getOwnPropertyDescriptor(globalThis, 'location');
+    Object.defineProperty(globalThis, 'location', { value: href, configurable: true, writable: true });
+    try {
+      const handed: CrashReportInput[] = [];
+      const renderer = installElectronRenderer({ send: (_channel, report) => handed.push(report) });
+      const error = new TypeError('boom');
+      error.stack = stack;
+      renderer.captureException(error);
+      return handed[0]!.exception!.frames!;
+    } finally {
+      if (previous) Object.defineProperty(globalThis, 'location', previous);
+      else delete (globalThis as { location?: unknown }).location;
+    }
+  }
+
+  const packagedStack =
+    'TypeError: boom\n' +
+    '    at Checkout (file:///Applications/HappyVibe.app/Contents/Resources/app.asar/renderer/index.js:10:5)\n' +
+    '    at vendor (file:///Applications/HappyVibe.app/Contents/Resources/app.asar/node_modules/lib/x.js:1:1)';
+
+  it('marks a packaged renderer frame in-app instead of external', () => {
+    // Before 0.1.3 the default was location.origin, which under file: is the string "file://",
+    // which normalizeRoot reduces to "file:" — matching nothing. Every frame in every packaged
+    // app came out <external>, in production only, because dev renderers are served over http.
+    const frames = framesUnder(
+      {
+        protocol: 'file:',
+        origin: 'file://',
+        pathname: '/Applications/HappyVibe.app/Contents/Resources/app.asar/renderer/index.html',
+      },
+      packagedStack,
+    );
+    expect(frames[0]).toMatchObject({ function: 'Checkout', file: 'index.js', inApp: true });
+    // node_modules stays external whatever the root says.
+    expect(frames[1]).toMatchObject({ file: '<external>', inApp: false });
+  });
+
+  it('handles a packaged path that needed escaping', () => {
+    const frames = framesUnder(
+      { protocol: 'file:', origin: 'file://', pathname: '/Applications/My%20App.app/renderer/index.html' },
+      'TypeError: boom\n    at Checkout (file:///Applications/My%20App.app/renderer/index.js:1:1)',
+    );
+    expect(frames[0]).toMatchObject({ file: 'index.js', inApp: true });
+  });
+
+  it('still uses the origin when the renderer is served over http', () => {
+    const frames = framesUnder(
+      { protocol: 'https:', origin: 'https://app.local', pathname: '/index.html' },
+      'TypeError: boom\n    at Checkout (https://app.local/assets/checkout.js:10:5)',
+    );
+    expect(frames[0]).toMatchObject({ file: 'assets/checkout.js', inApp: true });
   });
 });

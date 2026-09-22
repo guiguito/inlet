@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.1.3 — September 22, 2026
+
+From the second external integration review. One behaviour change, and it makes an upgraded
+application report **fewer** crashes, not more — which should not be mistaken for a regression.
+
+### Behaviour change
+
+- **A normal window close is no longer a crash.** `installElectronMain` reported every
+  `render-process-gone` and `child-process-gone`, and Electron defines `clean-exit` as "exited
+  with an exit code of zero" — which is what closing a window looks like. Every integrator
+  filed a crash report every time a user closed a window until they wrote the filter
+  themselves. `clean-exit` is now ignored for both, and `killed` is ignored for child processes
+  as well, because that is ordinarily your own code terminating a sidecar. A **killed renderer
+  is still reported**: there it means the operating system reclaimed memory, which is the crash
+  most worth having. Everything else — `crashed`, `oom`, `abnormal-exit`, `launch-failed`,
+  `integrity-failure`, `memory-eviction` — is unchanged. Restore the old behaviour with
+  `ignoreRendererReasons: []` and `ignoreChildReasons: []`.
+
+### Fixed
+
+- **A packaged Electron renderer produced unreadable stacks.** The renderer's application-root
+  default was `location.origin`, which under `file:` — every packaged app — is the string
+  `"file://"` and matches no frame, so every frame came back `<external>`. It only ever
+  appeared in packaged builds, because a development renderer is served over http. The root is
+  now derived from the document's path under `file:`, and stacks in packaged apps mark your own
+  code in-app as they always should have.
+
+### Added
+
+- **`uncleanExit`** on `installElectronMain`. A hang, a Force Quit, a power loss and an
+  out-of-memory kill run no handler at all, so nothing inside the dying process can report
+  them. The SDK now keeps a file while the app is alive and removes it on a clean quit; one
+  still there on the next launch is reported as `unclean-exit` with the uptime the previous run
+  managed. Off by default, and armed only in packaged builds — a development runner restarts
+  main constantly and would report your own dev loop. A file that cannot be read still reports,
+  without an uptime, because the crash happened either way. `unclean-exit` has been a declared
+  kind with no producer since the first release; this is what produces it.
+- **`redactPatterns`**, an application-oriented redaction policy. `defaultRedaction`
+  allowlists by *shape*, which fits messages a runtime generates and is exactly inverted for
+  messages your own code writes: measured over a realistic sample, every engine message
+  survived and every application message became a bare `<redacted>`. `redactPatterns` redacts
+  by pattern instead — paths, email addresses, URLs, IP addresses and long opaque tokens become
+  markers and the sentence around them survives. **Not the default**, and the README now says
+  plainly that your own messages are redacted by default, because a first run showing a column
+  of `<redacted>` reads as a broken integration and is not one.
+- `ignoreRendererReasons` and `ignoreChildReasons` on `installElectronMain`.
+
 ## 0.1.2 — September 21, 2026
 
 From the first external integration review of 0.1.0. The version number says "patch"; four

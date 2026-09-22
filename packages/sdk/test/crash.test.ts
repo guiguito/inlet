@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { computeFingerprint, effectiveFingerprintParts } from '@inlet/shared/crash-core';
 import { CrashClient } from '../src/crash/client.js';
-import { defaultRedaction, keepMessages, redactExcept } from '../src/crash/redaction.js';
+import { defaultRedaction, keepMessages, redactExcept, redactPatterns } from '../src/crash/redaction.js';
 import { markFrames, parseStack } from '../src/crash/stack.js';
 import { MemoryStore } from '../src/crash/transport.js';
 import { FileStore, sha256Hex } from '../src/crash/node.js';
@@ -451,6 +451,10 @@ describe('delivery callback (CR-105)', () => {
       );
     };
     const drops: string[] = [];
+    // The offline captures arm the transport's exponential backoff, and a scheduled flush that
+    // wins the race would leave `pausedUntil` in the future and make the flush below a no-op.
+    // The clock is injected so the wait is stepped over deterministically rather than raced.
+    let clock = Date.now();
     const c = new CrashClient({
       baseUrl: 'https://inlet.test',
       publishableKey: 'ipk_test',
@@ -459,12 +463,14 @@ describe('delivery callback (CR-105)', () => {
       fetch: fetchImpl,
       hash: sha256Hex,
       dedupe: false,
+      now: () => clock,
       redaction: keepMessages,
       onDrop: (reason) => drops.push(reason),
       onSent: (sent, envelope) => seen.push({ reportId: sent.reportId, isNewGroup: sent.isNewGroup, message: envelope.exception!.message }),
     });
     for (const message of ['first', 'second', 'third']) await c.captureMessage(message);
     online = true;
+    clock += 60_000;
     await c.flush();
 
     // The pairing is the whole value: a batch answer alone cannot say which crash was new.
@@ -614,5 +620,37 @@ describe('one client across entry points (CR-110)', () => {
     expect(getClient()).toBe(created);
     await closeCore(50);
     expect(getClient()).toBeNull();
+  });
+});
+
+describe('an application-oriented redaction policy (CR-117)', () => {
+  it('keeps the sentences an application writes, which the default does not', () => {
+    // The measurement behind CR-117: the default allowlists by shape, which fits messages the
+    // engine generates and is exactly inverted for messages an application authors.
+    const APP = [
+      'Wallet sync failed after 3 retries',
+      'Voice host exited before handshake',
+      'Export aborted: disk quota exceeded',
+      'Model download interrupted at 42%',
+      'Retry 3/4 on 2026/09/22 failed',
+    ];
+    expect(APP.filter((m) => defaultRedaction(m) === m)).toEqual([]);
+    expect(APP.filter((m) => redactPatterns(m) === m)).toEqual(APP);
+  });
+
+  it('removes what actually carries user data, and leaves the sentence around it', () => {
+    expect(redactPatterns('/Users/alice/secret.docx could not be opened')).toBe('<path> could not be opened');
+    expect(redactPatterns('Could not open /Users/alice/secret.docx for writing')).toBe('Could not open <path> for writing');
+    expect(redactPatterns('C:\\Users\\alice\\app\\x.docx is locked')).toBe('<path> is locked');
+    expect(redactPatterns('Invalid email alice@corp.com supplied')).toBe('Invalid email <email> supplied');
+    expect(redactPatterns('GET https://api.internal/v1/keys?token=abc failed')).toBe('GET <url> failed');
+    expect(redactPatterns('Peer 192.168.0.19 refused the connection')).toBe('Peer <ip> refused the connection');
+    expect(redactPatterns('Bad session eyJhbGciOiJIUzI1NiwidHlwIjoiSldUIn0 rejected')).toBe('Bad session <token> rejected');
+  });
+
+  it('is not the default', () => {
+    const { c } = client();
+    expect(c.options.redaction).toBeUndefined();
+    expect(defaultRedaction('/Users/alice/secret.docx could not be opened')).toBe('<redacted>');
   });
 });

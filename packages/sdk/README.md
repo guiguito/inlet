@@ -371,6 +371,39 @@ This installs the Node handlers, reports `render-process-gone` and `child-proces
 with their reason and exit code, and listens on the IPC channel `inlet:crash` for
 envelopes from renderers.
 
+**Not every exit is a crash.** Electron reports a normal window close as `clean-exit`, so
+that reason is ignored by default — reporting it files a crash every time someone closes a
+window. For child processes `killed` is ignored too, because that is usually your own code
+calling `kill()` on a sidecar; for renderers `killed` *is* reported, because there it means
+the operating system took the process away, which is an OOM kill and the crash you most want.
+Everything else — `crashed`, `oom`, `abnormal-exit`, `launch-failed`, `integrity-failure`,
+`memory-eviction` — is reported.
+
+```ts
+await installElectronMain({
+  ...,
+  ignoreRendererReasons: ['clean-exit'],            // the default
+  ignoreChildReasons: ['clean-exit', 'killed'],     // the default
+});
+```
+
+Pass `[]` to either one to report every reason, as versions before 0.1.3 did.
+
+### Catching the exits that leave nothing behind
+
+A hang, a Force Quit, a power loss and an OOM kill run no handler at all, so nothing inside
+the dying process can report them. `uncleanExit` writes a small file while the app is alive
+and removes it on a clean quit; a file still there on the next launch means the last run died,
+and is reported as `unclean-exit` with the uptime it managed.
+
+```ts
+await installElectronMain({ ..., uncleanExit: true });
+```
+
+Off by default, and armed only in a packaged build — a development runner restarts the main
+process constantly and would otherwise report your own dev loop. The file lives beside the
+queue, under the user-data directory.
+
 Preload script, so a renderer can reach that channel with context isolation on:
 
 ```ts
@@ -441,9 +474,10 @@ await flush(); // before a planned exit
 ```
 
 `captureReport` is for failure classes the SDK cannot see itself: a native crash your
-application parsed from a minidump on the next launch (`kind: 'native'`), a sidecar that
-exited (`kind: 'child-exit'`), an unclean-exit sentinel. You build the block for the kind;
-the SDK fills in the release, environment, system, user and tags.
+application parsed from a minidump on the next launch (`kind: 'native'`), or a sidecar the
+SDK does not supervise. You build the block for the kind; the SDK fills in the release,
+environment, system, user and tags. On Electron you no longer have to write the unclean-exit
+sentinel yourself — `installElectronMain({ uncleanExit: true })` does it.
 
 ## Delivery
 
@@ -490,25 +524,38 @@ very reports the person just declined, so `setEnabled(false)` never does.
 
 ## Redaction
 
-An exception message is the one field that routinely carries what a user typed, so the
-default policy sends it only when it matches a shape the runtime generates, and replaces
-everything else with `<redacted>`. Three policies ship:
+**Read this before you conclude the integration is broken.** By default, *your own error
+messages are redacted*. An exception message is the one field that routinely carries what a
+user typed, so the default sends it only when it matches a shape the runtime itself generates
+— `x is not a function`, `socket hang up` — and replaces everything else with `<redacted>`.
+Messages your application authors are exactly the ones that do not match. A first run against
+a fresh database therefore shows a column of `<redacted>`, and that is the default working,
+not a fault.
+
+It is also the wrong trade for most applications, because an application's own messages are
+the diagnostic half and usually carry no user data at all. Pick a policy deliberately:
 
 | Policy | What it sends |
 | --- | --- |
-| `defaultRedaction` | The default. Known-safe shapes verbatim; everything else `<redacted>`, keeping an errno-shaped leading token (`ENOENT:`, `ERR_MODULE_NOT_FOUND`). |
-| `redactExcept([/^…/])` | Your own safe shapes verbatim; everything else as above. |
+| `defaultRedaction` | The default. Allowlists by *shape*: known runtime messages verbatim, everything else `<redacted>`, keeping an errno-shaped leading token (`ENOENT:`, `ERR_MODULE_NOT_FOUND`). Safest, and quietest. |
+| `redactPatterns` | Redacts by *pattern* instead: paths, email addresses, URLs, IP addresses and long opaque tokens become markers and the sentence around them survives. The right default for most application code. |
+| `redactExcept([/^…/])` | Your own safe shapes verbatim; everything else as `defaultRedaction`. |
 | `keepMessages` | Everything verbatim. For applications that know their messages carry no user data. |
 
 ```ts
-import { keepMessages, redactExcept } from 'inlet-sdk/crash';
+import { keepMessages, redactExcept, redactPatterns } from 'inlet-sdk/crash';
 
-init({ ..., redaction: keepMessages });
-init({ ..., redaction: redactExcept([/^Payment declined: [a-z_]+$/]) });
+init({ ..., redaction: redactPatterns });
+// 'Wallet sync failed after 3 retries'           -> unchanged
+// '/Users/alice/secret.docx could not be opened' -> '<path> could not be opened'
 ```
 
-Group titles do not depend on the message — they come from the error type and the top
-in-app frame — so redacting hard costs less than it looks.
+`redactPatterns` is not the default because changing what a crash reporter reports is worse
+than an awkward default, and this one has already moved once. A path containing spaces is
+redacted only up to the first space, which still removes the user's name.
+
+Group titles never depend on the message — they come from the error type and the top in-app
+frame — so a redacted message costs you less than it appears to.
 
 ## Crash options
 
@@ -529,4 +576,6 @@ in-app frame — so redacting hard costs less than it looks.
 | `queueSize`, `store` | The queue ceiling (at most 200) and where it lives. |
 | `tags` | Attached to every event. |
 | `allowedKinds`, `tagAllowlist` | Electron main only: what the IPC channel accepts from a renderer. |
+| `ignoreRendererReasons`, `ignoreChildReasons` | Electron main only: exit reasons that are not crashes. Defaults `['clean-exit']` and `['clean-exit', 'killed']`. |
+| `uncleanExit` | Electron main only: report a previous run that never quit cleanly. Off by default, packaged builds only. |
 | `debug(message, detail)` | Receives warnings and transport events. Silent by default. |

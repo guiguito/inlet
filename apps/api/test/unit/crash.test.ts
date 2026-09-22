@@ -53,6 +53,15 @@ describe('crashEnvelopeSchema (section 9.1, CR-011, CR-012)', () => {
     expect(crashEnvelopeSchema.safeParse({ ...noException, kind: 'sidecar-timeout' }).success).toBe(true);
   });
 
+  it('accepts the unclean-exit envelope the Electron adapter now sends (CR-116)', () => {
+    // `unclean-exit` was a declared kind with no producer until inlet-sdk 0.1.3. These are the
+    // two shapes its sentinel emits, asserted here so the server half cannot drift from it.
+    const { exception: _e, ...noException } = base;
+    expect(crashEnvelopeSchema.safeParse({ ...noException, kind: 'unclean-exit', exit: { reason: 'unclean-exit', lastUptimeMs: 90_000 } }).success).toBe(true);
+    // A sentinel that could not be read still reports, with no uptime and its own reason.
+    expect(crashEnvelopeSchema.safeParse({ ...noException, kind: 'unclean-exit', exit: { reason: 'unclean-exit-corrupt-sentinel' } }).success).toBe(true);
+  });
+
   it('accepts only the user id and bounds tags', () => {
     expect(crashEnvelopeSchema.safeParse({ ...base, user: { id: 'u1', email: 'a@b.c' } }).success).toBe(false);
     const tags = Object.fromEntries(Array.from({ length: 21 }, (_, i) => [`k${i}`, 'v']));
@@ -117,6 +126,18 @@ describe('fingerprint (CR-020, CR-022)', () => {
   it('uses fault and module for native, reason for exits', () => {
     expect(defaultFingerprintParts({ kind: 'native', native: { process: 'main', fault: 'SIGSEGV', module: 'libx.so' } })).toEqual(['kind:native', 'fault:SIGSEGV', 'module:libx.so']);
     expect(defaultFingerprintParts({ kind: 'renderer-gone', exit: { reason: 'oom', code: -1 } })).toEqual(['kind:renderer-gone', 'exit:oom||']);
+  });
+
+  it('groups every unclean exit together, and corrupt sentinels apart', () => {
+    // Deliberate: they are one event class, so one group. The reason is what makes that true
+    // rather than accidental — with only lastUptimeMs the part would be the constant `exit:||`
+    // and the group would have no title at all.
+    const clean = defaultFingerprintParts({ kind: 'unclean-exit', exit: { reason: 'unclean-exit', lastUptimeMs: 90_000 } });
+    const other = defaultFingerprintParts({ kind: 'unclean-exit', exit: { reason: 'unclean-exit', lastUptimeMs: 12 } });
+    const corrupt = defaultFingerprintParts({ kind: 'unclean-exit', exit: { reason: 'unclean-exit-corrupt-sentinel' } });
+    expect(clean).toEqual(['kind:unclean-exit', 'exit:unclean-exit||']);
+    expect(other).toEqual(clean);
+    expect(corrupt).not.toEqual(clean);
   });
 });
 

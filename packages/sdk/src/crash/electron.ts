@@ -4,6 +4,7 @@ import { CrashClient } from './client.js';
 import { IPC_CHANNEL } from './electron-renderer.js';
 import { getClient } from './index.js';
 import { init as initNode, installNodeHandlers, type NodeHandlerOptions, type NodeInitOptions } from './node.js';
+import { startSentinel } from './sentinel.js';
 import type { CrashKind, CrashReportInput } from './types.js';
 
 export * from './index.js';
@@ -32,6 +33,9 @@ type ElectronApp = {
   getAppPath(): string;
   on(event: 'render-process-gone', listener: (event: unknown, webContents: unknown, details: { reason: string; exitCode: number }) => void): unknown;
   on(event: 'child-process-gone', listener: (event: unknown, details: { type: string; reason: string; exitCode: number; name?: string; serviceName?: string }) => void): unknown;
+  on(event: 'will-quit', listener: () => void): unknown;
+  /** False or absent in a development run. The sentinel arms only when this is true (CR-116). */
+  isPackaged?: boolean;
   off?(event: string, listener: Listener): unknown;
   removeListener?(event: string, listener: Listener): unknown;
 };
@@ -61,6 +65,26 @@ function off(target: { off?: (event: string, listener: Listener) => unknown; rem
  */
 const RENDERER_KINDS: CrashKind[] = ['exception', 'unhandled-rejection', 'render-error', 'message'];
 
+/**
+ * CR-114: exit reasons that are not crashes.
+ *
+ * Electron reports `clean-exit` as "exited with an exit code of zero", which is what a user
+ * closing a window looks like. Reporting it unconditionally — which is what the adapter did
+ * before 0.1.3 — files a crash every time someone closes a window, and it is the highest-volume
+ * noise source in the whole feature.
+ *
+ * The two lists differ on `killed`, and that asymmetry is the point. A killed *renderer* is the
+ * operating system taking it away, which is an OOM kill and the crash you most want to see. A
+ * killed *child* is usually the application calling `kill()` on its own sidecar. Same reason
+ * string, opposite meaning. Everything else — `crashed`, `oom`, `abnormal-exit`,
+ * `launch-failed`, `integrity-failure`, `memory-eviction` — is reported.
+ */
+const IGNORED_RENDERER_REASONS = ['clean-exit'];
+const IGNORED_CHILD_REASONS = ['clean-exit', 'killed'];
+
+/** How often the unclean-exit sentinel refreshes its mtime. */
+const SENTINEL_INTERVAL_MS = 60_000;
+
 export type ElectronMainInitOptions = Omit<NodeInitOptions, 'release'> & {
   /** Defaults to `app.getVersion()`. */
   release?: string;
@@ -72,6 +96,16 @@ export type ElectronMainInitOptions = Omit<NodeInitOptions, 'release'> & {
   allowedKinds?: CrashKind[];
   /** CR-111: tag keys accepted over IPC. Every key is allowed when omitted; all are bounded either way. */
   tagAllowlist?: string[];
+  /** CR-114: renderer exit reasons that are not crashes. Default `['clean-exit']`; `[]` reports every reason. */
+  ignoreRendererReasons?: string[];
+  /** CR-114: child-process exit reasons that are not crashes. Default `['clean-exit', 'killed']`. */
+  ignoreChildReasons?: string[];
+  /**
+   * CR-116: report a previous run that ended without quitting cleanly — a hang, a Force Quit, a
+   * power loss, an OOM kill. Off by default, and armed only in a packaged build: a development
+   * runner restarts the main process constantly and would report the dev loop itself.
+   */
+  uncleanExit?: boolean | { intervalMs?: number };
 };
 
 /**
@@ -147,12 +181,15 @@ export async function installElectronMain(
 ): Promise<{ client: CrashClient; uninstall: () => void }> {
   const { app, ipcMain } = deps.electron ?? (await electron());
   const electronVersion = (process.versions as { electron?: string }).electron;
-  const { allowedKinds, tagAllowlist, ...init } = options;
+  const { allowedKinds, tagAllowlist, ignoreRendererReasons, ignoreChildReasons, uncleanExit, ...init } = options;
+  const debug = options.debug ?? (() => {});
+  // Bound rather than inlined: the sentinel lives beside the queue (CR-116).
+  const queueDir = options.queueDir ?? join(app.getPath('userData'), 'inlet-crash');
   const client = initNode({
     ...init,
     platform: 'electron',
     release: options.release ?? app.getVersion(),
-    queueDir: options.queueDir ?? join(app.getPath('userData'), 'inlet-crash'),
+    queueDir,
     appRoots: options.appRoots ?? [app.getAppPath()],
     ...(electronVersion ? { runtime: { name: 'electron', version: electronVersion } } : {}),
   });
@@ -163,10 +200,22 @@ export async function installElectronMain(
   const uninstallNode = installNodeHandlers({ exitCode: false, ...handlers });
 
   // CR-100: a renderer that died. Reason and exit code travel in `exit`; there is no stack.
+  const ignoredRenderer = ignoreRendererReasons ?? IGNORED_RENDERER_REASONS;
+  const ignoredChild = ignoreChildReasons ?? IGNORED_CHILD_REASONS;
+
   const onRendererGone = (_event: unknown, _contents: unknown, details: { reason: string; exitCode: number }) => {
+    if (ignoredRenderer.includes(details.reason)) {
+      // Not a drop: no report was ever built, and onDrop describes reports that were.
+      debug(`A renderer exited with reason ${details.reason}; not reported (ignoreRendererReasons).`);
+      return;
+    }
     void client.captureReport({ kind: 'renderer-gone', exit: { reason: details.reason, code: details.exitCode } });
   };
   const onChildGone = (_event: unknown, details: { type: string; reason: string; exitCode: number; name?: string; serviceName?: string }) => {
+    if (ignoredChild.includes(details.reason)) {
+      debug(`A child process exited with reason ${details.reason}; not reported (ignoreChildReasons).`);
+      return;
+    }
     void client.captureReport({
       kind: 'child-exit',
       exit: { reason: details.reason, code: details.exitCode, name: details.name ?? details.serviceName ?? details.type },
@@ -183,6 +232,37 @@ export async function installElectronMain(
   app.on('child-process-gone', onChildGone);
   ipcMain.on(IPC_CHANNEL, onIpc);
 
+  // CR-116. Armed only when asked for and only in a packaged build.
+  let sentinel: { stop: () => void } | null = null;
+  let onWillQuit: (() => void) | null = null;
+  if (uncleanExit && app.isPackaged === true) {
+    const started = startSentinel({
+      file: join(queueDir, 'running.json'),
+      now: () => Date.now(),
+      intervalMs: (typeof uncleanExit === 'object' ? uncleanExit.intervalMs : undefined) ?? SENTINEL_INTERVAL_MS,
+      debug,
+    });
+    sentinel = started;
+    if (started.previous) {
+      // `reason` is not decoration: it becomes the group's exception type and part of the
+      // fingerprint, so without it every unclean exit in a database collapses into one
+      // untitled group. One group for "the app died without quitting" is right — they are one
+      // event class — but a run whose sentinel was unreadable means something else.
+      const known = started.previous.lastUptimeMs !== undefined;
+      void client.captureReport({
+        kind: 'unclean-exit',
+        exit: {
+          reason: known ? 'unclean-exit' : 'unclean-exit-corrupt-sentinel',
+          ...(known ? { lastUptimeMs: started.previous.lastUptimeMs } : {}),
+        },
+      });
+    }
+    onWillQuit = () => started.stop();
+    app.on('will-quit', onWillQuit);
+  } else if (uncleanExit) {
+    debug('The unclean-exit sentinel is not armed: this is not a packaged build.');
+  }
+
   return {
     client,
     // CR-100: every listener installed above comes off again. Leaving the `app` and
@@ -193,6 +273,10 @@ export async function installElectronMain(
       off(app, 'render-process-gone', onRendererGone as Listener);
       off(app, 'child-process-gone', onChildGone as Listener);
       off(ipcMain, IPC_CHANNEL, onIpc as Listener);
+      if (onWillQuit) off(app, 'will-quit', onWillQuit as Listener);
+      // Removing the file matters as much as stopping the timer: left behind, it reports an
+      // unclean exit on the next launch that never happened.
+      sentinel?.stop();
     },
   };
 }

@@ -2207,3 +2207,91 @@ one, both keyed on the same bearer; the global ceiling is 1000/minute, so a clie
 be pathological to notice. And the 55 tools are registered per request, which is zod object
 construction and measures as noise beside a database round trip. Both have the same upgrade
 path — cache the server per key — and neither is worth the state today.
+
+## 27. `inlet-sdk` 0.1.3: two defects that shipped, and how
+
+The second external integration review, a day after 0.1.2. Three gaps and a design question,
+each verified against the published `dist` rather than the documentation. Two of the three were
+introduced or handled in 0.1.2 and got through review, which is the part worth recording.
+
+### 27.1 A reason string passed through without being read
+
+`installElectronMain` captured `render-process-gone` unconditionally. Electron defines
+`clean-exit` as "exited with an exit code of zero", which is what closing a window looks like,
+so every integrator filed a crash every time a user closed a window until they noticed and
+wrote a filter — the same filter for everyone, and the highest-volume noise source in the
+capability.
+
+The failure is not that the filter was missing in Release 6; it is that 0.1.2 rewrote this file
+wholesale — the IPC sanitiser, the teardown, the exit default — and the handler was edited
+without the reason string in it ever being read. It was passed from `details.reason` into
+`exit.reason` as data in transit. A value can travel through a function under review and never
+be looked at.
+
+The fix keeps two lists rather than one, because `killed` means opposite things on either side
+of the boundary: a killed renderer is the operating system reclaiming memory, which is the
+crash most worth having, and a killed child is ordinarily the application terminating its own
+sidecar. The integrator had got that distinction wrong in the other direction first and shipped
+zero renderer reports for it, which is the strongest argument that the default belongs here.
+
+### 27.2 Two ends of one file disagreeing after a move
+
+`crash/electron-renderer` was created in 0.1.2 to give renderers an entry with no Node imports.
+Its application-root default, `location.origin`, moved across from the old module unexamined.
+Under `file:` — every packaged application — that is the string `"file://"`, which
+`normalizeRoot` in `stack.ts` reduces to `"file:"`, and no frame starts with it. Meanwhile
+`cleanFile`, eleven lines earlier in that same file, strips `file://` off every frame. One end
+of `stack.ts` removes the prefix and the other end expects it.
+
+Every frame in every packaged renderer came back `<external>`: unreadable exactly where it
+matters, and only there, because a development renderer is served over http and looks correct.
+An entry point whose sole reason to exist is knowing about Electron did not know about
+Electron's main loading mode.
+
+Both forms of the directory are used as roots, raw and percent-decoded, because V8 reports file
+URLs encoded while `pathname` may hand back either; `markFrames` takes the first match, so the
+second entry costs nothing and removes a class of near-miss.
+
+### 27.3 The sentinel, and why it reports one group
+
+`unclean-exit` had been a declared kind with no producer since Release 6: in the union, the
+shared kind list and `KIND_REQUIRES`, and emitted by nothing. A hang, a forced quit, a power
+loss and an out-of-memory kill run no handler in the dying process, so the only way to see them
+is the inverse — keep a file while alive, remove it on a clean quit, and report what survives.
+
+`FileStore` does not back it. It has no delete of any kind, so there would be no way to disarm,
+and its writes serialize behind the crash queue, so a periodic touch would contend with the
+reports it exists to protect. This is the second place in the SDK to touch the filesystem
+directly, in its own module so the logic is testable without Electron.
+
+Two details are the integrator's, taken as filed. It arms only in a packaged build, because a
+development runner restarts the main process constantly and would report the development loop
+itself. And an unreadable file still reports, without an uptime: the previous run died either
+way, and discarding it is the only outcome that loses information.
+
+The report carries `reason: 'unclean-exit'`, which is not decoration. `crashGroupTitle` takes a
+group's exception type from `exit.reason` and the fingerprint includes it, so a report carrying
+only `lastUptimeMs` would fingerprint to a constant and produce one untitled group. One group
+is in fact right — every unclean exit is the same event class — but it has to be chosen rather
+than fallen into, and a run whose sentinel could not be read is a different thing and gets its
+own reason.
+
+### 27.4 Declined: making the pattern policy the default
+
+Measured over a realistic sample, `defaultRedaction` keeps every message a runtime generates
+and redacts every message an application writes about itself — the diagnostic half, which
+usually carries no user data at all. The allowlist is a shape allowlist, and for application
+prose that is inverted. The consequence is worse than a poor default: a first run shows a
+column of `<redacted>` and the honest conclusion is that the integration is broken.
+
+`redactPatterns` redacts by pattern instead and is offered by name, but the default does not
+move. It has already moved once, in 0.1.2, and a crash reporter that keeps changing what it
+reports is worse than one with an awkward default that is documented loudly. The documentation
+now warns before it reassures — the 0.1.2 README said "redacting hard costs less than it looks"
+above the very section an integrator reads while trying to work out why every message is a
+marker.
+
+Its path pattern captures a leading boundary rather than using a lookbehind, which would be a
+parse error in older Safari, and this module is reachable from the browser entry. The cost is
+that a path containing a space is redacted only up to the space; it still removes the user's
+name, and eating the rest of the sentence would defeat the policy's whole purpose.
