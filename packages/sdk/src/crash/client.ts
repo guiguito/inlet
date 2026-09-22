@@ -7,7 +7,7 @@ import {
   utf8Length,
 } from '@inlet/shared/crash-core';
 import { defaultRedaction } from './redaction.js';
-import { markFrames, parseStack } from './stack.js';
+import { defaultAppRoots, markFrames, parseStack } from './stack.js';
 import { MemoryStore, Transport, type QueueItem } from './transport.js';
 import type {
   CaptureOptions,
@@ -20,7 +20,7 @@ import type {
 } from './types.js';
 
 export const SDK_NAME = 'inlet-sdk';
-export const SDK_VERSION = '0.1.3';
+export const SDK_VERSION = '0.1.4';
 
 const DEDUPE_KEY = 'dedupe';
 type DedupeState = { byFingerprint: Record<string, number>; recent: number[] };
@@ -40,6 +40,7 @@ export class CrashClient {
   private readonly debug: (message: string, detail?: unknown) => void;
   private readonly now: () => number;
   private readonly redaction: (message: string) => string;
+  private readonly appRoots: string[];
   private readonly dedupe: Required<DedupeOptions> | null;
   private readonly onDrop: (reason: DropReason, detail?: unknown) => void;
   private dedupeState: DedupeState | null = null;
@@ -65,6 +66,11 @@ export class CrashClient {
     this.now = options.now ?? (() => Date.now());
     this.store = options.store ?? new MemoryStore();
     this.redaction = options.redaction ?? defaultRedaction;
+    // CR-115: resolved once, here, like every other entry point does it. An application that
+    // called `init` from the bare `inlet-sdk/crash` entry in a browser supplied no roots, and
+    // empty roots mark every frame external. Node and Electron main are unaffected: their
+    // adapters pass roots explicitly, and there is no `location` there to derive from.
+    this.appRoots = options.appRoots ?? defaultAppRoots();
     this.tags = { ...(options.tags ?? {}) };
     this.enabled = options.enabled ?? true;
     // CR-108. A callback that throws must never take a crash report down with it.
@@ -238,7 +244,7 @@ export class CrashClient {
 
   private envelopeFromError(error: unknown, options: CaptureOptions): CrashEnvelope {
     const err = toError(error);
-    const frames = markFrames(parseStack(err.stack), this.options.appRoots ?? []);
+    const frames = markFrames(parseStack(err.stack), this.appRoots);
     return {
       ...this.base(options.kind ?? 'exception', options),
       exception: {

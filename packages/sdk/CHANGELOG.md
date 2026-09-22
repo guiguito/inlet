@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.1.4 — September 22, 2026
+
+A follow-up to 0.1.3, which fixed one of four places that decide what counts as your code.
+
+### Your crash groups will change, once
+
+Frames are marked in-app by matching them against application roots, and the fingerprint is
+built from **in-app frames only**. Three entries supplied roots that matched nothing, so they
+contributed no frame parts at all — which means every report sharing an error message merged
+into a single group no matter where it threw. React render errors were the worst case: one
+group for an entire application.
+
+After upgrading, those reports fingerprint by throw site and separate into the groups they
+should always have had. Existing groups keep their old reports and nothing merges them, so you
+will see familiar groups stop growing while new ones appear beside them. That is the fix
+landing, not a regression. Group titles improve for the same reason: `Checkout (<external>)`
+becomes `Checkout (index.js)`.
+
+### Fixed
+
+- **`createErrorBoundary` sent every React render-error frame to `<external>`.** Its `appRoots`
+  defaulted to `[]`. This is the half of 0.1.3's renderer fix that was missed, and it meant a
+  packaged app's React errors were unreadable and ungrouped.
+- **`inlet-sdk/crash/browser` still carried the 0.1.3 bug.** Its default was `[location.origin]`,
+  which under `file:` is the string `"file://"` and matches no frame.
+- **The bare `inlet-sdk/crash` entry supplied no roots at all** in a browser. Now derived, once,
+  when the client is created.
+
+### Added
+
+- **`defaultAppRoots()` is exported** from `inlet-sdk/crash`. One derivation now backs all four
+  entries — the origin over http, the document's directory under `file:` — and you can call it
+  yourself where you need the same answer.
+
+### Changed
+
+- **`redactPatterns` is documented as a denylist**, which is what it always was. It removes the
+  shapes it knows and **cannot promise a message carries no content**: a workspace name, a
+  project title or a bare filename matches none of its patterns and will be sent. If you need
+  content-free reports by construction, use `defaultRedaction` or `redactExcept` — an allowlist
+  is the only thing that gives that guarantee. Behaviour is unchanged; the 0.1.3 README
+  overstated it by calling it "the right default for most application code".
+
 ## 0.1.3 — September 22, 2026
 
 From the second external integration review. One behaviour change, and it makes an upgraded

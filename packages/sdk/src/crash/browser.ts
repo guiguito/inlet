@@ -1,3 +1,4 @@
+import { defaultAppRoots } from './stack.js';
 import { CrashClient } from './client.js';
 import { getClient, init as initCore } from './index.js';
 import { IndexedDbStore } from '../store-browser.js';
@@ -21,7 +22,9 @@ export function init(options: CrashInitOptions): CrashClient {
   return initCore({
     platform: 'browser',
     ...(typeof navigator !== 'undefined' ? { os: osFromUserAgent(navigator.userAgent), runtime: runtimeFromUserAgent(navigator.userAgent) } : {}),
-    ...(typeof location !== 'undefined' ? { appRoots: [location.origin] } : {}),
+    // CR-115: derived per protocol. `location.origin` alone is the string "file://" under
+    // the file: protocol, which matches no frame and marks the whole stack external.
+    appRoots: defaultAppRoots(),
     ...(hasIndexedDb ? { store: new IndexedDbStore() } : {}),
     ...options,
   });

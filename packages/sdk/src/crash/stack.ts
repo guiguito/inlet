@@ -78,3 +78,37 @@ export function markFrames(frames: Omit<CrashFrame, 'inApp'>[], appRoots: string
 function normalizeRoot(root: string): string {
   return root.replace(/\\/g, '/').replace(/\/+$/, '');
 }
+
+/**
+ * CR-115: the application's own code, as a browser or an Electron renderer sees it.
+ *
+ * Under `file:` — which is every packaged Electron app — `location.origin` is the string
+ * `"file://"`, which `normalizeRoot` in stack.ts reduces to `"file:"`, which matches nothing.
+ * Meanwhile `cleanFile` strips `file://` off every frame, so the frames are plain paths. The
+ * two ends disagreed and every frame in a packaged renderer came out `<external>` — unreadable
+ * in production, and only in production, because a dev renderer is served over http.
+ *
+ * It lives here, beside `normalizeRoot` and `cleanFile`, because the 0.1.3 defect was those
+ * two disagreeing with a root derived in another file: `cleanFile` strips `file://` off every
+ * frame while `normalizeRoot` reduced the origin `"file://"` to `"file:"`, which matches
+ * nothing. Both ends of that mismatch are now in one module, and there is one derivation for
+ * every caller rather than a default per entry point.
+ *
+ * Both the raw and the decoded directory are returned: V8 reports file URLs percent-encoded
+ * while `pathname` may hand back either, and `markFrames` takes the first root that matches,
+ * so a second entry costs nothing. The leading slash stays — on Windows a frame reads
+ * `/C:/app/x.js` once `file://` is gone, and so does `pathname`.
+ */
+export function defaultAppRoots(): string[] {
+  if (typeof location === 'undefined') return [];
+  if (location.protocol !== 'file:') return [location.origin];
+  const dir = location.pathname.replace(/\/[^/]*$/, '');
+  if (!dir) return [];
+  let decoded = dir;
+  try {
+    decoded = decodeURIComponent(dir);
+  } catch {
+    // A malformed escape: the raw form is still the better root.
+  }
+  return decoded === dir ? [dir] : [dir, decoded];
+}

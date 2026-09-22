@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { computeFingerprint, effectiveFingerprintParts } from '@inlet/shared/crash-core';
 import { CrashClient } from '../src/crash/client.js';
 import { defaultRedaction, keepMessages, redactExcept, redactPatterns } from '../src/crash/redaction.js';
-import { markFrames, parseStack } from '../src/crash/stack.js';
+import { defaultAppRoots, markFrames, parseStack } from '../src/crash/stack.js';
 import { MemoryStore } from '../src/crash/transport.js';
 import { FileStore, sha256Hex } from '../src/crash/node.js';
 import { componentStackToFrames } from '../src/crash/react.js';
@@ -652,5 +652,106 @@ describe('an application-oriented redaction policy (CR-117)', () => {
     const { c } = client();
     expect(c.options.redaction).toBeUndefined();
     expect(defaultRedaction('/Users/alice/secret.docx could not be opened')).toBe('<redacted>');
+  });
+});
+
+describe('one application-root derivation for every browser-side entry (CR-115)', () => {
+  /** Runs `body` with `location` stubbed, restoring whatever was there before. */
+  function at<T>(href: { protocol: string; origin: string; pathname: string } | null, body: () => T): T {
+    const previous = Object.getOwnPropertyDescriptor(globalThis, 'location');
+    if (href) Object.defineProperty(globalThis, 'location', { value: href, configurable: true, writable: true });
+    else delete (globalThis as { location?: unknown }).location;
+    try {
+      return body();
+    } finally {
+      if (previous) Object.defineProperty(globalThis, 'location', previous);
+      else delete (globalThis as { location?: unknown }).location;
+    }
+  }
+
+  const packaged = {
+    protocol: 'file:',
+    origin: 'file://',
+    pathname: '/Applications/HappyVibe.app/Contents/Resources/app.asar/renderer/index.html',
+  };
+  const root = '/Applications/HappyVibe.app/Contents/Resources/app.asar/renderer';
+
+  it('derives the document directory under file:, and the origin over http', () => {
+    expect(at(packaged, () => defaultAppRoots())).toEqual([root]);
+    expect(at({ protocol: 'https:', origin: 'https://app.local', pathname: '/index.html' }, () => defaultAppRoots())).toEqual(['https://app.local']);
+  });
+
+  it('returns nothing where there is no location, which is Node', () => {
+    // Load-bearing: it is what keeps every adapter that sets its own roots unchanged, and what
+    // keeps this suite green. Do not "fix" this into a cwd lookup.
+    expect(at(null, () => defaultAppRoots())).toEqual([]);
+  });
+
+  it('a React render error in a packaged app marks the component in-app, not external', () => {
+    const componentStack = '\n    at Checkout (file://' + root + '/Checkout.jsx:12:3)\n    at App';
+    const frames = at(packaged, () => componentStackToFrames(componentStack));
+    expect(frames[0]).toMatchObject({ function: 'Checkout', file: 'Checkout.jsx', inApp: true });
+    // A component entry with no file location was already in-app and stays that way.
+    expect(frames[1]).toMatchObject({ function: 'App', inApp: true });
+  });
+
+  it('the bare inlet-sdk/crash entry derives roots too, not just the adapters', async () => {
+    // client.ts used `appRoots ?? []`, so an application that called init from the bare entry in
+    // a browser got no roots at all and every frame went external. The site nobody reported.
+    const { sent, fetch } = fakeFetch(accept);
+    const c = at(packaged, () => new CrashClient({ baseUrl: 'https://inlet.test', publishableKey: 'ipk_test', crashDatabaseId: 'cdb_test', release: '1.0.0', fetch, dedupe: false }));
+    const error = new Error('boom');
+    error.stack = `Error: boom\n    at Checkout (file://${root}/index.js:10:5)`;
+    await c.captureException(error);
+    await c.flush();
+    expect((sent[0]!.body as CrashEnvelope).exception!.frames[0]).toMatchObject({ function: 'Checkout', file: 'index.js', inApp: true });
+    await c.close(50);
+  });
+
+  it('the browser entry derives roots, and a caller still overrides them', async () => {
+    const browser = await import('../src/crash/browser.js');
+    const base = { baseUrl: 'https://inlet.test', publishableKey: 'ipk_test', crashDatabaseId: 'cdb_test', release: '1.0.0', fetch: fakeFetch(accept).fetch };
+    const derived = at(packaged, () => browser.init(base));
+    expect(derived.options.appRoots).toEqual([root]);
+    await derived.close(50);
+
+    const explicit = at(packaged, () => browser.init({ ...base, appRoots: ['/mine'] }));
+    expect(explicit.options.appRoots).toEqual(['/mine']);
+    await explicit.close(50);
+  });
+
+  it('an explicit appRoots still wins over the derivation', () => {
+    const componentStack = '\n    at Checkout (file://' + root + '/Checkout.jsx:12:3)';
+    expect(at(packaged, () => componentStackToFrames(componentStack, []))[0]).toMatchObject({ file: '<external>', inApp: false });
+  });
+});
+
+describe('the grouping that empty roots destroyed (CR-115)', () => {
+  const root = '/Applications/HappyVibe.app/Contents/Resources/app.asar/renderer';
+  const envelope = (file: string, roots: string[]) => ({
+    kind: 'render-error' as const,
+    exception: {
+      type: 'TypeError',
+      message: 'Cannot read properties of undefined',
+      handled: true,
+      frames: markFrames(parseStack(`TypeError: x\n    at Render (file://${root}/${file}:1:1)`), roots),
+    },
+  });
+
+  it('two different throw sites used to collide into one group, and no longer do', async () => {
+    // This is the actual damage. defaultFingerprintParts filters to in-app frames, so with no
+    // roots there are zero frame parts and every render error with the same message — wherever
+    // it threw — hashed to the same fingerprint and merged into a single group.
+    const collidedA = await computeFingerprint(effectiveFingerprintParts(envelope('Checkout.jsx', [])));
+    const collidedB = await computeFingerprint(effectiveFingerprintParts(envelope('Settings.jsx', [])));
+    expect(collidedA).toBe(collidedB);
+
+    const separateA = await computeFingerprint(effectiveFingerprintParts(envelope('Checkout.jsx', [root])));
+    const separateB = await computeFingerprint(effectiveFingerprintParts(envelope('Settings.jsx', [root])));
+    expect(separateA).not.toBe(separateB);
+
+    // And the upgrade moves an existing group: old reports keep their fingerprint, new ones do
+    // not merge with them. That is the regrouping the changelog has to lead with.
+    expect(separateA).not.toBe(collidedA);
   });
 });

@@ -2295,3 +2295,71 @@ Its path pattern captures a leading boundary rather than using a lookbehind, whi
 parse error in older Safari, and this module is reachable from the browser entry. The cost is
 that a path containing a space is redacted only up to the space; it still removes the user's
 name, and eating the rest of the sentence would defeat the policy's whole purpose.
+
+## 28. `inlet-sdk` 0.1.4: a requirement as narrow as the fix
+
+0.1.3 closed "the Electron renderer's application root is wrong for a packaged app" by fixing
+`installElectronRenderer`. The integrator came back the same day: `createErrorBoundary` takes
+its own `appRoots` defaulting to `[]`, so deleting their workaround on the strength of the
+changelog would have turned every React render-error frame external again — the same failure,
+one function over. They were right, and they stopped two short of the whole of it.
+
+### 28.1 Four defaults, no derivation
+
+`markFrames` marks a frame in-app when its file sits under an application root and rewrites
+every other frame's file to `<external>`. Four call sites decided those roots independently:
+
+- `electron-renderer.ts` — a private `defaultAppRoots()`, fixed in 0.1.3.
+- `react.ts` — `[]`, in both `componentStackToFrames` and the no-component-stack fallback.
+- `browser.ts` — `[location.origin]`, the original bug, never touched.
+- `client.ts` — `this.options.appRoots ?? []`, which is what an application gets when it calls
+  `init` from the bare `inlet-sdk/crash` entry in a browser.
+
+The fix is one exported derivation in `stack.ts` that all four default to. `stack.ts` is its
+home rather than a new module because it already owns `markFrames`, `normalizeRoot` and
+`cleanFile`, and the 0.1.3 defect was precisely those disagreeing with a root computed
+elsewhere: `cleanFile` strips `file://` off every frame while `normalizeRoot` reduced the origin
+`"file://"` to `"file:"`, matching nothing. Both ends of that mismatch now sit in one file.
+
+`client.ts` resolves its roots once in the constructor rather than at each capture, which is how
+every other entry already behaved. The lazy version was written first and a test caught it: a
+stub of `location` present at construction was gone by the time the first capture derived from
+it, which is a fair model of an application that navigates.
+
+**The lesson is in the requirement, not only the code.** CR-115 read "*the Electron renderer
+entry* shall detect the application's own code under the `file:` protocol". The implementation
+matched its scope exactly. A requirement that names one call site cannot catch a defect that
+lives in four, so the specification and the code were wrong in the same place and neither could
+review the other. CR-115 is widened rather than supplemented.
+
+### 28.2 The damage was grouping, not labelling
+
+`defaultFingerprintParts` filters to in-app frames before contributing `frame:` parts. An entry
+with no roots therefore contributes **none**, and the fingerprint reduces to kind, type and
+normalized message — so every React render error sharing a message merged into a single group
+however far apart the code that threw. The visible symptom was `<external>` in a stack; the
+actual cost was a triage view that could not tell two unrelated bugs apart.
+
+Fixing the roots appends up to five frame parts, so reports from an upgraded application
+fingerprint differently and separate by throw site. Existing groups keep their reports and
+nothing merges them, which is why the changelog leads with it: one familiar group replaced by
+several new ones is indistinguishable from a regression unless it is named first.
+
+`CRASH_GROUPING_VERSION` is deliberately not bumped. Its contract is to bump when
+`defaultFingerprintParts` or `normalizeCrashMessage` changes; this changes neither, only the
+inputs they are handed. A bump would also not help, since by design it never regroups a database
+that already exists.
+
+### 28.3 `redactPatterns` is a denylist, and now says so
+
+The integrator declined it, correctly. It replaces paths, addresses, URLs and opaque tokens with
+markers, which is a denylist by shape: a workspace name, a project title or a bare filename
+matches nothing and travels. Their product promises crash reports are content-free *by
+construction*, and only an allowlist delivers that.
+
+The policy is unchanged; the claim around it was wrong. The 0.1.2 README called it "the right
+default for most application code" with no qualification — a sentence that would let someone
+with exactly that promise adopt it and believe the promise still held. The doc comment, the
+README and CR-117 now all state the limit. Adding more patterns would have been the wrong
+answer: it makes the denylist longer without making it a guarantee, and implies the guarantee
+more strongly.

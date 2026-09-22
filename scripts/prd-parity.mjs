@@ -32,8 +32,16 @@ const normalise = (text) => {
 };
 
 const [, , notionJson, mirrorPath] = process.argv;
+// The fetch tool persists its result in two shapes depending on size: an array of content
+// blocks whose `text` is itself JSON, or the bare object. Accept either, and a raw page dump.
 const fetched = JSON.parse(readFileSync(notionJson, 'utf8'));
-const page = JSON.parse(Array.isArray(fetched) ? fetched[0].text : fetched.text).text;
+const outer = Array.isArray(fetched) ? fetched[0].text : fetched.text;
+let page;
+try {
+  page = JSON.parse(outer).text;
+} catch {
+  page = outer;
+}
 const notion = normalise(page.split('<content>')[1].split('</content>')[0]);
 // The mirror carries a title heading and a back-link to the page; the page has neither.
 const mirror = normalise(readFileSync(mirrorPath, 'utf8')).filter(

@@ -95,6 +95,12 @@ export const keepMessages: RedactionPolicy = (message) => message;
  *
  * `'Wallet sync failed after 3 retries'` survives intact;
  * `'/Users/alice/secret.docx could not be opened'` becomes `'<path> could not be opened'`.
+ *
+ * **It is a denylist, so it is best effort.** It removes the shapes it knows about and cannot
+ * promise a message carries no content: a workspace name, a project title or a bare filename
+ * matches none of these patterns and travels. An application that must guarantee its reports
+ * are content-free needs an allowlist — `defaultRedaction`, or `redactExcept` with its own
+ * safe shapes — because no set of patterns can deliver that guarantee by construction.
  */
 const SENSITIVE: [RegExp, string][] = [
   // URLs first: one contains slashes and would otherwise be eaten by the path pattern.

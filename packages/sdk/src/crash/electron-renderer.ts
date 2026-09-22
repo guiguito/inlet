@@ -1,4 +1,4 @@
-import { markFrames, parseStack } from './stack.js';
+import { defaultAppRoots, markFrames, parseStack } from './stack.js';
 import type { CrashFrame, CrashKind, CrashReportInput } from './types.js';
 
 /**
@@ -43,34 +43,6 @@ export function installElectronRenderer(options: ElectronRendererOptions = {}): 
     window.removeEventListener('unhandledrejection', onRejection);
   };
   return capture;
-}
-
-/**
- * CR-115: the application's own code, as this renderer sees it.
- *
- * Under `file:` — which is every packaged Electron app — `location.origin` is the string
- * `"file://"`, which `normalizeRoot` in stack.ts reduces to `"file:"`, which matches nothing.
- * Meanwhile `cleanFile` strips `file://` off every frame, so the frames are plain paths. The
- * two ends disagreed and every frame in a packaged renderer came out `<external>` — unreadable
- * in production, and only in production, because a dev renderer is served over http.
- *
- * Both the raw and the decoded directory are returned: V8 reports file URLs percent-encoded
- * while `pathname` may hand back either, and `markFrames` takes the first root that matches,
- * so a second entry costs nothing. The leading slash stays — on Windows a frame reads
- * `/C:/app/x.js` once `file://` is gone, and so does `pathname`.
- */
-function defaultAppRoots(): string[] {
-  if (typeof location === 'undefined') return [];
-  if (location.protocol !== 'file:') return [location.origin];
-  const dir = location.pathname.replace(/\/[^/]*$/, '');
-  if (!dir) return [];
-  let decoded = dir;
-  try {
-    decoded = decodeURIComponent(dir);
-  } catch {
-    // A malformed escape: the raw form is still the better root.
-  }
-  return decoded === dir ? [dir] : [dir, decoded];
 }
 
 function defaultRendererSend(): (channel: string, envelope: CrashReportInput) => void {

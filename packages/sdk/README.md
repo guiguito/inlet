@@ -538,7 +538,7 @@ the diagnostic half and usually carry no user data at all. Pick a policy deliber
 | Policy | What it sends |
 | --- | --- |
 | `defaultRedaction` | The default. Allowlists by *shape*: known runtime messages verbatim, everything else `<redacted>`, keeping an errno-shaped leading token (`ENOENT:`, `ERR_MODULE_NOT_FOUND`). Safest, and quietest. |
-| `redactPatterns` | Redacts by *pattern* instead: paths, email addresses, URLs, IP addresses and long opaque tokens become markers and the sentence around them survives. The right default for most application code. |
+| `redactPatterns` | Redacts by *pattern* instead: paths, email addresses, URLs, IP addresses and long opaque tokens become markers and the sentence around them survives. A **denylist**, so best effort — see below. |
 | `redactExcept([/^…/])` | Your own safe shapes verbatim; everything else as `defaultRedaction`. |
 | `keepMessages` | Everything verbatim. For applications that know their messages carry no user data. |
 
@@ -550,9 +550,16 @@ init({ ..., redaction: redactPatterns });
 // '/Users/alice/secret.docx could not be opened' -> '<path> could not be opened'
 ```
 
-`redactPatterns` is not the default because changing what a crash reporter reports is worse
-than an awkward default, and this one has already moved once. A path containing spaces is
-redacted only up to the first space, which still removes the user's name.
+`redactPatterns` is a **denylist**, and that is a real limit rather than a footnote: it removes
+the shapes it knows and cannot promise a message is free of content. A workspace name, a project
+title or a bare filename matches none of its patterns and will be sent. If your product promises
+that crash reports are content-free *by construction*, you need an allowlist — `defaultRedaction`
+or `redactExcept` — because no set of patterns can give you that. `redactPatterns` is for
+applications that want their own diagnostics readable and are willing to review what they write.
+
+It is not the default either, because changing what a crash reporter reports is worse than an
+awkward default and this one has already moved once. A path containing spaces is redacted only
+up to the first space, which still removes the user's name.
 
 Group titles never depend on the message — they come from the error type and the top in-app
 frame — so a redacted message costs you less than it appears to.
@@ -571,7 +578,7 @@ frame — so a redacted message costs you less than it appears to.
 | `onDrop(reason, detail)` | Why a report was dropped. |
 | `timeoutMs` | Per-request timeout. Default 20000. |
 | `redaction(message)` | See above. |
-| `appRoots` | Paths or URL prefixes that are your code. Adapters detect a default. |
+| `appRoots` | Paths or URL prefixes that are your code. Derived per protocol when omitted — the origin over http, the document's directory under `file:` — by the exported `defaultAppRoots()`. Node and Electron main use the working directory and the app path. |
 | `dedupe` | See above. |
 | `queueSize`, `store` | The queue ceiling (at most 200) and where it lives. |
 | `tags` | Attached to every event. |

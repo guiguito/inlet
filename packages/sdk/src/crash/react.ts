@@ -1,4 +1,4 @@
-import { markFrames, parseStack } from './stack.js';
+import { defaultAppRoots, markFrames, parseStack } from './stack.js';
 import type { CaptureOptions, CrashFrame, CrashReportInput } from './types.js';
 
 /**
@@ -29,7 +29,7 @@ export type ErrorBoundaryProps = {
   tags?: Record<string, string>;
 };
 
-export function componentStackToFrames(componentStack: string | null | undefined, appRoots: string[] = []): CrashFrame[] {
+export function componentStackToFrames(componentStack: string | null | undefined, appRoots: string[] = defaultAppRoots()): CrashFrame[] {
   if (!componentStack) return [];
   const frames: CrashFrame[] = [];
   for (const raw of componentStack.split('\n')) {
@@ -68,14 +68,14 @@ export function createErrorBoundary(
     }
 
     componentDidCatch(error: Error, info: { componentStack?: string | null }): void {
-      const frames = componentStackToFrames(info.componentStack, options.appRoots);
+      const frames = componentStackToFrames(info.componentStack, options.appRoots ?? defaultAppRoots());
       capture({
         kind: 'render-error',
         exception: {
           type: error.name || 'Error',
           message: error.message,
           handled: true,
-          frames: frames.length > 0 ? frames : markFrames(parseStack(error.stack), options.appRoots ?? []),
+          frames: frames.length > 0 ? frames : markFrames(parseStack(error.stack), options.appRoots ?? defaultAppRoots()),
         },
         ...(this.props.tags || options.captureOptions?.tags ? { tags: { ...(options.captureOptions?.tags ?? {}), ...(this.props.tags ?? {}) } } : {}),
         ...(options.captureOptions?.context ? { context: options.captureOptions.context } : {}),
