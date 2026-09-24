@@ -1,13 +1,13 @@
 # Inlet — Feedback Collection PRD
 
 ## Document Status
-**Status:** Shipped through Release 5, and Release 7 — SDK; requirements baseline for maintenance
+**Status:** Shipped through Release 5, and Release 7 — SDK; requirements baseline for maintenance. Release 8 adds the shared SDK identity on submissions and a React Native adapter (FR-204 amended, FR-211 added), specified here and not yet built.
 **Product:** Inlet — Feedback Collection capability
 **Language:** English
 **Foundations:** Every shared rule (accounts, roles, keys, notifications plumbing, export, deletion, deployment, brand, SDK and MCP conventions) is on the Foundations PRD and is not repeated here.
 **Notion page:** https://app.notion.com/p/3ddd33dfffca81c98977df8dac6975b0
 **Repository mirror:** `docs/prd/feedback-collection.md`
-**Last revised:** September 18, 2026 (section 25 shipped as Release 7)
+**Last revised:** September 24, 2026 (Release 8: FR-211 added; FR-062, FR-062B, FR-066, FR-111, FR-190, FR-191, FR-198, FR-201, FR-204 and sections 9.2, 10.10, 25.5, 25.6 and 25.7 amended for the shared SDK identity and React Native)
 
 > **Provenance.** This page absorbs sections 7.1–7.3, 8.4, 8.5, 8.6, 8.9, 8.10, 9.1–9.4, 10.5, 10.7–10.11, 10.13, 12.4, 13, 15, 21, 22 and 24 of the unified PRD, plus the feedback-specific lines of sections 3, 4, 6, 9.6, 11, 12.2, 12.3, 14, 16 and 17. Section 23 (notifications) moved to Foundations as a shared mechanism; what a response notification contains is still defined there (FR-159 to FR-161, FR-171).
 
@@ -132,15 +132,15 @@ Sections 8.1, 8.2, 8.3, 8.7, 8.8 and 8.11 are on the Foundations PRD. Deleting a
 ### 8.6 Response Collection and Review
 - **FR-060:** No respondent account or identity is required. A submission becomes contactable only when the form contains an email question and the respondent provides an address. The observed request IP address is recorded as operational metadata.
 - **FR-061:** The service shall store submitted answers in JSON or an equivalent flexible structured representation.
-- **FR-062:** Each submission shall record its feedback database, form version, submission intent, server-side submission timestamp, observed request IP address, answers, and optional client context.
+- **FR-062:** Each submission shall record its feedback database, form version, submission intent, server-side submission timestamp, observed request IP address, answers, optional client context, and, when supplied, the installation, session and user IDs of the SDK identity (FR-204), the installation and session IDs stored as lowercase dashed text whatever form the client sends (UX Analytics §9.1).
 - **FR-062A:** Client applications may provide an arbitrary JSON `clientContext` object of up to 16 KiB when serialized as UTF-8, for values such as their own user ID, browser information, respondent IP as observed by the integrator, or application metadata.
-- **FR-062B:** The platform shall preserve `clientContext` as supplied and make clear that the integrating platform user is responsible for its contents and lawful use.
+- **FR-062B:** The platform shall preserve `clientContext` as supplied, except that in it and in the answers every string has its lone surrogates replaced with U+FFFD and its U+0000 characters removed, as crash reports do (Crash Reports CR-011), because PostgreSQL refuses both in `jsonb`; and it shall make clear that the integrating platform user is responsible for its contents and lawful use.
 - **FR-062C:** The observed request IP shall be resolved after applying the deployment's trusted-proxy configuration. For server-to-server submissions it identifies the integrating server, not the respondent; the platform shall not present it as respondent location.
 - **FR-063:** Authorized users shall be able to list submissions for a feedback database. How that list presents a response, and what it records about who has read what, is specified in section 24.
 - **FR-064:** Authorized users shall be able to open an individual submission.
 - **FR-064A:** An Admin shall be able to permanently delete an individual submission and its attachments.
 - **FR-065:** The management interface shall display answers using the element labels and option labels from the relevant form version.
-- **FR-066:** The product shall not require personally identifiable respondent data. Email collection shall occur only through an explicitly configured email question and shall not automatically link the submission to a platform account or behavioral profile. Client-supplied metadata may contain identifiers; the platform stores it opaquely.
+- **FR-066:** The product shall not require personally identifiable respondent data. Email collection shall occur only through an explicitly configured email question and shall not automatically link the submission to a platform account. A submission carrying the SDK identity (FR-204) is shown beside the analytics profile with the same IDs (UX Analytics AN-124, AN-154); nothing else links it. Client-supplied metadata may contain identifiers; the platform stores it opaquely.
 - **FR-067:** Every uploaded screenshot shall belong to exactly one submission intent and one screenshot-upload question. At finalization, referenced attachments are bound to the resulting submission; unreferenced attachments remain pending and expire with the intent.
 - **FR-068:** Authorized users shall be able to view or download screenshots from the submission detail view.
 - **FR-069:** Screenshots shall use stable authenticated URLs. The URL may remain stable, but every asset request shall require current authorization.
@@ -166,7 +166,7 @@ Sections 8.1, 8.2, 8.3, 8.7, 8.8 and 8.11 are on the Foundations PRD. Deleting a
 - **FR-099A:** The number of attachments referenced in a finalized submission shall not exceed five in total nor the per-question maximum. The number of uploads accepted per intent is capped by a separate platform limit to bound abuse.
 ### 8.10 Data Export
 - **FR-110:** Authorized users shall be able to export feedback database submissions through the API as CSV or JSON.
-- **FR-111:** Exports shall include raw answer data, including email addresses when collected, form version per submission, timestamp, observed IP, and `clientContext`.
+- **FR-111:** Exports shall include raw answer data, including email addresses when collected, form version per submission, timestamp, observed IP, `clientContext`, and the installation, session and user IDs when present.
 - **FR-112:** Screenshot answers shall be represented as stable authenticated asset URLs. Exports contain data only; screenshot files are not included and do not survive deletion of their feedback database.
 - **FR-113:** Export authorization shall follow the same project and feedback-database permissions as the management interface.
 - **FR-114:** JSON export shall preserve nested structures as stored. CSV export shall flatten multi-select answers and nested `clientContext`; the exact flattening rules are defined in the technical specification.
@@ -190,6 +190,7 @@ Intent creation shall be protected by the publishable or secret project key and 
 - Form version, which must equal the pinned version.
 - An array or map of answers keyed by stable question ID.
 - Optional arbitrary JSON `clientContext`, limited to 16 KiB when serialized as UTF-8.
+- Optional `installationId`, `sessionId` and `userId`, attached by the SDK under FR-204, fixed when `submit` is called, and not part of the payload compared for idempotency.
 - No required respondent identity.
 **Successful response should include:**
 - Submission ID.
@@ -276,6 +277,7 @@ Sections 10.1–10.4, 10.6 and 10.12 are on the Foundations PRD. Hosted Form (10
 - Optional client context JSON, maximum 16 KiB serialized as UTF-8
 - Server-side submission timestamp
 - Observed request IP address
+- Installation ID, session ID and user ID, each optional and indexed with the feedback database, for profile links and erasure
 ### 10.11 Attachment
 - ID
 - Submission intent ID
@@ -644,8 +646,8 @@ The SDK is **an additional way to integrate, not a replacement for the API or th
 
 ### 25.3 Functional Requirements
 **Surface**
-- **FR-190:** The module shall expose `init`, `getForm`, `createSession`, `flush` and `close`, the controller and snapshot types, and the answer types, and one entry per adapter: `inlet-sdk/feedback/node`, `inlet-sdk/feedback/browser`, `inlet-sdk/feedback/electron` with `installElectronMain` and `createElectronRenderer`, and `inlet-sdk/feedback/react` with `useFeedbackSession`. No other public surface in Release 7.
-- **FR-191:** `init` shall take the base URL, the publishable key and the feedback database ID, and optionally a static `clientContext` merged into every submission, a `beforeSend` hook, a `debug` hook, a queue store or persistence directory, and a `fetch` implementation. It shall share the `init` shape and the transport of `inlet-sdk/crash`, so that an application using both modules configures the base URL and key once (Foundations FD-011, FD-012). A secret key shall be refused at `init`.
+- **FR-190:** The module shall expose `init`, `getForm`, `createSession`, `flush` and `close`, the controller and snapshot types, and the answer types, and one entry per adapter: `inlet-sdk/feedback/node`, `inlet-sdk/feedback/browser`, `inlet-sdk/feedback/electron` with `installElectronMain` and `createElectronRenderer`, and `inlet-sdk/feedback/react` with `useFeedbackSession`, and, from Release 8, `inlet-sdk/feedback/react-native` (FR-211). No other public surface in Release 7.
+- **FR-191:** `init` shall take the base URL, the publishable key and the feedback database ID, and optionally a static `clientContext` merged into every submission, a `beforeSend` hook, a `debug` hook, a queue store or persistence directory, a `fetch` implementation, and `identity` (true by default, FR-204). It shall share the `init` shape and the transport of `inlet-sdk/crash`, so that an application using both modules configures the base URL and key once (Foundations FD-011, FD-012). A secret key shall be refused at `init`.
 - **FR-192:** `getForm` shall return the active published definition, typed element by element as section 9.1 describes it, cached for the life of the client with a way to refresh, and shall surface `form_not_published` as a typed result rather than an exception, so that a client can show a closed message without a try block.
 **The controller**
 - **FR-193:** A session shall pin one form version at creation, the active version by default or a version the client names. It shall obtain its submission intent lazily, on the first upload or the first submit, so that a form the respondent abandons on the first page costs no intent and no rate-limit budget.
@@ -653,15 +655,15 @@ The SDK is **an additional way to integrate, not a replacement for the API or th
 - **FR-195:** The controller shall validate answers against the pinned definition with the server's own rules before advancing a page and before submitting: required questions, a placeholder never satisfying one, character limits, no newline in a single-line question, email syntax, option membership, and screenshot count and media type. The rules shall come from `@inlet/shared` bundled into the package at build, exactly as the crash module bundles the fingerprint, so that the client and the server cannot disagree and the SDK still has no runtime dependency.
 - **FR-196:** A server `validation_failed` shall be mapped back onto the snapshot by question ID (FR-054), the page holding the first failing question shall become current, and the session shall stay in `editing`; a validation failure never consumes the intent (FR-092D).
 - **FR-197:** Page navigation shall belong to the controller, forwards and backwards, with no server call (FR-050). Answers shall survive navigation and be discarded on `abandon`.
-- **FR-198:** `addScreenshot(questionId, file)` shall check the file's media type and size against the question's `acceptedMediaTypes` and `maxFileBytes` from the definition before any request, upload it under the intent, report progress, and record the attachment as the server described it, at its stored dimensions and size rather than the source's. `removeScreenshot` shall drop the reference and release the upload through `DELETE …/attachments/{attachmentId}` on a best-effort basis; a failure to release is not an error, since an unreferenced upload expires with its intent. Screenshot bytes shall never be persisted by the module.
+- **FR-198:** `addScreenshot(questionId, file)` shall check the file's media type and size against the question's `acceptedMediaTypes` and `maxFileBytes` from the definition before any request, upload it under the intent, report progress, and record the attachment as the server described it, at its stored dimensions and size rather than the source's. `removeScreenshot` shall drop the reference and release the upload through `DELETE …/attachments/{attachmentId}` on a best-effort basis; a failure to release is not an error, since an unreferenced upload expires with its intent. Screenshot bytes shall never be persisted by the module. On React Native a file is a descriptor with `uri`, `name`, `type` and optionally `size`; when `size` is absent the local size check is skipped and the server's limit decides.
 - **FR-199:** `submit` shall finalize once, with every answer and the merged `clientContext`, treat a `duplicate` result as success, and return the submission ID and status. `submit` on a session already `submitted` shall return the original result without a request.
 - **FR-200:** When an intent expires while the session is still `editing`, the controller shall obtain a new intent against the same pinned version without involving the user interface, re-upload from memory any attachment whose bytes it still holds, and mark as lost any it does not, so that the snapshot tells the interface exactly which screenshot questions need re-attaching.
 **Transport and retry**
-- **FR-201:** A finalization that fails on transport shall become a pending submission in the shared transport: persisted on disk on Node and Electron and in IndexedDB in browsers, replayed on start and after every submit with exponential backoff, paused by `429` for its `Retry-After`, and never retried once the server has answered with any status, including `400`, `409` and `410`, since the intent guarantees that a replay of the same payload returns the same result and a different one is refused (FR-092C). While its finalization is pending the session stays `submitting`, and it becomes `submitted` or `failed` when the server answers. The transport holds at most 20 pending submissions.
+- **FR-201:** A finalization that fails on transport shall become a pending submission in the shared transport: persisted on disk on Node and Electron, in IndexedDB in browsers and in the injected store on React Native, replayed on start and after every submit with exponential backoff, paused by `429` for its `Retry-After`, and never retried once the server has answered with any status, including `400`, `409` and `410`, since the intent guarantees that a replay of the same payload returns the same result and a different one is refused (FR-092C). While its finalization is pending the session stays `submitting`, and it becomes `submitted` or `failed` when the server answers. The transport holds at most 20 pending submissions.
 - **FR-202:** A pending submission shall not be dropped locally when its intent's `expiresAt` passes. The SDK cannot know whether the server finalized the intent before the response was lost, and a finalized intent never expires (FR-092F), so the replay is what settles it: the server answers with the original result when it had the submission, and with `intent_expired` when it never did, and either answer ends the retry. A pending submission the server has not answered within seven days shall be dropped with a message through the debug hook.
 - **FR-203:** The module shall never hold two finalizations for one intent. A `submit` whose payload differs from a pending one for the same intent shall be refused locally, so that `intent_payload_conflict` is never produced by the SDK's own retry.
 **What is sent**
-- **FR-204:** The module shall send only what the client API contract names: the answers the respondent gave, the attachment IDs, the pinned form version, and the `clientContext` the integrator supplied. It shall never send automatically the page address, the user agent, the referrer, the language, the viewport, cookies, timing, or any identifier (Foundations FD-014). The hosted form records such operational context because it is the client (FR-148); the SDK is a library inside somebody else's client and records nothing on its own.
+- **FR-204:** The module shall send only what the client API contract names: the answers the respondent gave, the attachment IDs, the pinned form version, and the `clientContext` the integrator supplied. It shall never send automatically the page address, the user agent, the referrer, the language, the viewport, cookies, timing, or any identifier other than the SDK identity of Foundations FD-016: unless initialised with `identity: false`, it attaches the session ID, the user ID when one is set, and the installation ID only while an analytics client of the same application is enabled, and only to a deployment whose `/v1/health` lists `identity` (Foundations FD-014). The hosted form records such operational context because it is the client (FR-148); the SDK is a library inside somebody else's client and gathers no context of its own; without an enabled analytics client, the identity it attaches lives in memory only.
 - **FR-205:** `beforeSend` shall receive the finalization payload before it is queued and may return it, a changed one, or `null` to drop it. `clientContext` shall be measured against its 16 KiB limit (FR-062A) before queueing, and an oversized one shall fail `submit` locally with a typed error rather than leaving a `400` for the server.
 **Adapters**
 - **FR-206:** `inlet-sdk/feedback/browser` shall use `fetch` and `FormData`, keep pending submissions in IndexedDB and fall back to memory for the life of the page when IndexedDB is unavailable, saying so through the debug hook. It runs on the integrator's origin and depends on the cross-origin exception in 25.4.
@@ -670,6 +672,7 @@ The SDK is **an additional way to integrate, not a replacement for the API or th
 - **FR-209:** `inlet-sdk/feedback/react` shall export `useFeedbackSession`, which subscribes a component to a controller and returns the current snapshot with the actions bound. It shall take `React` as a parameter rather than importing it, so the package has no peer dependency and an application without React never loads it. The documentation shall present it as one binding of the controller among others and show a second framework using the controller directly.
 **Packaging**
 - **FR-210:** The module shall be a subpath of `inlet-sdk` under Foundations FD-010 to FD-014, versioned with the package, and shall perform the minimum-server check on first use by reading `/v1/health`, whose `capabilities` shall name cross-origin feedback collection so that a deployment older than Release 7 is told apart from an unreachable one.
+- **FR-211:** `inlet-sdk/feedback/react-native` shall take an AsyncStorage-compatible store as a parameter and import nothing, keep pending submissions in that store, upload screenshots from file descriptors through React Native's `FormData`, and work with `useFeedbackSession` from `inlet-sdk/feedback/react` unchanged. It needs React Native 0.74 or later, generates IDs as UX Analytics AN-239 says without relying on `crypto`, times requests out without `AbortSignal.timeout`, keeps its pending submissions under 1 MB by default, adjustable at `init`, and is published so that Metro resolves it without package-exports support (UX Analytics AN-239).
 
 ### 25.4 API and Foundations Additions
 No new endpoint, credential, role, notification kind or deployment service is required (Foundations FD-009). The credential matrix in 9.6 is unchanged: the SDK is a client of the four publishable-key rows and of nothing else.
@@ -683,7 +686,7 @@ Two platform changes are required, both on the Foundations PRD:
 - The SDK never issues two finalizations with different payloads for one intent.
 - A pending submission outlives the page and the process, until the server answers it.
 - There is no path to a stored submission other than finalization of an intent. The SDK adds none; it is a client of the same path the hosted form and the raw API use.
-- The SDK stores nothing about the respondent and sends nothing the integrator did not name.
+- The SDK stores nothing about the respondent and sends nothing the integrator did not name, apart from the SDK identity under FR-204.
 - Which framework draws the form is the integrator's decision and invisible to the platform.
 
 ### 25.6 Acceptance Criteria
@@ -702,7 +705,9 @@ Two platform changes are required, both on the Foundations PRD:
 - The Electron renderer bundle contains no publishable key and performs no HTTP request; every step is observed on the IPC channel.
 - `useFeedbackSession` re-renders on every snapshot change, and a second framework in the documentation drives the same controller with React absent from the installation.
 - A page on `https://app.example` retrieves the form, uploads and submits to `https://inlet.example` with no proxy; from the same origin, listing submissions still fails its preflight.
-- A captured finalization body contains exactly the form version, the answers, the attachment IDs and the integrator's `clientContext`, and nothing else.
+- A captured finalization body contains exactly the form version, the answers, the attachment IDs and the integrator's `clientContext`, the identity fields only under FR-204, and nothing else.
+- With no analytics client in the application, a finalization body from `inlet-sdk` 0.2.0 carries a session ID and no installation ID; with `identity: false` it carries no identity field.
+- The React Native adapter submits a screenshot from a file descriptor, and a submission pending when the application is killed is delivered on the next launch.
 
 ### 25.7 Release Plan
 **Release 7 — SDK.** Goal: a web, Node or Electron application integrates feedback in an afternoon with the package it already has for crashes, and `inlet-sdk` is published to npm with both modules.
@@ -711,3 +716,4 @@ Two platform changes are required, both on the Foundations PRD:
 - Server: the cross-origin hook widened to the four feedback routes and the intent-token header, with the test that pins the closed set updated to match; the answer validation rules moved into `@inlet/shared` so the SDK can bundle them (FR-195); the Integrate panel of a feedback database gains an SDK snippet beside the existing API snippet, and keeps both.
 - Package: `inlet-sdk` with the `./feedback` entries; the README gains a Feedback section of the same shape as the Crash one: install, browser, Node, Electron, a React binding and a second binding, what gets sent, delivery, options.
 - Not in Release 7: a rendered widget or component library, partial-response saving, respondent identity, a script-tag build, and official Vue or Svelte bindings. Each is a separate decision, and none is needed to integrate a form.
+- Release 8, with UX Analytics: FR-211 added; FR-062, FR-062B, FR-066, FR-111, FR-190, FR-191, FR-198, FR-201, FR-204 and sections 9.2, 10.10, 25.5 and 25.6 amended. From `inlet-sdk` 0.2.0 a submission carries a session ID, which `identity: false` removes, and a React Native application collects feedback with the same controller.

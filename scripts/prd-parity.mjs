@@ -2,8 +2,8 @@
  * Diffs a Notion PRD page against its `docs/prd` mirror.
  *
  * The two are meant to be the same document, but Notion's markdown serializer is not a
- * round trip: tables come back as `<td>` cells rather than pipe rows, `~` is escaped, and a
- * bare domain is auto-linked. Those are read-time artifacts — rewriting them in Notion just
+ * round trip: tables come back as `<td>` cells rather than pipe rows, `~` is escaped, a
+ * bare domain is auto-linked, and child pages are listed as `<page>` blocks. Those are read-time artifacts — rewriting them in Notion just
  * produces them again — so they are normalised away here rather than chased. Anything this
  * still reports is real drift.
  *
@@ -17,6 +17,9 @@ const normalise = (text) => {
     line = line.trimEnd();
     if (!line.trim()) continue;
     if (/^<\/?(table|tr)\b/.test(line)) continue;
+    // A child page is listed on its parent as a `<page>` block. It is the page tree, not the
+    // parent's text, and a mirror has no page tree to put it in.
+    if (/^<page\b/.test(line)) continue;
     line = line.replaceAll('\\~', '~').replace(/\[([^\]]+)\]\(https?:\/\/[^)]+\)/g, '$1');
     const cell = /^<t[dh]>(.*)<\/t[dh]>$/.exec(line);
     if (cell) { out.push(`CELL: ${cell[1]}`); continue; }
