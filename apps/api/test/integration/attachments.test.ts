@@ -626,6 +626,31 @@ describe('screenshot attachments', () => {
     expect(errorCode(response)).toBe('intent_payload_conflict');
   });
 
+  it('the object store keeps the lifecycle rule that expires pending uploads, filtered by their tag (FR-067)', async () => {
+    // The harness calls ensureLifecycleRule and ignores the answer, so a store that refused
+    // the rule would pass every other test while abandoned uploads piled up for ever. This is
+    // the property any replacement for the bundled store must have (DECISIONS.md 30).
+    expect(await h.ctx.storage.ensureLifecycleRule()).toBe(true);
+    const { GetBucketLifecycleConfigurationCommand, S3Client } = await import('@aws-sdk/client-s3');
+    const client = new S3Client({
+      region: 'us-east-1',
+      endpoint: 'http://127.0.0.1:9010',
+      forcePathStyle: true,
+      credentials: { accessKeyId: 'inletdev', secretAccessKey: 'inletdevsecret' },
+    });
+    try {
+      const { Rules } = await client.send(new GetBucketLifecycleConfigurationCommand({ Bucket: 'inlet-test' }));
+      const rule = Rules?.find((candidate) => candidate.Filter?.Tag?.Key === PENDING_TAG.key);
+      expect(rule).toMatchObject({
+        Status: 'Enabled',
+        Filter: { Tag: { Key: PENDING_TAG.key, Value: PENDING_TAG.value } },
+        Expiration: { Days: h.ctx.env.INLET_PENDING_UPLOAD_EXPIRY_DAYS },
+      });
+    } finally {
+      client.destroy();
+    }
+  });
+
   async function tagOf(key: string): Promise<string | undefined> {
     const { GetObjectTaggingCommand, S3Client } = await import('@aws-sdk/client-s3');
     const client = new S3Client({

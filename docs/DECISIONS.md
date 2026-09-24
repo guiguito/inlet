@@ -2526,3 +2526,39 @@ Commit `0a8cf7c` added `inlet-sdk` to the root `npm run build`, but the Dockerfi
 copies `packages/sdk`, so `docker compose up --build` failed with "No workspaces found:
 --workspace=inlet-sdk". The image now runs `npm run build:server`, which builds exactly what
 the server ships. The SDK is published to npm and never served, so it stays out of the image.
+
+### 30.2 RustFS, evaluated (September 25, 2026)
+
+RustFS 1.0.0 (`rustfs/rustfs:1.0.0`, GA on September 16, 2026, Apache-2.0, amd64 and arm64)
+was run in place of MinIO everywhere Inlet uses an object store:
+
+| Check | Result |
+| --- | --- |
+| API integration suite (366 tests: uploads, retagging on submit, purge on delete, logos) | All pass |
+| End-to-end suite (83 tests, SDKs, hosted forms, UI) | All pass |
+| The tag-filtered lifecycle rule Inlet writes, read back | Stored exactly: `Filter.Tag inlet-state=pending`, `Expiration.Days 1` |
+| That rule enforced (an expiration date in the past) | The `pending` object deleted within 10 s, the `bound` one kept; MinIO behaves the same |
+| The bundled compose stack, fresh volume | Healthy as UID 10001; no lifecycle warning; a full flow with a screenshot |
+| Copying an existing MinIO bucket into it | 25/25 objects identical, with their tags and content types |
+| Memory at idle | ~100 MB, as MinIO |
+
+The evaluation also found a gap in the suite: nothing asserted that the store accepts the
+lifecycle rule, since the harness ignores `ensureLifecycleRule()`'s answer. A test in
+`attachments.test.ts` now does, and fails for any store that refuses it.
+
+What counts against it:
+
+- **It cannot read MinIO's data directory** (that compatibility is a preview). An existing
+  deployment upgrading by `git pull && docker compose up` would start on an empty bucket and
+  every stored screenshot would 404. Switching the default therefore needs a copy step,
+  which the test above shows is straightforward: list, then object, tags and content type.
+- **It is young and audited hard.** 35 security advisories in 2026, several high or
+  critical — IAM condition handling, the admin API, FTP, and a stored XSS in the console.
+  Inlet uses none of the affected features except the console: one root credential, no IAM
+  policies, no presigned URLs, no FTP, no Object Lock, a private bucket. The console port
+  should not be published by default, and the pinned version needs tracking.
+
+It clears the bar the bundled store has to clear. Whether to switch, and when, is the
+owner's call; the recommendation is in the conversation of September 25 and is to switch
+with a migration command and an unpublished console, rather than to keep an archived
+server that will never be fixed.
