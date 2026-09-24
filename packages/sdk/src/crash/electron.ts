@@ -241,6 +241,11 @@ export async function installElectronMain(
       now: () => Date.now(),
       intervalMs: (typeof uncleanExit === 'object' ? uncleanExit.intervalMs : undefined) ?? SENTINEL_INTERVAL_MS,
       debug,
+      release: {
+        version: client.options.release,
+        ...(client.options.build ? { build: client.options.build } : {}),
+        ...(client.options.channel ? { channel: client.options.channel } : {}),
+      },
     });
     sentinel = started;
     if (started.previous) {
@@ -249,8 +254,12 @@ export async function installElectronMain(
       // untitled group. One group for "the app died without quitting" is right — they are one
       // event class — but a run whose sentinel was unreadable means something else.
       const known = started.previous.lastUptimeMs !== undefined;
+      // CR-119: a previous-run report. It carries the release the sentinel recorded and no
+      // session of this run; only an enabled analytics client records a session to carry.
       void client.captureReport({
         kind: 'unclean-exit',
+        previousRun: true,
+        ...(started.previous.release ? { release: started.previous.release } : {}),
         exit: {
           reason: known ? 'unclean-exit' : 'unclean-exit-corrupt-sentinel',
           ...(known ? { lastUptimeMs: started.previous.lastUptimeMs } : {}),

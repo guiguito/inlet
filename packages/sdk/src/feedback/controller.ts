@@ -10,6 +10,7 @@ import type {
   PublishedForm,
   QuestionValidation,
   Result,
+  ReactNativeFile,
   ScreenshotSource,
   ScreenshotState,
   SessionStatus,
@@ -611,6 +612,11 @@ export function sniffImageMediaType(bytes: Uint8Array): string {
 }
 
 /** What the SDK can tell about a file before it uploads it (FR-198). */
+/** FR-211: an image picker's `{ uri, name, type }`, which only React Native's FormData can send. */
+export function isReactNativeFile(file: ScreenshotSource): file is ReactNativeFile {
+  return typeof (file as { uri?: unknown }).uri === 'string' && !(file instanceof Blob) && !(file instanceof Uint8Array);
+}
+
 function describe(file: ScreenshotSource): { mediaType: string; bytes: number; filename?: string } {
   if (file instanceof Blob) {
     const named = file as Blob & { name?: string };
@@ -618,6 +624,10 @@ function describe(file: ScreenshotSource): { mediaType: string; bytes: number; f
   }
   if (file instanceof Uint8Array) {
     return { mediaType: sniffImageMediaType(file), bytes: file.byteLength };
+  }
+  if (isReactNativeFile(file)) {
+    // FR-198: no size, no local check; the server's limit decides.
+    return { mediaType: file.type, bytes: file.size ?? 0, filename: file.name };
   }
   return {
     mediaType: file.mediaType,

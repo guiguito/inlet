@@ -21,7 +21,9 @@ COPY packages/shared packages/shared
 COPY apps/api apps/api
 COPY apps/mcp apps/mcp
 COPY apps/web apps/web
-RUN npm run build
+# What the server ships, and only that: the SDK is published to npm, not served, and is not
+# in this build context, so the root `build` (which includes it) cannot run here.
+RUN npm run build:server
 
 # Drop the dev dependencies from the tree that ships.
 RUN npm prune --omit=dev

@@ -11,6 +11,7 @@ import {
   SLACK_CONTENT_LEVELS,
   TYPEFACES,
   answersInputSchema,
+  identityUuidSchema,
   formDefinitionSchema,
   hexColorSchema,
   originSchema,
@@ -512,6 +513,11 @@ export const finalizeBodySchema = z.object({
     .describe(
       `Arbitrary JSON kept as supplied, at most ${LIMITS.clientContextMaxBytes} bytes as UTF-8.`,
     ),
+  // FR-204, Foundations FD-016: the SDK identity. Stored with the submission, never part
+  // of the payload a retry is compared on (FR-092C).
+  installationId: identityUuidSchema.optional().describe('The SDK installation ID (a UUID), sent only alongside an enabled analytics client.'),
+  sessionId: identityUuidSchema.optional().describe('The SDK session ID (a UUID).'),
+  userId: z.string().min(1).max(128).optional().describe('The opaque user ID the integrator set in the SDK.'),
 });
 
 export const finalizeResultSchema = z.object({
@@ -555,6 +561,9 @@ export const submissionSummarySchema = z.object({
   observedIp: z.string().nullable(),
   answers: z.record(z.string(), storedAnswerSchema),
   clientContext: z.unknown().nullable(),
+  installationId: z.string().nullable().describe('FR-062: the SDK installation ID, lowercase and dashed, when supplied.'),
+  sessionId: z.string().nullable().describe('FR-062: the SDK session ID, lowercase and dashed, when supplied.'),
+  userId: z.string().nullable().describe('FR-062: the opaque user ID the integrator set in the SDK, when supplied.'),
   attachmentCount: z.int(),
   firstAttachmentId: z
     .string()

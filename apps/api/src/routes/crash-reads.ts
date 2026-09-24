@@ -2,6 +2,7 @@ import { Readable } from 'node:stream';
 import { z } from 'zod';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { and, eq, inArray, sql, type SQL } from 'drizzle-orm';
+import { identityUuidSchema } from '@inlet/shared';
 import type { AppContext } from '../context.js';
 import { crashGroups, crashReleases, crashReports } from '../db/schema.js';
 import { apiError } from '../lib/errors.js';
@@ -31,6 +32,9 @@ export const groupFiltersSchema = z.object({
   arch: z.string().max(16).optional(),
   environment: z.string().max(32).optional(),
   userId: z.string().max(128).optional(),
+  // CR-040: the shared SDK identity, any letter case, with or without dashes.
+  installationId: identityUuidSchema.optional(),
+  sessionId: identityUuidSchema.optional(),
   since: z.iso.datetime({ offset: true }).optional(),
   until: z.iso.datetime({ offset: true }).optional(),
   q: z.string().max(200).optional().describe('Matches the exception type and the sample message.'),
@@ -107,6 +111,8 @@ const reportSchema = z.object({
   environment: z.string(),
   os: z.object({ name: z.string().nullable(), version: z.string().nullable(), arch: z.string().nullable() }),
   userId: z.string().nullable(),
+  installationId: z.string().nullable().describe('CR-118: the SDK installation ID, lowercase and dashed.'),
+  sessionId: z.string().nullable().describe('CR-118: the SDK session ID, lowercase and dashed.'),
   envelope: z.unknown().describe('The envelope as received (section 9.1). `context` is integrator-supplied and unreviewed.'),
 });
 
@@ -138,6 +144,9 @@ export function groupWhere(databaseId: string, f: Filters): SQL {
   }
   if (f.arch) parts.push(sql`exists (select 1 from crash_reports r where r.crash_group_id = g.id and r.arch = ${f.arch})`);
   if (f.userId) parts.push(sql`exists (select 1 from crash_group_users u where u.crash_group_id = g.id and u.user_id = ${f.userId})`);
+  // CR-040: reports carry the identity, groups do not; served by the (database, id) indexes.
+  if (f.installationId) parts.push(sql`exists (select 1 from crash_reports r where r.crash_database_id = ${databaseId} and r.crash_group_id = g.id and r.installation_id = ${f.installationId})`);
+  if (f.sessionId) parts.push(sql`exists (select 1 from crash_reports r where r.crash_database_id = ${databaseId} and r.crash_group_id = g.id and r.session_id = ${f.sessionId})`);
   return sql.join(parts, sql` and `);
 }
 
@@ -147,7 +156,7 @@ function dailyWhere(databaseId: string, f: Filters, sinceDay: string): SQL {
   if (f.release) parts.push(sql`d.release_id in (select id from crash_releases where crash_database_id = ${databaseId} and version = ${f.release})`);
   if (f.os) parts.push(sql`d.os_name = ${f.os}`);
   if (f.environment) parts.push(sql`d.environment = ${f.environment}`);
-  const needsGroup = f.state || f.kind || f.q || f.userId || f.arch || f.since || f.until;
+  const needsGroup = f.state || f.kind || f.q || f.userId || f.installationId || f.sessionId || f.arch || f.since || f.until;
   if (needsGroup) parts.push(sql`exists (select 1 from crash_groups g where g.id = d.crash_group_id and ${groupWhere(databaseId, f)})`);
   return sql.join(parts, sql` and `);
 }
@@ -378,6 +387,8 @@ export function crashReadRoutes(ctx: AppContext): FastifyPluginAsyncZod {
             os: z.string().max(32).optional(),
             environment: z.string().max(32).optional(),
             userId: z.string().max(128).optional(),
+            installationId: identityUuidSchema.optional(),
+            sessionId: identityUuidSchema.optional(),
             limit: z.coerce.number().int().min(1).max(100).default(20),
           }),
           response: { 200: z.object({ reports: z.array(reportSchema) }), ...errorsFor(400, 401, 403, 404) },
@@ -396,6 +407,8 @@ export function crashReadRoutes(ctx: AppContext): FastifyPluginAsyncZod {
         if (request.query.os) parts.push(eq(crashReports.osName, request.query.os));
         if (request.query.environment) parts.push(eq(crashReports.environment, request.query.environment));
         if (request.query.userId) parts.push(eq(crashReports.userId, request.query.userId));
+        if (request.query.installationId) parts.push(eq(crashReports.installationId, request.query.installationId));
+        if (request.query.sessionId) parts.push(eq(crashReports.sessionId, request.query.sessionId));
         const rows = await ctx.db
           .select()
           .from(crashReports)
@@ -637,6 +650,8 @@ export function crashReadRoutes(ctx: AppContext): FastifyPluginAsyncZod {
         if (filters.arch) parts.push(sql`r.arch = ${filters.arch}`);
         if (filters.environment) parts.push(sql`r.environment = ${filters.environment}`);
         if (filters.userId) parts.push(sql`r.user_id = ${filters.userId}`);
+        if (filters.installationId) parts.push(sql`r.installation_id = ${filters.installationId}`);
+        if (filters.sessionId) parts.push(sql`r.session_id = ${filters.sessionId}`);
         if (filters.since) parts.push(sql`r.received_at >= ${new Date(filters.since)}`);
         if (filters.until) parts.push(sql`r.received_at <= ${new Date(filters.until)}`);
         if (filters.state || filters.kind || filters.q) {
@@ -663,6 +678,8 @@ export function crashReadRoutes(ctx: AppContext): FastifyPluginAsyncZod {
                 environment: r.environment,
                 os: { name: r.os_name, version: r.os_version, arch: r.arch },
                 userId: r.user_id,
+                installationId: r.installation_id ?? null,
+                sessionId: r.session_id ?? null,
                 envelope: r.envelope,
               })}\n`;
             }
@@ -730,6 +747,8 @@ function presentReport(row: typeof crashReports.$inferSelect, names: Map<string,
     environment: row.environment,
     os: { name: row.osName, version: row.osVersion, arch: row.arch },
     userId: row.userId,
+    installationId: row.installationId,
+    sessionId: row.sessionId,
     envelope: row.envelope,
   };
 }

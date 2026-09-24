@@ -97,7 +97,7 @@ export function hostedRoutes(ctx: AppContext): FastifyPluginAsyncZod {
     const perSlug = ctx.env.INLET_DISABLE_RATE_LIMITS
       ? null
       : app.createRateLimit({
-          max: 600,
+          max: ctx.env.limits.hostedPerSlugPerHour,
           timeWindow: '1 hour',
           keyGenerator: (request: FastifyRequest) =>
             `slug:${(request.params as { slug?: string }).slug ?? ''}`,
@@ -131,7 +131,7 @@ export function hostedRoutes(ctx: AppContext): FastifyPluginAsyncZod {
     app.get(
       '/:slug',
       {
-        config: { rateLimit: { max: 600, timeWindow: '5 minutes' } },
+        config: { rateLimit: { max: ctx.env.limits.feedbackFormReadsPerFiveMinutes, timeWindow: '5 minutes' } },
         schema: {
           tags: ['Hosted form'],
           summary: 'Read a hosted form',
@@ -153,7 +153,7 @@ export function hostedRoutes(ctx: AppContext): FastifyPluginAsyncZod {
     app.get(
       '/:slug/logo',
       {
-        config: { rateLimit: { max: 600, timeWindow: '5 minutes' } },
+        config: { rateLimit: { max: ctx.env.limits.feedbackFormReadsPerFiveMinutes, timeWindow: '5 minutes' } },
         schema: {
           tags: ['Hosted form'],
           summary: 'Read a hosted form’s logo',
@@ -185,7 +185,7 @@ export function hostedRoutes(ctx: AppContext): FastifyPluginAsyncZod {
         // FR-149: the public operation anyone with the link can call, so it carries
         // the tightest limit. `config.rateLimit` is the per-address half; `onRequest`
         // is the per-slug half.
-        config: { rateLimit: { max: 60, timeWindow: '1 hour' } },
+        config: { rateLimit: { max: ctx.env.limits.feedbackIntentsPerHour, timeWindow: '1 hour' } },
         onRequest: limitPerSlug,
         schema: {
           tags: ['Hosted form'],
@@ -215,7 +215,7 @@ export function hostedRoutes(ctx: AppContext): FastifyPluginAsyncZod {
     app.post(
       '/:slug/submission-intents/:intentId/attachments',
       {
-        config: { rateLimit: { max: 120, timeWindow: '1 hour' } },
+        config: { rateLimit: { max: ctx.env.limits.feedbackUploadsPerHour, timeWindow: '1 hour' } },
         schema: {
           tags: ['Hosted form'],
           summary: 'Upload a screenshot from a hosted form',
@@ -313,7 +313,7 @@ export function hostedRoutes(ctx: AppContext): FastifyPluginAsyncZod {
     app.post(
       '/:slug/submission-intents/:intentId/submit',
       {
-        config: { rateLimit: { max: 60, timeWindow: '1 hour' } },
+        config: { rateLimit: { max: ctx.env.limits.feedbackSubmitsPerHour, timeWindow: '1 hour' } },
         onRequest: limitPerSlug,
         schema: {
           tags: ['Hosted form'],

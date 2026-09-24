@@ -178,7 +178,9 @@ test.describe('sharing a form as a link', () => {
     await expect(page.getByText('The logo has been updated.')).toBeVisible();
 
     await page.getByRole('button', { name: 'Save changes' }).click();
-    await expect(page.getByText('The hosted form has been updated.')).toBeVisible();
+    // The switch that enabled the form saved through the same mutation, so its toast can
+    // still be on screen: the newest one is this save's.
+    await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'The hosted form has been updated.' }).last()).toBeVisible();
 
     // The address is offered ready to paste.
     await expect(

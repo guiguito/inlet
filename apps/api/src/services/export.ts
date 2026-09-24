@@ -29,6 +29,10 @@ export type ExportedSubmission = {
   observedIp: string | null;
   answers: Record<string, StoredAnswer & { attachments?: ExportedAttachment[] }>;
   clientContext: unknown;
+  /** FR-111: the SDK identity, when the submission carried it. */
+  installationId: string | null;
+  sessionId: string | null;
+  userId: string | null;
 };
 
 export type ExportPayload = {
@@ -111,6 +115,10 @@ export async function exportCsv(ctx: AppContext, databaseId: string): Promise<st
     'observed_ip',
     ...columns.map((column) => `${column.label} (${column.questionId})`),
     ...contextKeys,
+    // FR-111. Appended, so every column an existing consumer reads keeps its position.
+    'installation_id',
+    'session_id',
+    'user_id',
   ];
 
   const body = payload.submissions.map((submission, index) => {
@@ -124,6 +132,9 @@ export async function exportCsv(ctx: AppContext, databaseId: string): Promise<st
         renderAnswerCell(submission.answers[column.questionId], definition),
       ),
       ...contextKeys.map((key) => contextRows[index]?.[key] ?? ''),
+      submission.installationId,
+      submission.sessionId,
+      submission.userId,
     ];
   });
 
@@ -222,5 +233,8 @@ function exportSubmission(
     observedIp: row.observedIp,
     answers,
     clientContext: row.clientContext,
+    installationId: row.installationId,
+    sessionId: row.sessionId,
+    userId: row.userId,
   };
 }

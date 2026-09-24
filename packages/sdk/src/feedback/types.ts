@@ -171,7 +171,15 @@ export type FeedbackSnapshot = {
 export type ScreenshotSource =
   | Blob
   | Uint8Array
-  | { data: Uint8Array | ArrayBuffer; filename?: string; mediaType: string };
+  | { data: Uint8Array | ArrayBuffer; filename?: string; mediaType: string }
+  | ReactNativeFile;
+
+/**
+ * FR-198, FR-211: a file on a React Native device, as an image picker returns it. React
+ * Native's `FormData` uploads it from `uri`. Without `size` the local size check is
+ * skipped and the server's limit decides.
+ */
+export type ReactNativeFile = { uri: string; name: string; type: string; size?: number };
 
 export type FeedbackInitOptions = {
   /** The Inlet deployment, for example https://inlet.example.com */
@@ -195,7 +203,23 @@ export type FeedbackInitOptions = {
   fetch?: typeof fetch;
   /** Tests inject a clock. */
   now?: () => number;
+  /**
+   * FR-204: attach the SDK identity of Foundations FD-016 to each submission — the session
+   * ID, the user ID when one is set, and the installation ID while an analytics client is
+   * enabled. Default true; `false` sends no identity field at all.
+   */
+  identity?: boolean;
+  /** Fills a buffer with random bytes, for runtimes without `crypto.getRandomValues` (FR-211). */
+  random?: (bytes: Uint8Array) => void;
+  /** Per-request timeout in milliseconds, uploads excepted. Default 20000. */
+  timeoutMs?: number;
 };
+
+/**
+ * FR-204: the identity fields a finalization carries, fixed when `submit` is called and
+ * never part of the payload a retry is compared on.
+ */
+export type SubmissionIdentity = { installationId?: string; sessionId?: string; userId?: string };
 
 /** The five network steps of the client flow, so a renderer can perform them elsewhere (FR-208). */
 export type FeedbackGateway = {

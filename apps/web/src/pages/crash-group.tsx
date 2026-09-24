@@ -285,6 +285,7 @@ export function CrashGroupPage({ user }: { user: CurrentUser }) {
 /** CR-042: frames as a stack, tags and context as key-value pairs, raw JSON on request. */
 function ReportView({ report }: { report: CrashReport }) {
   const [raw, setRaw] = useState(false);
+  const { databaseId } = useParams();
   const e = report.envelope;
   return (
     <Card data-testid="crash-report-view">
@@ -342,6 +343,30 @@ function ReportView({ report }: { report: CrashReport }) {
                 ['client time', e.timestamp],
               ]}
             />
+            {report.sessionId || report.installationId ? (
+              <div className="space-y-1" data-testid="crash-report-identity">
+                <KeyValues
+                  title="SDK identity"
+                  entries={[
+                    ['session', report.sessionId],
+                    ['installation', report.installationId],
+                  ]}
+                />
+                {/* CR-040: the other crashes of the same session or installation, one click away. */}
+                <div className="flex flex-wrap gap-3 text-xs">
+                  {report.sessionId ? (
+                    <Link className="underline underline-offset-4" to={`/crash-databases/${databaseId}?tab=groups&sessionId=${report.sessionId}`}>
+                      Groups in this session
+                    </Link>
+                  ) : null}
+                  {report.installationId ? (
+                    <Link className="underline underline-offset-4" to={`/crash-databases/${databaseId}?tab=groups&installationId=${report.installationId}`}>
+                      Groups on this installation
+                    </Link>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
             {e.tags && Object.keys(e.tags).length > 0 ? <KeyValues title="Tags" entries={Object.entries(e.tags)} /> : null}
             {e.context && Object.keys(e.context).length > 0 ? (
               <div className="space-y-1">

@@ -28,6 +28,8 @@ const filters = {
   arch: z.string().max(16).optional(),
   environment: z.string().max(32).optional().describe('production by default; whatever the application sent.'),
   userId: z.string().max(128).optional().describe('An integrator-supplied opaque user ID.'),
+  installationId: z.string().max(36).optional().describe('An inlet-sdk installation ID (a UUID), as a report carries it (CR-118).'),
+  sessionId: z.string().max(36).optional().describe('An inlet-sdk session ID (a UUID), as a report carries it (CR-118).'),
   since: z.string().datetime({ offset: true }).optional(),
   until: z.string().datetime({ offset: true }).optional(),
   q: z.string().max(200).optional().describe('Text matched against the exception type, top frame and sample message.'),
@@ -145,6 +147,8 @@ export function registerCrashTools(server: McpServer, client: InletClient): void
         os: filters.os,
         environment: filters.environment,
         userId: filters.userId,
+        installationId: filters.installationId,
+        sessionId: filters.sessionId,
         limit: z.number().int().min(1).max(100).default(20),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
@@ -224,7 +228,7 @@ export function registerCrashTools(server: McpServer, client: InletClient): void
     'get_crash_retention',
     {
       title: 'Read the retention setting',
-      description: `Maximum retained reports (${CRASH_LIMITS.retentionCapMin} to ${CRASH_LIMITS.retentionCapMax}) and maximum age in days (${CRASH_LIMITS.retentionMaxAgeDaysMin} to ${CRASH_LIMITS.retentionMaxAgeDaysMax}, or null for unlimited). Groups and timelines are never subject to retention.`,
+      description: `Maximum retained reports and maximum age in days (or null for unlimited), with the bounds this deployment allows: by default ${CRASH_LIMITS.retentionCapMin} to ${CRASH_LIMITS.retentionCapMax} reports and ${CRASH_LIMITS.retentionMaxAgeDaysMin} to ${CRASH_LIMITS.retentionMaxAgeDaysMax} days, which the operator may change. Groups and timelines are never subject to retention.`,
       inputSchema: { crashDatabaseId },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -277,8 +281,9 @@ export function registerCrashTools(server: McpServer, client: InletClient): void
       description: 'Pass only what changes. `maxAgeDays: null` means unlimited. Takes effect at the next ingest and the next hourly pass (CR-002).',
       inputSchema: {
         crashDatabaseId,
-        maxReports: z.number().int().min(CRASH_LIMITS.retentionCapMin).max(CRASH_LIMITS.retentionCapMax).optional(),
-        maxAgeDays: z.number().int().min(CRASH_LIMITS.retentionMaxAgeDaysMin).max(CRASH_LIMITS.retentionMaxAgeDaysMax).nullable().optional(),
+        // FD-032: the deployment may have moved the bounds, so the server enforces them; get_crash_retention reads them.
+        maxReports: z.number().int().positive().optional(),
+        maxAgeDays: z.number().int().positive().nullable().optional(),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },

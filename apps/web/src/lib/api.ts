@@ -147,6 +147,10 @@ export type SubmissionSummary = {
   observedIp: string | null;
   answers: Record<string, StoredAnswer>;
   clientContext: unknown;
+  /** FR-062: the SDK identity, when the client supplied it. */
+  installationId: string | null;
+  sessionId: string | null;
+  userId: string | null;
   attachmentCount: number;
   firstAttachmentId: string | null;
 };
@@ -421,6 +425,9 @@ export type CrashReport = {
   environment: string;
   os: { name: string | null; version: string | null; arch: string | null };
   userId: string | null;
+  /** CR-118: the shared SDK identity. */
+  installationId: string | null;
+  sessionId: string | null;
   envelope: CrashEnvelopeView;
 };
 
@@ -444,6 +451,8 @@ export type CrashEnvelopeView = {
   os?: { name: string; version?: string; arch?: string };
   runtime?: { name: string; version?: string };
   user?: { id: string };
+  installationId?: string;
+  sessionId?: string;
   tags?: Record<string, string>;
   context?: Record<string, unknown>;
   fingerprint?: string[];
@@ -476,6 +485,8 @@ export type CrashGroupFilters = {
   os?: string;
   environment?: string;
   userId?: string;
+  installationId?: string;
+  sessionId?: string;
   q?: string;
 };
 

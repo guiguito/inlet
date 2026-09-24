@@ -1,6 +1,7 @@
 import { CRASH_LIMITS } from '@inlet/shared/crash-core';
 export { MemoryStore } from '../store.js';
 import type { QueueStore } from '../store.js';
+import { capabilities, timeoutSignal } from '../health.js';
 import type { CrashEnvelope, DropReason, SentReport } from './types.js';
 
 /**
@@ -57,7 +58,7 @@ export class Transport {
   private failures = 0;
   private closed = false;
   private paused = false;
-  private serverChecked = false;
+  private warnedServer = false;
   private readonly paceMs: number;
   private readonly timeoutMs: number;
   private readonly backoffBaseMs: number;
@@ -248,13 +249,20 @@ export class Transport {
   ): Promise<{ kind: 'answered'; results: BatchResult[] } | { kind: 'rate_limited'; retryAfterMs: number } | { kind: 'failed'; reason: string }> {
     const base = `${this.options.baseUrl.replace(/\/$/, '')}/v1/crash-databases/${this.options.crashDatabaseId}/reports`;
     const headers = { authorization: `Bearer ${this.options.publishableKey}`, 'content-type': 'application/json' };
-    await this.checkServer();
+    const identity = await this.checkServer();
+    // CR-118: a deployment that does not list `identity` would refuse the whole envelope
+    // for an unknown field, so the fields are left out rather than the report lost.
+    const envelopes = batch.map((item) => (identity ? item.envelope : withoutIdentity(item.envelope)));
+    // CR-106: bounds the request and the body read; not cleared, so a hung body is bounded
+    // too. The timer is unref'd and aborting a settled request does nothing.
+    const timeout = timeoutSignal(this.timeoutMs);
+    const signal = timeout.signal ? { signal: timeout.signal } : {};
     let response: Response;
     try {
       response =
         batch.length === 1
-          ? await this.options.fetch(base, { method: 'POST', headers, body: JSON.stringify(batch[0]!.envelope), ...this.abort() })
-          : await this.options.fetch(`${base}/batch`, { method: 'POST', headers, body: JSON.stringify({ reports: batch.map((item) => item.envelope) }), ...this.abort() });
+          ? await this.options.fetch(base, { method: 'POST', headers, body: JSON.stringify(envelopes[0]), ...signal })
+          : await this.options.fetch(`${base}/batch`, { method: 'POST', headers, body: JSON.stringify({ reports: envelopes }), ...signal });
     } catch (error) {
       return { kind: 'failed', reason: error instanceof Error ? error.message : 'network' };
     }
@@ -292,36 +300,29 @@ export class Transport {
   }
 
   /**
-   * CR-106: bounds every request. Without it a hung socket is bounded only by whatever
-   * `flush(timeoutMs)` the caller passed, and that races the flush promise rather than the
-   * request — the socket stays open and the replay loop never moves on. `AbortSignal.timeout`
-   * is stdlib on Node 18 and every browser target; the guard is for exotic runtimes.
+   * FD-013, FD-016: what the deployment can do, from the shared probe, which is asked
+   * again after a failed probe. Returns whether the identity fields may be sent. A
+   * deployment without the crash routes is said once through debug; queueing until the
+   * server is upgraded is the right behaviour, not failing.
    */
-  private abort(): { signal?: AbortSignal } {
-    if (typeof AbortSignal === 'undefined' || typeof AbortSignal.timeout !== 'function') return {};
-    return { signal: AbortSignal.timeout(this.timeoutMs) };
+  private async checkServer(): Promise<boolean> {
+    const caps = await capabilities(this.options.baseUrl, this.options.fetch, this.timeoutMs);
+    if (caps === null) {
+      this.options.debug('Inlet is not reachable for a health check; reports will queue.');
+      return false;
+    }
+    if (!caps.includes('crash') && !this.warnedServer) {
+      this.warnedServer = true;
+      this.options.debug('This Inlet deployment predates Crash Reports (Release 6); upgrade the server. Reports will queue and be refused until then.');
+    }
+    return caps.includes('identity');
   }
 
-  /**
-   * FD-013: a minimum-server-version check on first use. A deployment without the crash
-   * routes answers 404 to the database read; the SDK says so once and carries on, because
-   * queueing until the server is upgraded is the right behaviour, not failing.
-   */
-  private async checkServer(): Promise<void> {
-    if (this.serverChecked) return;
-    this.serverChecked = true;
-    try {
-      const response = await this.options.fetch(`${this.options.baseUrl.replace(/\/$/, '')}/v1/health`, { method: 'GET', ...this.abort() });
-      if (!response.ok) {
-        this.options.debug(`Inlet answered ${response.status} to a health check; reports will queue until it is reachable.`);
-        return;
-      }
-      const body = (await response.json().catch(() => null)) as { capabilities?: string[] } | null;
-      if (!body?.capabilities?.includes('crash')) {
-        this.options.debug('This Inlet deployment predates Crash Reports (Release 6); upgrade the server. Reports will queue and be refused until then.');
-      }
-    } catch (error) {
-      this.options.debug('Inlet is not reachable; reports will queue.', error);
-    }
-  }
+}
+
+/** CR-118: the envelope a deployment older than the identity fields accepts. */
+function withoutIdentity(envelope: CrashEnvelope): CrashEnvelope {
+  if (envelope.installationId === undefined && envelope.sessionId === undefined) return envelope;
+  const { installationId: _installation, sessionId: _session, ...rest } = envelope;
+  return rest;
 }

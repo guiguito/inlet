@@ -11,6 +11,7 @@ import {
   text,
   timestamp,
   uniqueIndex,
+  uuid,
 } from 'drizzle-orm/pg-core';
 import { SLACK_CONTENT_LEVELS, type CrashEnvelope, type FormDefinition, type StoredAnswers } from '@inlet/shared';
 
@@ -291,10 +292,21 @@ export const submissions = pgTable(
     clientContext: jsonb('client_context'),
     /** FR-062C: observed after applying the trusted-proxy configuration. */
     observedIp: text('observed_ip'),
+    /**
+     * FR-062, Foundations FD-016: the SDK identity, when supplied. UUID columns, so they are
+     * stored and returned lowercase and dashed whatever form the client sent. Indexed for
+     * profile links and erasure (UX Analytics AN-154, AN-183).
+     */
+    installationId: uuid('installation_id'),
+    sessionId: uuid('session_id'),
+    userId: text('user_id'),
     createdAt,
   },
   (table) => [
     index('submissions_db_created_idx').on(table.feedbackDatabaseId, table.createdAt),
+    index('submissions_installation_idx').on(table.feedbackDatabaseId, table.installationId),
+    index('submissions_session_idx').on(table.feedbackDatabaseId, table.sessionId),
+    index('submissions_user_idx').on(table.feedbackDatabaseId, table.userId),
     index('submissions_version_idx').on(table.formVersionId),
   ],
 );
@@ -772,6 +784,9 @@ export const crashReports = pgTable(
     osVersion: text('os_version'),
     arch: text('arch'),
     userId: text('user_id'),
+    /** CR-118: the shared SDK identity (Foundations FD-016), lowercase and dashed. */
+    installationId: uuid('installation_id'),
+    sessionId: uuid('session_id'),
     /** CR-015: the credential that reported it. There is deliberately no IP column. */
     credentialId: text('credential_id').references(() => projectCredentials.id, { onDelete: 'set null' }),
     envelope: jsonb('envelope').$type<CrashEnvelope>().notNull(),
@@ -781,6 +796,8 @@ export const crashReports = pgTable(
     index('crash_reports_group_received_idx').on(table.crashDatabaseId, table.crashGroupId, table.receivedAt),
     index('crash_reports_release_idx').on(table.crashDatabaseId, table.releaseId),
     index('crash_reports_user_idx').on(table.crashDatabaseId, table.userId),
+    index('crash_reports_installation_idx').on(table.crashDatabaseId, table.installationId),
+    index('crash_reports_session_idx').on(table.crashDatabaseId, table.sessionId),
     index('crash_reports_received_idx').on(table.crashDatabaseId, table.receivedAt),
   ],
 );

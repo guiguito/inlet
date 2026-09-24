@@ -11,6 +11,10 @@
  * Everything here is pure and runs in Node and in the browser.
  */
 
+import { sha256Hex, truncateText } from './text.js';
+
+export { normalizeUuid, sanitizeDeep, sanitizeText, sha256Hex, truncateText, uuidV4, uuidV7, randomBytes, type RandomSource } from './text.js';
+
 export const CRASH_LIMITS = {
   /** CR-011: the serialized envelope, UTF-8. */
   envelopeMaxBytes: 64 * 1024,
@@ -84,9 +88,12 @@ export function utf8Length(value: string): number {
   return new TextEncoder().encode(value).length;
 }
 
-/** Truncation by code unit, the way the server and the SDK both bound text. */
+/**
+ * Truncation by code unit, the way the server and the SDK both bound text, never
+ * splitting a surrogate pair (CR-011).
+ */
 export function truncateCrashText(value: string, max: number): string {
-  return value.length <= max ? value : value.slice(0, max);
+  return truncateText(value, max);
 }
 
 /**
@@ -160,6 +167,8 @@ export function effectiveFingerprintParts(envelope: CrashEnvelopeLike): string[]
  */
 export async function computeFingerprint(parts: string[]): Promise<string> {
   const encoded = new TextEncoder().encode(parts.map((part) => `${part.length}:${part}`).join('\n'));
+  // CR-120: React Native has no `crypto.subtle`; the shared implementation gives the same hex.
+  if (typeof crypto === 'undefined' || !crypto.subtle) return sha256Hex(encoded);
   const digest = await crypto.subtle.digest('SHA-256', encoded);
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }

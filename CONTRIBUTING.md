@@ -25,15 +25,24 @@ npm run dev              # API on :3000, web on :5173
 
 `npm run services:down` stops them again.
 
+MinIO no longer publishes its server binary (September 2026), so on a machine that has
+never had one, `services:up` stops and says so. Build it once from its archived source
+with `scripts/build-minio.sh` (needs Go 1.24 and git), which puts it where the script looks.
+Or run the Docker services instead: `docker compose -f docker-compose.dev.yml up -d` uses
+the same ports and credentials, and its MinIO image is the one this repository builds.
+
 ## What is expected of a change
 
 ```bash
 npm run typecheck
-npm run lint
 npm run test:all
 ```
 
-All three pass before a pull request is ready. `test:all` needs the local services up.
+Both pass before a pull request is ready. `test:all` starts the local services it needs.
+GitHub Actions runs the same checks on every push and pull request
+(`.github/workflows/ci.yml`), plus `npm run test:metro -w inlet-sdk`, which bundles the SDK's
+React Native entries with Metro on React Native 0.74; run that one locally when you touch an
+entry React Native imports.
 
 ### The live Slack test
 

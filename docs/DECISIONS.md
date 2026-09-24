@@ -2363,3 +2363,166 @@ with exactly that promise adopt it and believe the promise still held. The doc c
 README and CR-117 now all state the limit. Adding more patterns would have been the wrong
 answer: it makes the denylist longer without making it a guarantee, and implies the guarantee
 more strongly.
+
+## 29. Before Release 8: the shared SDK identity, React Native and operator limits
+
+The UX Analytics PRD changed three other pages: Foundations gained FD-016 (one SDK
+identity) and FD-032 (operator overrides), Crash Reports gained CR-118 to CR-120, and
+Feedback Collection gained FR-211. This section is the work that realigned the existing
+capabilities with those pages before any analytics code exists. The per-requirement record
+is in `docs/plans/sdk-identity-before-release-8.md`.
+
+### 29.1 What was built now, and what waits for the analytics module
+
+Everything in those amendments that holds without an analytics client was built. What only
+takes effect "while an analytics client of the same application is enabled" was not,
+because there is nothing yet to enable, and a behaviour that can only be exercised by a
+fake of a module that does not exist is a guess about that module's design:
+
+- the installation ID is a slot on the shared identity that nothing fills;
+- no crash flags are raised (CR-119, AN-150), the sentinel records no session or
+  installation, and the browser `crashReporting` signal is not computed;
+- nothing about the identity is persisted, and the cross-tab session with its Web Lock
+  (AN-229) is not built, since FD-016 persists identity only for an enabled analytics client;
+- the erasure of an installation or user ID (CR-047, AN-183) is an analytics database's
+  action and arrives with it, as do the analytics limits of FD-032 and the Usage profile
+  link on a report (AN-154).
+
+Rejected: building those against a fake analytics client now. It would have fixed the
+contract between the modules before the side that consumes it was written, and made it
+look tested.
+
+### 29.2 The identity lives on `globalThis`, and the crash user ID survives `identity: false`
+
+One `Identity` per application under `Symbol.for('inlet-sdk.identity')`, the same trick
+CR-110 uses for the crash client: every entry is bundled standalone, so a module variable
+would be a different identity in `crash/node` and `feedback/node`. The session is a UUID v7
+in memory, rotated after 30 minutes idle or 24 hours; "at each process start" is then
+automatic.
+
+`setUser` in the crash module now writes the shared user ID. CR-118 says `identity: false`
+sends exactly the 0.1.5 fields, and 0.1.5 sent `user.id` from `setUser`, so that option
+removes only the session and installation IDs from a crash report. A submission with
+`identity: false` carries no identity field at all, which is what FR-204's acceptance
+criterion asks.
+
+### 29.3 Sent only to a server that says `identity`, from one shared probe
+
+A crash envelope is a strict object, so an older server refuses a report carrying
+`sessionId` as `unknown_field`, and the transport would drop it as answered. So the fields
+are stripped at send time, not at capture: a report queued while the server was old is
+sent with them once it is upgraded. The probe moved to `src/health.ts`, shared by both
+modules, cached per fetch implementation and origin, and forgotten when it fails, which is
+FD-016's "again after a failed probe".
+
+Rejected: a cache keyed by origin alone. Every test, and any integrator with an instrumented
+fetch, would read another client's answer. Keying by the `fetch` function means the two
+modules only share when they share the default fetch, which is now one constant.
+
+### 29.4 The server: UUID columns, identity outside the retry hash, text cleaned first
+
+`installation_id` and `session_id` are `uuid` columns. PostgreSQL stores 16 bytes and
+prints lowercase dashed text, which is exactly the form §9.1 requires; the zod schema
+normalizes any case, with or without dashes, before the insert. Rejected: `text` with a
+check constraint, which is the same guarantee at twice the index size.
+
+The identity is not part of `payloadHash`. It is stored from the call that creates the
+submission and ignored on a replay, so a submission retried from a new process, with a new
+session, is still a duplicate rather than an `intent_payload_conflict`.
+
+U+0000 and lone surrogates are cleaned by `sanitizeDeep` before validation (crash) and
+before the hash (feedback), inside `finalizeIntent` so the hosted form path gets it too.
+Truncation still counts UTF-16 units, since that is how every bound is written, but gives
+up one unit rather than split a pair.
+
+### 29.5 One request serializer, with no address anywhere
+
+The request log carries `{ method, route }`: the route pattern, never the URL, and no
+address or port on any route. Rejected: dropping the address on ingest routes only, as the
+PRD strictly requires. The feedback flow stores the observed address with the submission
+anyway, so logging it bought nothing, and one rule is easier to keep than a list.
+
+### 29.6 Operator limits: environment variables with hard limits, and clamping
+
+`OPERATOR_LIMITS` in `env.ts` is the one table of FD-032, rendered in `DEPLOYMENT.md`: a
+variable, a default and hard limits per value, checked at startup. Narrowing the retention
+bounds does not rewrite stored settings; `effectiveRetention` applies a stored value at the
+nearest bound and the read reports it. Rejected: rewriting rows at startup, which destroys a
+team's choice when an operator later widens the bounds again, and refusing to start, which
+makes an operator's change depend on every team's data. The MCP retention tool no longer
+carries the bounds itself, since they are now the deployment's.
+
+### 29.7 React Native
+
+- **The store keeps one item per key, with an index**, and a byte ceiling per queue, because
+  one large AsyncStorage value fails to read back on Android and the whole queue with it.
+  Its synchronous methods exist only when the injected store is synchronous, detected by
+  whether `getItem` returns a promise. The first draft awaited a non-promise, which still
+  yields a microtask and so was not synchronous at all on the fatal path; the write is now a
+  plan of calls run in a loop, or awaited one by one.
+- **A non-fatal error reaching the global handler is `handled: true`.** The application keeps
+  running, and CR-119's crashing kinds need `handled` false; a soft error must not later end
+  a session.
+- **Hermes' rejection tracker only outside `__DEV__`.** React Native enables its own tracker
+  in development for LogBox, and Hermes has one slot.
+- **Frames**: a bundle file by name, `address at` stripped, everything else external.
+- **Metro shims point at the ESM files**, because Metro 0.80's default source extensions have
+  no `cjs`. They are generated by the build and git-ignored, and `npm run test:metro` bundles
+  every React Native-facing entry from the packed tarball on React Native 0.74.
+- **No `crypto`**: a pure SHA-256 and a fallback generator in `@inlet/shared/crash-core`,
+  pinned to `node:crypto` and to a million IDs without a collision. Rejected: a dependency,
+  which the package has never had.
+
+### 29.8 Smaller calls
+
+- The CSV export appends `installation_id`, `session_id` and `user_id` after every other
+  column, so no existing column moves.
+- The unclean-exit sentinel records the release it watches and the report uses it. Without
+  it, an update installed over a crashing version filed the crash against the new version.
+- Feedback requests now time out at 20 seconds, as crash requests did, without
+  `AbortSignal.timeout`; uploads are exempt, since a 10 MB screenshot on a phone can take longer.
+- No database reset: migration 0007 only adds nullable columns and indexes.
+
+## 30. The bundled object store after MinIO withdrew its distribution
+
+On September 11, 2026 MinIO stopped distributing its community edition: `dl.min.io`
+answers 410 Gone and the `minio/minio` images were deleted from Docker Hub. Three things in
+this repository depended on them — the bundled `docker-compose.yml`, the dev compose file,
+and `scripts/local-services.mjs`, which downloads the server binary for the test suites. All
+three kept working on machines that had cached them, which is why the first GitHub Actions
+run was the first to notice.
+
+**Decision: build MinIO ourselves, from its archived source, as a stopgap.**
+`docker/minio/Dockerfile` builds `RELEASE.2025-10-15T17-29-55Z`, the last community release,
+with MinIO's own version stamping, for amd64 and arm64 by cross-compiling, and
+`.github/workflows/minio-image.yml` publishes it as `ghcr.io/guiguito/inlet-minio`. Both
+compose files pin it. CI builds the same tag into `.dev/bin/minio` with
+`scripts/build-minio.sh`. The API integration suite, which exercises the tag-filtered
+lifecycle rule and retagging, passes against the image unchanged, and the bundled stack
+serves a full feedback flow with a screenshot.
+
+Why not the alternatives, for now:
+
+- **Pin a community rebuild** from another registry. It puts a stranger's binary in the
+  default deployment of a self-hosted product, a supply-chain choice the operator never made.
+- **Switch to another S3 server immediately.** Inlet depends on one feature many lack: a
+  lifecycle rule filtered by the `inlet-state=pending` tag expires uploads never attached
+  to a submission (`apps/api/src/lib/storage.ts`). Without it the server starts, warns, and
+  abandoned uploads accumulate. A replacement has to be proven against that first.
+- **Drop the bundled store** and require the operator's own. It breaks the one-command
+  deployment the Foundations PRD promises.
+
+The cost is real: the source is archived and gets no security fixes. It is acceptable as a
+stopgap because the store sits on the compose network, and `DEPLOYMENT.md` says so.
+
+**Next step, not done here:** evaluate RustFS (Apache-2.0, MinIO-compatible, lifecycle and
+tagging) against the integration suite as the long-term bundled store; Garage is the
+fallback, which filters lifecycle rules by prefix rather than tag and so would need pending
+uploads moved under a `pending/` prefix and copied out on submit.
+
+### 30.1 Found on the way: the Docker image had not built since the SDK joined `build`
+
+Commit `0a8cf7c` added `inlet-sdk` to the root `npm run build`, but the Dockerfile never
+copies `packages/sdk`, so `docker compose up --build` failed with "No workspaces found:
+--workspace=inlet-sdk". The image now runs `npm run build:server`, which builds exactly what
+the server ships. The SDK is published to npm and never served, so it stays out of the image.

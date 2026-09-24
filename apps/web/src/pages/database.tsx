@@ -684,8 +684,10 @@ if (session.ok) {
 }`}
           </pre>
           <p className="text-xs text-muted-foreground">
-            Node, Electron and React entries exist too. Your application does not have to share an
-            origin with this server.
+            Node, Electron, React and React Native entries exist too; on React Native, import{' '}
+            <code className="font-mono">inlet-sdk/feedback/react-native</code> and pass{' '}
+            <code className="font-mono">storage: AsyncStorage</code>. Your application does not have
+            to share an origin with this server.
           </p>
         </CardContent>
       </Card>

@@ -41,13 +41,24 @@ export type CrashEnvelope = {
   os?: { name: string; version?: string; arch?: string };
   runtime?: { name: string; version?: string };
   user?: { id: string };
+  /** CR-118: the shared SDK identity (Foundations FD-016), lowercase dashed UUIDs. */
+  installationId?: string;
+  sessionId?: string;
   tags?: Record<string, string>;
   context?: Record<string, unknown>;
   fingerprint?: string[];
 };
 
 /** What `captureReport` takes: the integrator fills the failure; the SDK fills the rest. */
-export type CrashReportInput = Partial<Omit<CrashEnvelope, 'kind'>> & { kind: CrashKind };
+export type CrashReportInput = Partial<Omit<CrashEnvelope, 'kind' | 'installationId' | 'sessionId'>> & {
+  kind: CrashKind;
+  /**
+   * CR-092, CR-119: the report describes the application's previous run, such as a
+   * native crash summary read at launch. It then carries the session and installation
+   * IDs recorded for that run, or none, never the current run's.
+   */
+  previousRun?: boolean;
+};
 
 export type CaptureOptions = {
   kind?: CrashKind;
@@ -83,6 +94,9 @@ export type DropReason =
   | 'refused';
 
 import type { QueueStore } from '../store.js';
+
+/** Fills a buffer with random bytes. The same shape as the shared core's. */
+export type RandomSource = (bytes: Uint8Array) => void;
 
 export type { QueueStore } from '../store.js';
 
@@ -155,6 +169,19 @@ export type CrashInitOptions = {
   hash?: (input: Uint8Array) => string;
   /** Tags attached to every event. */
   tags?: Record<string, string>;
+  /**
+   * CR-118: attach the shared SDK identity (Foundations FD-016) — the session ID, and the
+   * installation ID while an analytics client is enabled. Default true. `false` sends
+   * exactly the fields `inlet-sdk` 0.1.5 sent; the user ID from `setUser` is one of them.
+   */
+  identity?: boolean;
+  /** Fills a buffer with random bytes, for runtimes without `crypto.getRandomValues` (CR-120). */
+  random?: RandomSource;
+  /**
+   * How a stack becomes frames. The React Native adapter supplies its own (CR-115); the
+   * default parses V8 and Gecko stacks against `appRoots`.
+   */
+  parseFrames?: (stack: string | undefined) => CrashFrame[];
   /** Tests inject a clock. */
   now?: () => number;
 };

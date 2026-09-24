@@ -78,7 +78,10 @@ The exception is exactly these four routes, `GET /v1/health` and crash ingest. *
 collected responses is not among them**, nor is anything a secret key reads, nor the
 management interface, nor the hosted form routes. `GET /v1/health` lists what a deployment
 opens in its `capabilities`, so a client can tell an old Inlet from an unreachable one:
-`feedback-cross-origin` means the four routes below answer a preflight.
+`feedback-cross-origin` means the four routes below answer a preflight, and `identity`
+means the deployment accepts the SDK identity fields on crash reports and submissions
+(see [Finalize](#4-finalize) and [The envelope](#the-envelope)). `inlet-sdk` leaves those
+fields out when talking to a deployment that does not list `identity`.
 
 ### 1. Read the published form
 
@@ -225,6 +228,18 @@ replayed result.
 `clientContext` is arbitrary JSON, stored exactly as you send it, capped at 16 KiB as
 UTF-8. Inlet never interprets it. You are responsible for what it contains and for the
 lawful use of anything identifying you put in it.
+
+Three optional fields carry the identity `inlet-sdk` attaches (FR-204): `sessionId` and
+`installationId`, each a UUID accepted in any letter case with or without dashes and
+stored lowercase and dashed, and `userId`, the opaque user ID of at most 128 characters
+your application set. `installationId` is only ever sent by an application running the
+analytics module. They are stored with the submission, returned when you read it, and
+exported. They are **not** part of the payload a retry is compared on, so a replay whose
+session differs is still the same submission.
+
+Every string in `answers` and `clientContext` has U+0000 removed and any lone surrogate
+replaced with U+FFFD before it is stored, because PostgreSQL refuses both in JSON. That
+is the only change Inlet makes to what you send.
 
 Inlet records the observed request IP as operational metadata, resolved after applying
 your deployment's trusted-proxy configuration. For a server-to-server submission that
@@ -410,7 +425,10 @@ Nested structures exactly as stored, plus stable asset URLs for screenshots:
           ]
         }
       },
-      "clientContext": { "appVersion": "4.12.0" }
+      "clientContext": { "appVersion": "4.12.0" },
+      "installationId": null,
+      "sessionId": "0192f1a0-7c2e-7b41-9a3d-5e6f7a8b9c0d",
+      "userId": "u_9931"
     }
   ]
 }
@@ -436,8 +454,11 @@ One row per submission, oldest first, UTF-8 with a byte-order mark and CRLF rows
 5. Screenshots hold the stable asset URLs, joined with `; `.
 6. `clientContext` is flattened to `context.<path>` columns. Nested objects use dots,
    arrays use zero-based indices.
-7. An unanswered question is an empty cell.
-8. RFC 4180 quoting: a value containing a comma, quote, CR or LF is quoted and inner
+7. Three trailing columns, `installation_id`, `session_id` and `user_id`: the SDK
+   identity, empty when the submission carried none. Last, so every earlier column keeps
+   the position it had before they were added.
+8. An unanswered question is an empty cell.
+9. RFC 4180 quoting: a value containing a comma, quote, CR or LF is quoted and inner
    quotes are doubled.
 
 ## Managing forms
@@ -947,9 +968,16 @@ At most 64 KiB serialized. Exactly these top-level fields; any other is refused 
 | `os` | no | `{name ≤ 32, version? ≤ 64, arch? ≤ 16}` |
 | `runtime` | no | `{name ≤ 32, version? ≤ 32}` |
 | `user` | no | `{id ≤ 128}`, and nothing else |
+| `installationId` | no | UUID, any case, dashes optional; stored lowercase and dashed. Sent by `inlet-sdk` only alongside an enabled analytics client |
+| `sessionId` | no | UUID, as above. `inlet-sdk`'s session: random, rotated after 30 minutes idle or 24 hours |
 | `tags` | no | ≤ 20 string pairs, key ≤ 64, value ≤ 256 |
 | `context` | no | ≤ 16 KiB of JSON, stored verbatim |
 | `fingerprint` | no | ≤ 8 strings ≤ 128; `{{ default }}` expands to the computed fingerprint |
+
+Every string field has U+0000 removed and lone surrogates replaced with U+FFFD before
+validation, so no report is refused for its characters. The two identity fields are
+accepted by deployments whose `/v1/health` lists `identity`; an older deployment refuses
+them as `unknown_field`, which is why the SDK checks first.
 
 ```bash
 curl -s -X POST "$BASE/v1/crash-databases/$DB/reports" \
@@ -987,9 +1015,9 @@ later change to the rule never splits existing groups.
 ### Reading
 
 ```
-GET  /v1/crash-databases/{id}/groups?state&kind&release&os&arch&environment&userId&since&until&q&sort&limit&offset&days
+GET  /v1/crash-databases/{id}/groups?state&kind&release&os&arch&environment&userId&installationId&sessionId&since&until&q&sort&limit&offset&days
 GET  /v1/crash-databases/{id}/groups/{groupId}?days=30
-GET  /v1/crash-databases/{id}/groups/{groupId}/reports?release&os&environment&userId&limit
+GET  /v1/crash-databases/{id}/groups/{groupId}/reports?release&os&environment&userId&installationId&sessionId&limit
 GET  /v1/crash-databases/{id}/reports/{reportId}
 GET  /v1/crash-databases/{id}/releases
 GET  /v1/crash-databases/{id}/filters
@@ -1004,6 +1032,10 @@ same timeline for the whole database, reshaped by the filters, served from a dai
 and never by scanning reports; with `by=release`, `os`, `environment` or `kind` they also carry
 `breakdown: {by, rows: [{key, reports, groups}]}` for the range. A group detail accepts
 the release, OS and environment filters too, and reshapes its breakdowns and timeline.
+
+A report carries `installationId` and `sessionId` (null when absent) beside `userId`.
+Filtering groups by either returns the groups with at least one retained report carrying
+it; the same filters apply to the report export.
 
 `/filters` returns `{kinds, operatingSystems, environments}`: the distinct values this
 database has actually seen, for populating a filter control without offering a value that
@@ -1035,7 +1067,7 @@ GET  /v1/crash-databases/{id}/deletion-impact                 → {groups, repor
 DELETE /v1/crash-databases/{id}
 ```
 
-Retention bounds: 1,000 to 100,000 reports; 7 to 365 days or `null`. Over the cap the
+Retention bounds: 1,000 to 100,000 reports; 7 to 365 days or `null`, unless the operator moved them; the read returns the bounds in force as `bounds`. Over the cap the
 oldest reports of the fullest group are evicted at ingest, every group keeping its latest;
 aged reports are evicted at ingest and hourly. Eviction never changes a group's count,
 first or last seen, releases, users or timeline.
@@ -1127,10 +1159,12 @@ The codes you are most likely to handle:
 
 These are product limits, not deployment settings: they are part of the contract.
 
-Security rate limits also apply and are not configurable: sign-in, submission-intent
-creation, uploads and finalization are all throttled. The public hosted form routes
-carry their own limits, applied per requesting address and per slug. A throttled request returns
-`429 rate_limit_exceeded`.
+Security rate limits also apply, and no user of the platform can configure them: sign-in,
+submission-intent creation, uploads and finalization are all throttled. The public hosted
+form routes carry their own limits, applied per requesting address and per slug. A
+throttled request returns `429 rate_limit_exceeded`. The deployment operator may move the
+limits of the collection routes, and the crash retention bounds, within hard limits (see
+"Operator limits" in [DEPLOYMENT.md](DEPLOYMENT.md)).
 
 ## MCP over HTTP
 

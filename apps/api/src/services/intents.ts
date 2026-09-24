@@ -1,6 +1,8 @@
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import {
   LIMITS,
+  sanitizeDeep,
+  sanitizeText,
   newId,
   questionsById,
   validateAnswers,
@@ -116,6 +118,8 @@ export type FinalizeInput = {
   answers: AnswersInput;
   clientContext: unknown;
   observedIp: string | null;
+  /** FR-062, FR-204: the SDK identity. Stored, never part of the retry comparison. */
+  identity?: { installationId?: string; sessionId?: string; userId?: string };
 };
 
 export type FinalizeResult = {
@@ -138,7 +142,11 @@ export async function finalizeIntent(
   ctx: AppContext,
   input: FinalizeInput,
 ): Promise<FinalizeResult> {
-  const { database, intent, formVersion, answers, clientContext, observedIp } = input;
+  const { database, intent, formVersion, observedIp, identity } = input;
+  // FR-062B: PostgreSQL refuses U+0000 and lone surrogates in jsonb; cleaned before the
+  // hash, so a retry of the same payload still compares equal.
+  const answers = sanitizeDeep(input.answers);
+  const clientContext = sanitizeDeep(input.clientContext);
 
   // The comparison key for the retry contract. Canonical JSON, so key order in the
   // request body is irrelevant but any changed value is a different payload.
@@ -203,6 +211,9 @@ export async function finalizeIntent(
         answers: validation.answers,
         clientContext: clientContext === undefined ? null : clientContext,
         observedIp,
+        installationId: identity?.installationId ?? null,
+        sessionId: identity?.sessionId ?? null,
+        userId: identity?.userId ? sanitizeText(identity.userId) : null,
       })
       .returning({ id: submissions.id, createdAt: submissions.createdAt });
     const created = inserted[0];

@@ -70,7 +70,7 @@ hands it back as JSON or CSV whenever you ask.
   own interface — a framework-free controller that drives the pages and draws nothing, so
   the form looks like your product. `inlet-sdk/crash` reports failures, with messages
   redacted before they leave and client-side dedupe so a crash loop sends once. Each has a
-  Node, browser, Electron and React entry; both have zero runtime dependencies and a queue
+  Node, browser, Electron, React and React Native entry; both have zero runtime dependencies and a queue
   that survives restarts, and together they take one configuration.
 - **It talks to AI agents.** An MCP server with 55 tools, at a URL or as a local process,
   so Claude can summarise your week's feedback, or triage a crash group and resolve it in
@@ -216,7 +216,7 @@ image ships, so what is tested is what is deployed.
 | Path | What lives there |
 | --- | --- |
 | `packages/shared` | Form definitions, answer validation, the crash envelope and its fingerprint, limits, error codes. Shared by the API, the web app and the SDK so the contract cannot drift. |
-| `packages/sdk` | `inlet-sdk`, the client SDK. `feedback` and `crash`, each with Node, browser, Electron and React entries. |
+| `packages/sdk` | `inlet-sdk`, the client SDK. `feedback` and `crash`, each with Node, browser, Electron, React and React Native entries. |
 | `apps/api` | Fastify server, Drizzle schema and migrations, services, routes, tests. |
 | `apps/web` | React management interface, form builder, hosted form page, reference renderer. |
 | `apps/mcp` | `inlet-mcp`, a thin layer over the HTTP API. Runs as a stdio process, and the API serves the same tools at `/v1/mcp`. |

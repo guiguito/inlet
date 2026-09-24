@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CRASH_LIMITS, CRASH_PLATFORMS, KIND_REQUIRES, truncateCrashText, utf8Length } from './crash-core.js';
+import { CRASH_LIMITS, CRASH_PLATFORMS, KIND_REQUIRES, normalizeUuid, truncateCrashText, utf8Length } from './crash-core.js';
 
 /**
  * The crash envelope schema (Crash Reports PRD section 9.1, CR-011, CR-012), on top of
@@ -54,6 +54,22 @@ const eventIdSchema = z
   .regex(/^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i, 'eventId is a UUID or 32 hex characters');
 
 /**
+ * CR-118, UX Analytics §9.1: a UUID in any letter case, with or without dashes, stored
+ * and returned lowercase and dashed. Shared by crash reports and feedback submissions.
+ */
+export const identityUuidSchema = z
+  .string()
+  .max(36)
+  .transform((value, ctx) => {
+    const normalized = normalizeUuid(value);
+    if (normalized === null) {
+      ctx.addIssue({ code: 'custom', message: 'Must be a UUID.' });
+      return z.NEVER;
+    }
+    return normalized;
+  });
+
+/**
  * Section 9.1, exactly. `strictObject` is what implements CR-011: an unknown top-level
  * key fails validation with the key's path, which the API turns into `unknown_field`.
  */
@@ -76,6 +92,9 @@ export const crashEnvelopeSchema = z
     os: z.strictObject({ name: bounded(32), version: bounded(64).optional(), arch: bounded(16).optional() }).optional(),
     runtime: z.strictObject({ name: bounded(32), version: bounded(32).optional() }).optional(),
     user: z.strictObject({ id: z.string().min(1).max(CRASH_LIMITS.userIdMaxLength) }).optional(),
+    // CR-118: the shared SDK identity (Foundations FD-016).
+    installationId: identityUuidSchema.optional(),
+    sessionId: identityUuidSchema.optional(),
     tags: z
       .record(z.string().min(1).max(64), z.string().max(256))
       .refine((tags) => Object.keys(tags).length <= CRASH_LIMITS.tagsMax, `at most ${CRASH_LIMITS.tagsMax} tags`)

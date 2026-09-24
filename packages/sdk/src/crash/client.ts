@@ -3,9 +3,12 @@ import {
   KIND_REQUIRES,
   computeFingerprint,
   effectiveFingerprintParts,
+  randomBytes,
   truncateCrashText,
   utf8Length,
 } from '@inlet/shared/crash-core';
+import { sharedIdentity, type Identity } from '../identity.js';
+import { defaultFetch } from '../health.js';
 import { defaultRedaction } from './redaction.js';
 import { defaultAppRoots, markFrames, parseStack } from './stack.js';
 import { MemoryStore, Transport, type QueueItem } from './transport.js';
@@ -17,10 +20,11 @@ import type {
   DedupeOptions,
   DropReason,
   QueueStore,
+  RandomSource,
 } from './types.js';
 
 export const SDK_NAME = 'inlet-sdk';
-export const SDK_VERSION = '0.1.5';
+export const SDK_VERSION = '0.2.0';
 
 const DEDUPE_KEY = 'dedupe';
 type DedupeState = { byFingerprint: Record<string, number>; recent: number[] };
@@ -44,7 +48,8 @@ export class CrashClient {
   private readonly dedupe: Required<DedupeOptions> | null;
   private readonly onDrop: (reason: DropReason, detail?: unknown) => void;
   private dedupeState: DedupeState | null = null;
-  private userId: string | null = null;
+  /** FD-016: the session, user and installation IDs every module of the application shares. */
+  private readonly identity: Identity;
   private tags: Record<string, string>;
   private closed = false;
   private enabled: boolean;
@@ -72,6 +77,8 @@ export class CrashClient {
     // adapters pass roots explicitly, and there is no `location` there to derive from.
     this.appRoots = options.appRoots ?? defaultAppRoots();
     this.tags = { ...(options.tags ?? {}) };
+    this.identity = sharedIdentity();
+    this.identity.useRandom(options.random);
     this.enabled = options.enabled ?? true;
     // CR-108. A callback that throws must never take a crash report down with it.
     this.onDrop = (reason, detail) => {
@@ -90,7 +97,7 @@ export class CrashClient {
       publishableKey: options.publishableKey,
       crashDatabaseId: options.crashDatabaseId,
       store: this.store,
-      fetch: options.fetch ?? ((input, init) => fetch(input, init)),
+      fetch: options.fetch ?? defaultFetch,
       queueSize: Math.min(200, Math.max(1, options.queueSize ?? 200)),
       debug: this.debug,
       now: this.now,
@@ -115,16 +122,17 @@ export class CrashClient {
 
   // --- Public surface (CR-090) --------------------------------------------------
 
+  /** CR-101: the user ID is the one every module shares (Foundations FD-016). */
   setUser(id: string | null): void {
     if (id === null || id === undefined) {
-      this.userId = null;
+      this.identity.userId = null;
       return;
     }
     const value = String(id);
     if (value.length > CRASH_LIMITS.userIdMaxLength) {
       this.debug(`setUser: the id is longer than ${CRASH_LIMITS.userIdMaxLength} characters and was truncated.`);
     }
-    this.userId = truncateCrashText(value, CRASH_LIMITS.userIdMaxLength) || null;
+    this.identity.userId = truncateCrashText(value, CRASH_LIMITS.userIdMaxLength) || null;
   }
 
   setTag(key: string, value: string): void {
@@ -219,10 +227,11 @@ export class CrashClient {
 
   // --- Envelope building -----------------------------------------------------------
 
-  private base(kind: string, options: CaptureOptions): CrashEnvelope {
+  private base(kind: string, options: CaptureOptions, previousRun = false): CrashEnvelope {
     const tags = { ...this.tags, ...(options.tags ?? {}) };
+    const userId = this.identity.userId;
     return {
-      eventId: randomEventId(),
+      eventId: randomEventId(this.options.random),
       timestamp: new Date(this.now()).toISOString(),
       sdk: { name: SDK_NAME, version: SDK_VERSION },
       ...(this.options.platform ? { platform: this.options.platform } : {}),
@@ -235,16 +244,30 @@ export class CrashClient {
       environment: truncateCrashText(this.options.environment ?? 'production', 32),
       ...(this.options.os ? { os: this.options.os } : {}),
       ...(this.options.runtime ? { runtime: this.options.runtime } : {}),
-      ...(this.userId ? { user: { id: this.userId } } : {}),
+      ...(userId ? { user: { id: userId } } : {}),
+      ...this.identityFields(previousRun),
       ...(Object.keys(tags).length > 0 ? { tags } : {}),
       ...(options.context ? { context: options.context } : {}),
       ...(options.fingerprint ? { fingerprint: options.fingerprint.slice(0, CRASH_LIMITS.fingerprintPartsMax).map((part) => truncateCrashText(part, CRASH_LIMITS.fingerprintPartMaxLength)) } : {}),
     };
   }
 
+  /**
+   * CR-118: the session ID, and the installation ID while an analytics client of the
+   * application has one, unless `identity: false`. A capture is activity and extends the
+   * session. CR-119: a report about the previous run carries that run's IDs as its
+   * sentinel recorded them, and only an enabled analytics client records any, so without
+   * one it carries none rather than the current run's.
+   */
+  private identityFields(previousRun: boolean): { sessionId?: string; installationId?: string } {
+    if (this.options.identity === false || previousRun) return {};
+    const installationId = this.identity.installationId;
+    return { sessionId: this.identity.sessionId(this.now()), ...(installationId ? { installationId } : {}) };
+  }
+
   private envelopeFromError(error: unknown, options: CaptureOptions): CrashEnvelope {
     const err = toError(error);
-    const frames = markFrames(parseStack(err.stack), this.appRoots);
+    const frames = this.options.parseFrames ? this.options.parseFrames(err.stack) : markFrames(parseStack(err.stack), this.appRoots);
     return {
       ...this.base(options.kind ?? 'exception', options),
       exception: {
@@ -270,8 +293,8 @@ export class CrashClient {
 
   /** Fills what the integrator left out and bounds what they supplied. */
   private completeEnvelope(report: CrashReportInput): CrashEnvelope {
-    const { kind, exception, native, exit, tags, context, fingerprint, user, os, runtime, release, environment, platform, timestamp, eventId } = report;
-    const filled = this.base(kind, { ...(tags ? { tags } : {}), ...(context ? { context } : {}), ...(fingerprint ? { fingerprint } : {}) });
+    const { kind, exception, native, exit, tags, context, fingerprint, user, os, runtime, release, environment, platform, timestamp, eventId, previousRun } = report;
+    const filled = this.base(kind, { ...(tags ? { tags } : {}), ...(context ? { context } : {}), ...(fingerprint ? { fingerprint } : {}) }, previousRun === true);
     const envelope: CrashEnvelope = {
       ...filled,
       ...(eventId ? { eventId } : {}),
@@ -540,10 +563,13 @@ function toError(value: unknown): { name: string; message: string; stack?: strin
   return { name: 'Error', message: `Non-error value thrown: ${typeof value}` };
 }
 
-/** A UUID v4 without dashes: 32 hex characters, which the server accepts. */
-export function randomEventId(): string {
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
+/**
+ * A UUID v4 without dashes: 32 hex characters, which the server accepts. From the
+ * injected source, else `crypto.getRandomValues`, else the shared core's generator, so
+ * that React Native without a `crypto` polyfill still reports (CR-120).
+ */
+export function randomEventId(random?: RandomSource): string {
+  const bytes = randomBytes(16, random);
   bytes[6] = (bytes[6]! & 0x0f) | 0x40;
   bytes[8] = (bytes[8]! & 0x3f) | 0x80;
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');

@@ -184,9 +184,9 @@ reports from an application, groups them by fingerprint into **groups**, and tra
 | Tool | What it does |
 | --- | --- |
 | `list_crash_databases`, `get_crash_database` | The crash databases of a project; one of them with its retention, counts and what was dropped in the last 24 hours. |
-| `list_crash_groups` | Groups with aggregates and a sparkline, filtered by state, kind, release, OS, architecture, environment, user ID, time range and text, sorted by last seen, first seen, count or affected users. Returns the total. |
+| `list_crash_groups` | Groups with aggregates and a sparkline, filtered by state, kind, release, OS, architecture, environment, user ID, installation ID, session ID, time range and text, sorted by last seen, first seen, count or affected users. Returns the total. |
 | `get_crash_group` | One group: state, breakdowns by release and OS, and its daily timeline with release markers. |
-| `list_crash_reports`, `get_crash_report` | The retained reports of a group, newest first, and one report with its envelope. `context` is whatever the integrator sent. |
+| `list_crash_reports`, `get_crash_report` | The retained reports of a group, newest first, filterable by user, installation and session ID, and one report with its envelope and its SDK identity (`sessionId`, `installationId`). `context` is whatever the integrator sent. |
 | `list_crash_releases` | Releases in first-seen order with reports, groups and new groups. |
 | `list_crash_filters` | The kinds, operating systems and environments this database has seen, so a filter you pass can actually match. Cheap; use `get_crash_stats` with `by` when you want them counted. |
 | `get_crash_stats` | Reports and new groups per day over 7, 30 or 90 days, honouring the list filters; `by=release`, `os`, `environment` or `kind` adds the range broken down by that dimension. |

@@ -1,5 +1,5 @@
 import type { QueueStore } from '../store.js';
-import type { FeedbackError, FinalizePayload, SubmitOutcome } from './types.js';
+import type { FeedbackError, FinalizePayload, SubmissionIdentity, SubmitOutcome } from './types.js';
 
 /**
  * The pending-submission queue (FR-201 to FR-203, Foundations FD-012).
@@ -34,6 +34,8 @@ export type PendingSubmission = {
   payload: FinalizePayload;
   /** FR-203: what makes a second, different `submit` for this intent refusable locally. */
   payloadKey: string;
+  /** FR-204: the SDK identity, fixed at `submit`, sent beside the payload and never compared. */
+  identity?: SubmissionIdentity;
   queuedAt: number;
 };
 

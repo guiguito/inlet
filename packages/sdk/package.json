@@ -1,7 +1,7 @@
 {
   "name": "inlet-sdk",
-  "version": "0.1.5",
-  "description": "The Inlet client SDK. Feedback collection and crash reports, with Node, browser, Electron and React entries.",
+  "version": "0.2.0",
+  "description": "The Inlet client SDK. Feedback collection and crash reports, with Node, browser, Electron, React and React Native entries.",
   "license": "MIT",
   "author": "Guilhem Duch\u00e9",
   "homepage": "https://github.com/guiguito/inlet/tree/main/packages/sdk#readme",
@@ -27,14 +27,17 @@
     "browser",
     "node",
     "sdk",
-    "privacy"
+    "privacy",
+    "react-native"
   ],
   "type": "module",
   "sideEffects": false,
   "files": [
     "dist",
     "src",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "crash",
+    "feedback"
   ],
   "exports": {
     ".": {
@@ -72,6 +75,11 @@
       "import": "./dist/crash/react.js",
       "require": "./dist/crash/react.cjs"
     },
+    "./crash/react-native": {
+      "types": "./dist/crash/react-native.d.ts",
+      "import": "./dist/crash/react-native.js",
+      "require": "./dist/crash/react-native.cjs"
+    },
     "./feedback": {
       "types": "./dist/feedback/index.d.ts",
       "import": "./dist/feedback/index.js",
@@ -96,7 +104,13 @@
       "types": "./dist/feedback/react.d.ts",
       "import": "./dist/feedback/react.js",
       "require": "./dist/feedback/react.cjs"
-    }
+    },
+    "./feedback/react-native": {
+      "types": "./dist/feedback/react-native.d.ts",
+      "import": "./dist/feedback/react-native.js",
+      "require": "./dist/feedback/react-native.cjs"
+    },
+    "./package.json": "./package.json"
   },
   "engines": {
     "node": ">=18"
@@ -108,7 +122,8 @@
     "build": "node build.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "prepack": "npm --prefix ../.. run build:shared && npm run build"
+    "prepack": "npm --prefix ../.. run build:shared && npm run build",
+    "test:metro": "node test/metro/bundle.mjs"
   },
   "dependencies": {},
   "devDependencies": {
@@ -117,5 +132,8 @@
     "esbuild": "*",
     "typescript": "^7.0.2",
     "vitest": "^5.0.0"
-  }
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts"
 }

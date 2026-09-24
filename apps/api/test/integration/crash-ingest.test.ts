@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, onTestFinished } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { CRASH_GROUPING_VERSION, crashEnvelopeSchema, newId, type CrashEnvelopeInput } from '@inlet/shared';
 import {
@@ -177,8 +177,15 @@ describe('crash ingest', () => {
 
   it('evicts over the cap without touching aggregates, keeping every group its latest report', async () => {
     await h.ctx.db.update(crashDatabases).set({ retentionCap: 1000 }).where(eq(crashDatabases.id, database.id));
-    // Bypass the platform minimum for the test: the column has no check constraint.
+    // Bypass the platform minimum for the test: the column has no check constraint, and a
+    // stored value below the deployment's bound applies at the bound (FD-032), so the bound
+    // moves too, as an operator's INLET_CRASH_RETENTION_REPORTS_MIN would.
     await h.ctx.db.execute(`update crash_databases set retention_cap = 5 where id = '${database.id}'`);
+    const minimum = h.ctx.env.limits.crashRetentionReportsMin;
+    h.ctx.env.limits.crashRetentionReportsMin = 1;
+    onTestFinished(() => {
+      h.ctx.env.limits.crashRetentionReportsMin = minimum;
+    });
     [database] = await h.ctx.db.select().from(crashDatabases).where(eq(crashDatabases.id, database.id));
     const base = new Date('2026-09-17T00:00:00Z');
     // Two groups: "loadUser" gets 6 reports, "saveUser" gets 2. Cap 5 → 3 evicted from the fuller group.

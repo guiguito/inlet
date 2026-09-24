@@ -50,6 +50,13 @@
       "when": 1789679499609,
       "tag": "0006_crash_list_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1790277199154,
+      "tag": "0007_release_8_sdk_identity",
+      "breakpoints": true
     }
   ]
 }

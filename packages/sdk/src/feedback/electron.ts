@@ -231,6 +231,7 @@ async function toTransferable(file: ScreenshotSource): Promise<{ data: ArrayBuff
   // A copy, not `.buffer`: a Node `Buffer` is a view into a shared pool and its backing
   // ArrayBuffer holds unrelated bytes either side of these ones.
   if (file instanceof Uint8Array) return { data: copyOf(file), mediaType: '' };
+  if (!('data' in file)) throw new Error('inlet-sdk/feedback/electron: a { uri } file descriptor is a React Native file; pass a Blob or bytes in a renderer.');
   const bytes = file.data instanceof Uint8Array ? file.data : new Uint8Array(file.data);
   return {
     data: copyOf(bytes),
