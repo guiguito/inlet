@@ -125,7 +125,12 @@ async function ensureMinioBinary() {
   await fs.mkdir(path.dirname(minioBinary), { recursive: true });
   const response = await fetch(url);
   if (!response.ok) {
-    throw new Error(`Could not download the MinIO server binary from ${url}: ${response.status}`);
+    // MinIO withdrew its community binaries on September 11, 2026; dl.min.io answers 410.
+    throw new Error(
+      response.status === 410
+        ? `MinIO no longer publishes server binaries (${url} answered 410). Build it from source with scripts/build-minio.sh (needs Go and git), which puts it in .dev/bin/minio, or start any S3-compatible server on port ${DEFAULTS.minioPort} with the access key ${DEFAULTS.minioAccessKey} and secret ${DEFAULTS.minioSecretKey}.`
+        : `Could not download the MinIO server binary from ${url}: ${response.status}`,
+    );
   }
   await fs.writeFile(minioBinary, Buffer.from(await response.arrayBuffer()));
   await fs.chmod(minioBinary, 0o755);
