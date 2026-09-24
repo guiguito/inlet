@@ -70,7 +70,7 @@ test.describe('crash reports', () => {
     await signIn(page);
     await page.goto(`/crash-databases/${f.databaseId}`);
     await expect(page.getByRole('heading', { name: f.name })).toBeVisible();
-    await expect(page.getByText('2 groups')).toBeVisible();
+    await expect(page.getByText('2 groups', { exact: true })).toBeVisible();
     await expect(page.getByText('13 reports kept')).toBeVisible();
 
     // CR-048: the timeline sums the day; CR-040: two groups, thirteen reports, four users.
