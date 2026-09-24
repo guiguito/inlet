@@ -5,8 +5,8 @@ Collection. This is the record of realigning the existing code with those amendm
 before any analytics code is written. Decisions and rejected alternatives are in
 `docs/DECISIONS.md` section 29.
 
-**Status: built and verified September 24, 2026.** `inlet-sdk` 0.2.0 is built and its
-tarball bundles in Metro; it is not published to npm.
+**Status: built and verified September 24, 2026.** `inlet-sdk` 0.2.0 is published to npm
+(`latest`), and CI runs every check on GitHub Actions (`.github/workflows/ci.yml`).
 
 ## Requirement by requirement
 

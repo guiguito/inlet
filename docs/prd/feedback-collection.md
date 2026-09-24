@@ -1,7 +1,7 @@
 # Inlet — Feedback Collection PRD
 
 ## Document Status
-**Status:** Shipped through Release 5, and Release 7 — SDK; requirements baseline for maintenance. Release 8 adds the shared SDK identity on submissions and a React Native adapter (FR-204 amended, FR-211 added): built on September 24, 2026 as `inlet-sdk` 0.2.0, not yet published; the installation ID arrives with the analytics module. Technical choices: `docs/DECISIONS.md` section 29.
+**Status:** Shipped through Release 5, and Release 7 — SDK; requirements baseline for maintenance. Release 8 adds the shared SDK identity on submissions and a React Native adapter (FR-204 amended, FR-211 added): built on September 24, 2026 and published to npm as `inlet-sdk` 0.2.0; the installation ID arrives with the analytics module. Technical choices: `docs/DECISIONS.md` section 29.
 **Product:** Inlet — Feedback Collection capability
 **Language:** English
 **Foundations:** Every shared rule (accounts, roles, keys, notifications plumbing, export, deletion, deployment, brand, SDK and MCP conventions) is on the Foundations PRD and is not repeated here.
