@@ -1,7 +1,7 @@
 # Inlet — Crash Reports PRD
 
 ## Document Status
-**Status:** Implemented as Release 6 on September 17, 2026: server, interface, MCP tools and `inlet-sdk/crash` with Node, browser and Electron adapters, published to npm as `inlet-sdk` (the `@inlet` scope belongs to an unrelated party). Technical choices and rejected alternatives: `docs/DECISIONS.md` section 24. `inlet-sdk/feedback`, which section 15 allowed to slip, is specified in Feedback Collection PRD section 25 as Release 7 — SDK. Release 8 adds the shared SDK identity and a React Native adapter (CR-118 to CR-120), specified here and not yet built.
+**Status:** Implemented as Release 6 on September 17, 2026: server, interface, MCP tools and `inlet-sdk/crash` with Node, browser and Electron adapters, published to npm as `inlet-sdk` (the `@inlet` scope belongs to an unrelated party). Technical choices and rejected alternatives: `docs/DECISIONS.md` section 24. `inlet-sdk/feedback`, which section 15 allowed to slip, is specified in Feedback Collection PRD section 25 as Release 7 — SDK. Release 8 adds the shared SDK identity and a React Native adapter (CR-118 to CR-120): built on September 24, 2026 as `inlet-sdk` 0.2.0, not yet published, except what takes effect only while an analytics client is enabled — the installation ID, crash flags, the session and installation IDs the sentinel records, and erasure by installation or user ID (CR-047) — which ships with the analytics module. Technical choices: `docs/DECISIONS.md` section 29.
 **Product:** Inlet — Crash Reports capability
 **Language:** English
 **Foundations:** Accounts, roles, keys, notifications plumbing, export, deletion, deployment, brand, SDK packaging and MCP conventions are on the Foundations PRD and are not repeated here.

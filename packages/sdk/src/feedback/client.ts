@@ -1,4 +1,6 @@
 import { MemoryStore } from '../store.js';
+import { defaultFetch } from '../health.js';
+import { sharedIdentity } from '../identity.js';
 import { FeedbackController } from './controller.js';
 import { HttpGateway, type Uploader } from './gateway.js';
 import type {
@@ -10,7 +12,7 @@ import type {
 } from './types.js';
 
 export const SDK_NAME = 'inlet-sdk';
-export const SDK_VERSION = '0.1.0';
+export const SDK_VERSION = '0.2.0';
 
 /**
  * The feedback client (FR-190 to FR-192).
@@ -43,14 +45,31 @@ export class FeedbackClient {
     }
     this.debug = options.debug ?? (() => {});
     this.now = options.now ?? (() => Date.now());
+    const identity = sharedIdentity();
+    identity.useRandom(options.random);
     this.gateway = new HttpGateway({
       baseUrl: options.baseUrl,
       publishableKey: options.publishableKey,
       feedbackDatabaseId: options.feedbackDatabaseId,
       store: options.store ?? new MemoryStore(),
-      fetch: options.fetch ?? ((input, init) => fetch(input, init)),
+      fetch: options.fetch ?? defaultFetch,
       debug: this.debug,
       now: this.now,
+      ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+      /*
+       * FR-204, FD-016: the session ID (a submission is activity and extends it), the user
+       * ID when one is set, and the installation ID only while an analytics client of this
+       * application holds one. Read when `submit` is called.
+       */
+      ...(options.identity === false
+        ? {}
+        : {
+            identity: () => ({
+              sessionId: identity.sessionId(this.now()),
+              ...(identity.userId ? { userId: identity.userId } : {}),
+              ...(identity.installationId ? { installationId: identity.installationId } : {}),
+            }),
+          }),
       ...(deps.upload ? { upload: deps.upload } : {}),
     });
     // FR-201: a submission a previous run could not deliver is delivered now.

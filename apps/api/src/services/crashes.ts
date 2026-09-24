@@ -22,6 +22,7 @@ import {
   type CrashReleaseRow,
   type ProjectCredentialRow,
 } from '../db/schema.js';
+import type { OperatorLimits } from '../env.js';
 import { apiError } from '../lib/errors.js';
 
 /**
@@ -62,17 +63,17 @@ export type IngestInput = {
 // --- Rate limiting (CR-016, FD-030, FD-031) ---------------------------------
 
 /**
- * Platform-defined and not configurable (CR-016). Section 14 "Recommended defaults".
+ * Platform-defined (CR-016, section 14 "Recommended defaults"); platform users cannot
+ * configure them and the deployment operator may override them (Foundations FD-032,
+ * `OPERATOR_LIMITS` in env.ts). Per credential and fingerprint: `crashPerFingerprintBurst`
+ * in an hour, then one per `crashPerFingerprintIntervalSeconds`.
  * ponytail: in memory on one instance (FD-031). A shared store is the documented upgrade
  * and changes no contract.
  */
-export const CRASH_RATE_LIMITS = {
-  perCredentialFiveMinutes: 300,
-  perCredentialHour: 2_000,
-  /** Per credential and fingerprint: this many in an hour, then one a minute. */
-  perFingerprintBurst: 10,
-  perFingerprintSustainedMs: 60_000,
-} as const;
+export type CrashRateLimits = Pick<
+  OperatorLimits,
+  'crashPerKeyFiveMinutes' | 'crashPerKeyHour' | 'crashPerFingerprintBurst' | 'crashPerFingerprintIntervalSeconds'
+>;
 
 type Window = { times: number[] };
 const credentialWindows = new Map<string, Window>();
@@ -105,23 +106,24 @@ function windowFor(map: Map<string, Window>, key: string): Window {
  * proceed. Counting happens only when the report is admitted, so refused reports do not
  * extend their own penalty.
  */
-export function checkCrashRateLimit(credentialId: string, fingerprint: string, now = Date.now()): number | null {
+export function checkCrashRateLimit(limits: CrashRateLimits, credentialId: string, fingerprint: string, now = Date.now()): number | null {
+  const sustainedMs = limits.crashPerFingerprintIntervalSeconds * 1000;
   const credential = windowFor(credentialWindows, credentialId);
   prune(credential, now, 3_600_000);
-  if (credential.times.length >= CRASH_RATE_LIMITS.perCredentialHour) {
+  if (credential.times.length >= limits.crashPerKeyHour) {
     return Math.max(1, Math.ceil((credential.times[0]! + 3_600_000 - now) / 1000));
   }
   const recent = credential.times.filter((time) => time > now - 300_000);
-  if (recent.length >= CRASH_RATE_LIMITS.perCredentialFiveMinutes) {
+  if (recent.length >= limits.crashPerKeyFiveMinutes) {
     return Math.max(1, Math.ceil((recent[0]! + 300_000 - now) / 1000));
   }
 
   const perFingerprint = windowFor(fingerprintWindows, `${credentialId}:${fingerprint}`);
   prune(perFingerprint, now, 3_600_000);
-  if (perFingerprint.times.length >= CRASH_RATE_LIMITS.perFingerprintBurst) {
+  if (perFingerprint.times.length >= limits.crashPerFingerprintBurst) {
     const last = perFingerprint.times[perFingerprint.times.length - 1]!;
-    if (now - last < CRASH_RATE_LIMITS.perFingerprintSustainedMs) {
-      return Math.max(1, Math.ceil((last + CRASH_RATE_LIMITS.perFingerprintSustainedMs - now) / 1000));
+    if (now - last < sustainedMs) {
+      return Math.max(1, Math.ceil((last + sustainedMs - now) / 1000));
     }
   }
 
@@ -145,7 +147,7 @@ export async function ingestCrashReport(ctx: AppContext, input: IngestInput): Pr
 
   // The same switch the HTTP rate limiter honours, for the same reason: the end-to-end
   // suite sends hundreds of reports in a minute and the limits have their own tests.
-  const retryAfter = ctx.env.INLET_DISABLE_RATE_LIMITS ? null : checkCrashRateLimit(credential.id, fingerprint, receivedAt.getTime());
+  const retryAfter = ctx.env.INLET_DISABLE_RATE_LIMITS ? null : checkCrashRateLimit(ctx.env.limits, credential.id, fingerprint, receivedAt.getTime());
   if (retryAfter !== null) {
     await recordDropped(ctx.db, input.database.id, receivedAt, { rateLimited: 1 });
     throw apiError('rate_limit_exceeded', 'Too many crash reports from this key; slow down.', [
@@ -251,6 +253,8 @@ export async function ingestCrashReport(ctx: AppContext, input: IngestInput): Pr
       osVersion: envelope.os?.version ?? null,
       arch: envelope.os?.arch ?? null,
       userId: envelope.user?.id ?? null,
+      installationId: envelope.installationId ?? null,
+      sessionId: envelope.sessionId ?? null,
       credentialId: credential.id,
       envelope,
     });
@@ -301,7 +305,7 @@ export async function ingestCrashReport(ctx: AppContext, input: IngestInput): Pr
     }
 
     // CR-080, CR-081: inline, bounded eviction.
-    const evicted = await evictOverCap(tx, database, receivedAt);
+    const evicted = await evictOverCap(tx, database, receivedAt, ctx.env.limits);
     if (evicted > 0) await recordDropped(tx, database.id, receivedAt, { evicted });
 
     return { reportId, groupId: group.id, isNewGroup, isRegression, duplicate: false };
@@ -380,6 +384,36 @@ export async function enqueueCrashNotification(
   `);
 }
 
+export type RetentionBounds = Pick<
+  OperatorLimits,
+  | 'crashRetentionReportsMin'
+  | 'crashRetentionReportsMax'
+  | 'crashRetentionReportsDefault'
+  | 'crashRetentionDaysMin'
+  | 'crashRetentionDaysMax'
+  | 'crashRetentionDaysDefault'
+>;
+
+/**
+ * CR-002, FD-032: the setting as it applies under the deployment's current bounds. An
+ * operator who narrows the bounds does not rewrite anyone's setting; a stored value
+ * outside them is applied at the nearest bound, and reads report that effective value.
+ * Unlimited age stays unlimited: it is a choice the bounds on days do not describe.
+ */
+export function effectiveRetention(
+  database: Pick<CrashDatabaseRow, 'retentionCap' | 'retentionMaxAgeDays'>,
+  limits: RetentionBounds,
+): { maxReports: number; maxAgeDays: number | null } {
+  const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+  return {
+    maxReports: clamp(database.retentionCap, limits.crashRetentionReportsMin, limits.crashRetentionReportsMax),
+    maxAgeDays:
+      database.retentionMaxAgeDays === null
+        ? null
+        : clamp(database.retentionMaxAgeDays, limits.crashRetentionDaysMin, limits.crashRetentionDaysMax),
+  };
+}
+
 /** How many reports one ingest may evict, so a spike cannot stall the request (section 11). */
 const EVICTION_BATCH = 200;
 
@@ -388,11 +422,12 @@ const EVICTION_BATCH = 200;
  * reports, keeping each group's latest. CR-081: past the age limit, remove regardless.
  * CR-082: aggregates and rollups are never touched. Returns how many were removed.
  */
-export async function evictOverCap(tx: Db, database: CrashDatabaseRow, now: Date): Promise<number> {
+export async function evictOverCap(tx: Db, database: CrashDatabaseRow, now: Date, limits: RetentionBounds): Promise<number> {
   let evicted = 0;
+  const retention = effectiveRetention(database, limits);
 
-  if (database.retentionMaxAgeDays !== null) {
-    const cutoff = new Date(now.getTime() - database.retentionMaxAgeDays * 86_400_000);
+  if (retention.maxAgeDays !== null) {
+    const cutoff = new Date(now.getTime() - retention.maxAgeDays * 86_400_000);
     const aged = await tx.execute(sql`
       delete from crash_reports where id in (
         select id from crash_reports
@@ -407,7 +442,7 @@ export async function evictOverCap(tx: Db, database: CrashDatabaseRow, now: Date
     .select({ total: sql<number>`count(*)` })
     .from(crashReports)
     .where(eq(crashReports.crashDatabaseId, database.id));
-  const over = Number(totalRow?.total ?? 0) - database.retentionCap;
+  const over = Number(totalRow?.total ?? 0) - retention.maxReports;
   if (over <= 0) return evicted;
 
   // Oldest first within the fullest group, never a group's latest report.
@@ -470,7 +505,7 @@ export async function runCrashRetentionPass(ctx: AppContext, now = new Date()): 
   const databases = await ctx.db.select().from(crashDatabases);
   let total = 0;
   for (const database of databases) {
-    const evicted = await evictOverCap(ctx.db, database, now);
+    const evicted = await evictOverCap(ctx.db, database, now, ctx.env.limits);
     if (evicted > 0) {
       await recordDropped(ctx.db, database.id, now, { evicted });
       total += evicted;

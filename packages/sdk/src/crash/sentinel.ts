@@ -18,9 +18,17 @@ import { dirname } from 'node:path';
  * periodic touch would contend with the reports it exists to protect.
  */
 
+export type SentinelRelease = { version: string; build?: string; channel?: string };
+
 export type PreviousRun = {
   /** Absent when the file was unreadable: the crash still happened, the uptime is just unknown. */
   lastUptimeMs?: number;
+  /**
+   * CR-119: the release of the run that died, so its report is filed against the version
+   * that crashed rather than the one just installed over it. Absent in a sentinel written
+   * by 0.1.x, which did not record it.
+   */
+  release?: SentinelRelease;
 };
 
 export type SentinelOptions = {
@@ -29,6 +37,8 @@ export type SentinelOptions = {
   now: () => number;
   /** How often the mtime is refreshed. */
   intervalMs: number;
+  /** CR-119: the release of this run, recorded for the next launch to report against. */
+  release?: SentinelRelease;
   debug: (message: string, detail?: unknown) => void;
 };
 
@@ -45,7 +55,7 @@ export type Sentinel = {
  */
 export function startSentinel(options: SentinelOptions): Sentinel {
   const previous = readPrevious(options);
-  write(options, options.now());
+  write(options, options.now(), options.release);
 
   const timer = setInterval(() => {
     try {
@@ -87,11 +97,12 @@ function readPrevious(options: SentinelOptions): PreviousRun | null {
   // A corrupt file still reports. The previous run died either way, and discarding it is the
   // one outcome that loses information; an unknown uptime is a smaller loss than a lost crash.
   try {
-    const parsed = JSON.parse(raw) as { startedAt?: unknown };
+    const parsed = JSON.parse(raw) as { startedAt?: unknown; release?: unknown };
+    const release = recordedRelease(parsed?.release);
     const startedAt = typeof parsed?.startedAt === 'number' ? parsed.startedAt : null;
-    if (startedAt === null) return {};
+    if (startedAt === null) return release ? { release } : {};
     const uptime = Math.round(touchedAt) - startedAt;
-    return uptime >= 0 ? { lastUptimeMs: uptime } : {};
+    return { ...(uptime >= 0 ? { lastUptimeMs: uptime } : {}), ...(release ? { release } : {}) };
   } catch {
     return {};
   }
@@ -103,16 +114,27 @@ function readPrevious(options: SentinelOptions): PreviousRun | null {
  * renamed, so a process that dies mid-write leaves the previous sentinel intact rather than a
  * truncated one — the same shape `FileStore` uses.
  */
-function write(options: SentinelOptions, startedAt: number | undefined): void {
+function recordedRelease(value: unknown): SentinelRelease | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const release = value as Record<string, unknown>;
+  if (typeof release.version !== 'string' || release.version === '') return undefined;
+  return {
+    version: release.version,
+    ...(typeof release.build === 'string' ? { build: release.build } : {}),
+    ...(typeof release.channel === 'string' ? { channel: release.channel } : {}),
+  };
+}
+
+function write(options: SentinelOptions, startedAt: number | undefined, release?: SentinelRelease): void {
   let body: string;
   if (startedAt !== undefined) {
-    body = JSON.stringify({ startedAt });
+    body = JSON.stringify({ startedAt, ...(release ? { release } : {}) });
   } else {
     try {
       body = readFileSync(options.file, 'utf8');
     } catch {
       // Something removed it underneath us; re-arm from now rather than stop reporting.
-      body = JSON.stringify({ startedAt: options.now() });
+      body = JSON.stringify({ startedAt: options.now(), ...(options.release ? { release: options.release } : {}) });
     }
   }
   mkdirSync(dirname(options.file), { recursive: true });

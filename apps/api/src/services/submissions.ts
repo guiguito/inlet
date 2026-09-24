@@ -27,6 +27,10 @@ export type SubmissionSummary = {
   observedIp: string | null;
   answers: StoredAnswers;
   clientContext: unknown;
+  /** FR-062, FD-016: the SDK identity, when the client supplied it. */
+  installationId: string | null;
+  sessionId: string | null;
+  userId: string | null;
   attachmentCount: number;
   /**
    * FR-175: the screenshot the responses list shows as a thumbnail, or null when
@@ -373,6 +377,9 @@ function toSummary(row: SubmissionRow): Omit<SubmissionSummary, 'attachmentCount
     observedIp: row.observedIp,
     answers: row.answers,
     clientContext: row.clientContext,
+    installationId: row.installationId,
+    sessionId: row.sessionId,
+    userId: row.userId,
   };
 }
 

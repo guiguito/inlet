@@ -1,4 +1,5 @@
-import { sniffImageMediaType } from './controller.js';
+import { isReactNativeFile, sniffImageMediaType } from './controller.js';
+import { capabilities, timeoutSignal } from '../health.js';
 import { PendingQueue, type PendingSubmission, type SendOutcome } from './transport.js';
 import type {
   FeedbackError,
@@ -8,6 +9,7 @@ import type {
   Result,
   ScreenshotSource,
   SubmissionIntent,
+  SubmissionIdentity,
   SubmitOutcome,
   UploadedAttachment,
 } from './types.js';
@@ -41,6 +43,10 @@ export type HttpGatewayOptions = {
   debug: (message: string, detail?: unknown) => void;
   now: () => number;
   upload?: Uploader;
+  /** FR-204: the identity to attach when `submit` is called. Absent with `identity: false`. */
+  identity?: () => SubmissionIdentity;
+  /** Per-request timeout in milliseconds, uploads excepted. Default 20000. */
+  timeoutMs?: number;
 };
 
 const INTENT_TOKEN_HEADER = 'x-inlet-intent-token';
@@ -52,7 +58,7 @@ export class HttpGateway implements FeedbackGateway {
   readonly queue: PendingQueue;
   private readonly base: string;
   private readonly upload_: Uploader;
-  private serverChecked = false;
+  private warnedServer = false;
   private form: Promise<Result<PublishedForm>> | null = null;
 
   constructor(private readonly options: HttpGatewayOptions) {
@@ -119,10 +125,15 @@ export class HttpGateway implements FeedbackGateway {
     file: ScreenshotSource,
     onProgress?: (fraction: number) => void,
   ): Promise<Result<UploadedAttachment>> {
-    const { blob, filename } = toBlob(file);
     const body = new FormData();
     body.append('questionId', questionId);
-    body.append('file', blob, filename);
+    if (isReactNativeFile(file)) {
+      // FR-211: React Native's FormData reads the file from its `uri`; no other runtime can.
+      body.append('file', { uri: file.uri, name: file.name, type: file.type } as unknown as Blob);
+    } else {
+      const { blob, filename } = toBlob(file);
+      body.append('file', blob, filename);
+    }
 
     let response: UploadResponse;
     try {
@@ -175,6 +186,8 @@ export class HttpGateway implements FeedbackGateway {
       token: intent.token,
       payload,
       payloadKey: payloadKey(payload),
+      // FR-204: fixed now, when `submit` is called, and outside the compared payload.
+      ...(this.options.identity ? { identity: this.options.identity() } : {}),
       queuedAt: this.options.now(),
     };
 
@@ -225,7 +238,7 @@ export class HttpGateway implements FeedbackGateway {
 
   /** One finalization attempt, mapped onto what the queue does next (FR-201). */
   private async send(pending: PendingSubmission): Promise<SendOutcome> {
-    await this.checkServer();
+    const identity = await this.checkServer();
     const url = `${this.db}/submission-intents/${pending.intentId}/submit`;
     let response: Response;
     try {
@@ -236,7 +249,9 @@ export class HttpGateway implements FeedbackGateway {
           [INTENT_TOKEN_HEADER]: pending.token,
           'content-type': 'application/json',
         },
-        body: JSON.stringify(pending.payload),
+        // FR-204: the identity only to a deployment whose health lists `identity`.
+        body: JSON.stringify({ ...pending.payload, ...(identity && pending.identity ? pending.identity : {}) }),
+        ...this.timeout(),
       });
     } catch (error) {
       return { kind: 'failed', error: networkError(error) };
@@ -293,7 +308,7 @@ export class HttpGateway implements FeedbackGateway {
   ): Promise<Result<T>> {
     let response: Response;
     try {
-      response = await this.options.fetch(url, { method, headers, ...(body === undefined ? {} : { body }) });
+      response = await this.options.fetch(url, { method, headers, ...(body === undefined ? {} : { body }), ...this.timeout() });
     } catch (error) {
       return { ok: false, error: networkError(error) };
     }
@@ -302,32 +317,34 @@ export class HttpGateway implements FeedbackGateway {
     return { ok: false, error: errorFrom(parsed, response.status) };
   }
 
+  /** A request timeout that does not need `AbortSignal.timeout` (FR-211). Covers the body read too. */
+  private timeout(): { signal?: AbortSignal } {
+    const { signal } = timeoutSignal(this.options.timeoutMs ?? 20_000);
+    return signal ? { signal } : {};
+  }
+
   /**
-   * FR-210: the minimum-server check, once, before the first request that matters.
+   * FR-210, FD-016: what the deployment can do, from the probe every module shares, asked
+   * again after a failed probe. Returns whether the identity fields may be sent.
    *
    * A deployment older than Release 7 serves the four collection routes but refuses a
    * browser's preflight, which reaches `fetch` as an indistinguishable network failure.
    * Saying so once through `debug` is the difference between "upgrade your Inlet" and an
    * afternoon spent looking at the wrong thing.
    */
-  private async checkServer(): Promise<void> {
-    if (this.serverChecked) return;
-    this.serverChecked = true;
-    try {
-      const response = await this.options.fetch(`${this.base}/v1/health`, { method: 'GET' });
-      if (!response.ok) {
-        this.options.debug(`Inlet answered ${response.status} to a health check.`);
-        return;
-      }
-      const body = (await response.json().catch(() => null)) as { capabilities?: string[] } | null;
-      if (!body?.capabilities?.includes(CROSS_ORIGIN_CAPABILITY)) {
-        this.options.debug(
-          'This Inlet deployment predates Release 7; it does not answer feedback requests from another origin. Upgrade the server, or serve your application from the same origin.',
-        );
-      }
-    } catch (error) {
-      this.options.debug('Inlet is not reachable.', error);
+  private async checkServer(): Promise<boolean> {
+    const caps = await capabilities(this.base, this.options.fetch, this.options.timeoutMs ?? 20_000);
+    if (caps === null) {
+      this.options.debug('Inlet is not reachable for a health check.');
+      return false;
     }
+    if (!caps.includes(CROSS_ORIGIN_CAPABILITY) && !this.warnedServer) {
+      this.warnedServer = true;
+      this.options.debug(
+        'This Inlet deployment predates Release 7; it does not answer feedback requests from another origin. Upgrade the server, or serve your application from the same origin.',
+      );
+    }
+    return caps.includes('identity');
   }
 }
 
@@ -356,6 +373,7 @@ function toBlob(file: ScreenshotSource): { blob: Blob; filename: string } {
    * inside; uploading that produced "That file is not a readable image" from the server.
    * `Blob` honours a view's offset and length, which is exactly what is wanted.
    */
+  if (!('data' in file)) throw new Error('unreachable: a React Native file is appended by uri');
   const bytes = file.data instanceof Uint8Array ? bytesOf(file.data) : new Uint8Array(file.data);
   return { blob: new Blob([bytes], { type: file.mediaType }), filename: file.filename ?? 'screenshot' };
 }

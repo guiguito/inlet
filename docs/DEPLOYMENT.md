@@ -126,6 +126,41 @@ Every setting is an environment variable. Two are required and have no default.
 | `INLET_PENDING_UPLOAD_EXPIRY_DAYS` | `1` | How long an uploaded screenshot survives if its submission is never finalized. Enforced by an object-store lifecycle rule. |
 | `INLET_DISABLE_RATE_LIMITS` | `false` | Testing only. Never in production. |
 
+### Operator limits
+
+The limits of the collection routes and the bounds of crash retention are platform
+defaults that people using Inlet cannot change. You, the operator, can, through the
+variables below (Foundations FD-032). A value outside the hard limits stops the server at
+startup with a message naming the variable, as does a set of retention bounds whose
+minimum, default and maximum are out of order. Leave a variable unset to keep its default.
+
+The feedback limits apply both to the API collection routes and to the hosted form
+routes, since they are the same operations reached two ways. Every rate limit is counted
+in memory on the API process (see Health and observability).
+
+| Variable | Default | Hard limits | What it limits |
+| --- | --- | --- | --- |
+| `INLET_LIMIT_CRASH_PER_KEY_5M` | `300` | 10 to 100,000 | Crash reports per key per 5 minutes |
+| `INLET_LIMIT_CRASH_PER_KEY_HOUR` | `2000` | 10 to 1,000,000 | Crash reports per key per hour |
+| `INLET_LIMIT_CRASH_PER_FINGERPRINT_BURST` | `10` | 1 to 10,000 | Reports of one crash per key per hour before the slower rate applies |
+| `INLET_LIMIT_CRASH_PER_FINGERPRINT_INTERVAL_S` | `60` | 1 to 3,600 | After that burst, seconds between reports of the same crash |
+| `INLET_LIMIT_FEEDBACK_FORM_PER_5M` | `600` | 10 to 100,000 | Published-form reads per key or address per 5 minutes |
+| `INLET_LIMIT_FEEDBACK_INTENTS_PER_HOUR` | `60` | 1 to 100,000 | Submission intents per key or address per hour |
+| `INLET_LIMIT_FEEDBACK_UPLOADS_PER_HOUR` | `120` | 1 to 100,000 | Screenshot uploads per key or address per hour |
+| `INLET_LIMIT_FEEDBACK_SUBMITS_PER_HOUR` | `60` | 1 to 100,000 | Finalizations per key or address per hour |
+| `INLET_LIMIT_HOSTED_PER_FORM_PER_HOUR` | `600` | 10 to 1,000,000 | Intents and finalizations per hosted form per hour, all visitors together |
+| `INLET_CRASH_RETENTION_REPORTS_MIN` | `1000` | 100 to 1,000,000 | Lowest report cap a team may set |
+| `INLET_CRASH_RETENTION_REPORTS_MAX` | `100000` | 100 to 1,000,000 | Highest report cap a team may set |
+| `INLET_CRASH_RETENTION_REPORTS_DEFAULT` | `10000` | 100 to 1,000,000 | Cap of a new crash database |
+| `INLET_CRASH_RETENTION_DAYS_MIN` | `7` | 1 to 3,650 | Shortest age limit a team may set |
+| `INLET_CRASH_RETENTION_DAYS_MAX` | `365` | 1 to 3,650 | Longest age limit a team may set (unlimited stays allowed) |
+| `INLET_CRASH_RETENTION_DAYS_DEFAULT` | `90` | 1 to 3,650 | Age limit of a new crash database |
+
+Narrowing the retention bounds rewrites nobody's setting. A crash database whose stored
+cap or age now falls outside them is enforced at the nearest bound, and its retention
+read reports that effective value, until someone sets it again. The analytics limits of
+the same requirement arrive with the analytics capability.
+
 ### Malware scanning
 
 | Variable | Default | Notes |
@@ -268,7 +303,10 @@ docker compose up -d --build
 Migrations apply at startup. **Back up the database first** — Inlet does not roll
 migrations back for you.
 
-Migrations to date are additive: new tables and columns, no destructive rewrites. That
+Migrations to date are additive: new tables and columns, no destructive rewrites. The
+latest, `0007_release_8_sdk_identity`, adds nullable `installation_id` and `session_id`
+columns to crash reports and submissions, and `user_id` to submissions, with their
+indexes; existing rows keep them null and no reset is needed. That
 is a property of the migrations that exist, not a promise about future ones, so read
 the release notes.
 
@@ -307,7 +345,10 @@ Returns 200 when the process is up and can reach PostgreSQL. Use it as your cont
 health check and your load balancer probe.
 
 Logs are structured JSON on stdout (pino). Ship them wherever you ship logs. Webhook
-URLs, passwords and tokens are redacted before anything is written.
+URLs, passwords and tokens are redacted before anything is written. A request is logged
+as its method and its **route pattern** (`/v1/crash-databases/:databaseId/reports`), never
+its URL, and without the client's address or port, so no identifier from a path or a
+query string, and no ingest request's address, reaches your logs.
 
 Three workers run inside the API process and log what they do: one purges screenshot
 objects after a deletion, one delivers Slack notifications with backoff, and one runs

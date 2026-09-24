@@ -50,7 +50,8 @@ import { openapiDocument } from './openapi.js';
  */
 export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
   const app = Fastify({
-    loggerInstance: ctx.log,
+    // AN-019, CR-015: one request serializer for every route.
+    loggerInstance: ctx.log.child({}, { serializers: { req: serializeRequest } }),
     // FR-062C: the deployment decides which proxies may report the client address.
     // A hop count is valid at runtime but missing from Fastify's option type.
     trustProxy: ctx.env.trustProxy as boolean | string | string[],
@@ -100,7 +101,9 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
         // reachable one before it queues reports the server would refuse.
         // 'mcp' announces the Streamable HTTP endpoint at /v1/mcp (FR-126), so a client
         // can tell a deployment that serves MCP from one that only ships the binary.
-        return { status: 'ok', capabilities: ['feedback', 'crash', CROSS_ORIGIN_FEEDBACK, 'mcp'] };
+        // 'identity' says this deployment accepts the SDK identity fields of FD-016 on crash
+        // reports and submissions; an SDK leaves them out for a deployment that does not.
+        return { status: 'ok', capabilities: ['feedback', 'crash', CROSS_ORIGIN_FEEDBACK, 'mcp', 'identity'] };
       });
 
       await v1.register(authRoutes(ctx), { prefix: '/auth' });
@@ -131,6 +134,26 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
   await registerSpa(app, ctx);
 
   return app;
+}
+
+/**
+ * The request as it reaches the log (Foundations §12.2, CR-015, UX Analytics AN-019).
+ *
+ * Fastify's default serializer writes the full URL, the client address and its port. The
+ * URL is replaced by the route pattern, so no installation, session or user ID in a path or
+ * a query string reaches the log; the address and the port are left out on every route, so
+ * that no ingest request's address is ever logged. A request that matched no route is
+ * logged without its path for the same reason.
+ *
+ * Rejected: dropping the address on the ingest routes only. The feedback flow stores the
+ * observed address with the submission anyway (FR-062C), so keeping it in the log bought an
+ * operator nothing the submission does not already hold, at the cost of a second branch.
+ */
+export function serializeRequest(request: {
+  method: string;
+  routeOptions?: { url?: string };
+}): { method: string; route: string } {
+  return { method: request.method, route: request.routeOptions?.url ?? '(no route)' };
 }
 
 /** OpenAPI 3.1 generated from the same Zod schemas the routes validate against. */

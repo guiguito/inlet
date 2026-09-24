@@ -1032,6 +1032,27 @@
               }
             ]
           },
+          "installationId": {
+            "description": "FR-062: the SDK installation ID, lowercase and dashed, when supplied.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sessionId": {
+            "description": "FR-062: the SDK session ID, lowercase and dashed, when supplied.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "userId": {
+            "description": "FR-062: the opaque user ID the integrator set in the SDK, when supplied.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "attachmentCount": {
             "type": "integer",
             "minimum": -9007199254740991,
@@ -1052,6 +1073,9 @@
           "observedIp",
           "answers",
           "clientContext",
+          "installationId",
+          "sessionId",
+          "userId",
           "attachmentCount",
           "firstAttachmentId"
         ]
@@ -1217,6 +1241,27 @@
               }
             ]
           },
+          "installationId": {
+            "description": "FR-062: the SDK installation ID, lowercase and dashed, when supplied.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sessionId": {
+            "description": "FR-062: the SDK session ID, lowercase and dashed, when supplied.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "userId": {
+            "description": "FR-062: the opaque user ID the integrator set in the SDK, when supplied.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "attachmentCount": {
             "type": "integer",
             "minimum": -9007199254740991,
@@ -1240,6 +1285,9 @@
           "observedIp",
           "answers",
           "clientContext",
+          "installationId",
+          "sessionId",
+          "userId",
           "attachmentCount",
           "formDefinition",
           "attachments"
@@ -3016,6 +3064,27 @@
               }
             ]
           },
+          "installationId": {
+            "description": "FR-062: the SDK installation ID, lowercase and dashed, when supplied.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sessionId": {
+            "description": "FR-062: the SDK session ID, lowercase and dashed, when supplied.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "userId": {
+            "description": "FR-062: the opaque user ID the integrator set in the SDK, when supplied.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "attachmentCount": {
             "type": "integer",
             "minimum": -9007199254740991,
@@ -3036,6 +3105,9 @@
           "observedIp",
           "answers",
           "clientContext",
+          "installationId",
+          "sessionId",
+          "userId",
           "attachmentCount",
           "firstAttachmentId"
         ],
@@ -3213,6 +3285,27 @@
               }
             ]
           },
+          "installationId": {
+            "description": "FR-062: the SDK installation ID, lowercase and dashed, when supplied.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sessionId": {
+            "description": "FR-062: the SDK session ID, lowercase and dashed, when supplied.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "userId": {
+            "description": "FR-062: the opaque user ID the integrator set in the SDK, when supplied.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "attachmentCount": {
             "type": "integer",
             "minimum": -9007199254740991,
@@ -3236,6 +3329,9 @@
           "observedIp",
           "answers",
           "clientContext",
+          "installationId",
+          "sessionId",
+          "userId",
           "attachmentCount",
           "formDefinition",
           "attachments"
@@ -6539,6 +6635,22 @@
                   },
                   "clientContext": {
                     "description": "Arbitrary JSON kept as supplied, at most 16384 bytes as UTF-8."
+                  },
+                  "installationId": {
+                    "description": "The SDK installation ID (a UUID), sent only alongside an enabled analytics client.",
+                    "type": "string",
+                    "maxLength": 36
+                  },
+                  "sessionId": {
+                    "description": "The SDK session ID (a UUID).",
+                    "type": "string",
+                    "maxLength": 36
+                  },
+                  "userId": {
+                    "description": "The opaque user ID the integrator set in the SDK.",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
                   }
                 },
                 "required": [
@@ -8286,6 +8398,22 @@
                   },
                   "answers": {
                     "$ref": "#/components/schemas/AnswersInput"
+                  },
+                  "installationId": {
+                    "description": "The SDK installation ID (a UUID), sent only alongside an enabled analytics client.",
+                    "type": "string",
+                    "maxLength": 36
+                  },
+                  "sessionId": {
+                    "description": "The SDK session ID (a UUID).",
+                    "type": "string",
+                    "maxLength": 36
+                  },
+                  "userId": {
+                    "description": "The opaque user ID the integrator set in the SDK.",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
                   },
                   "context": {
                     "type": "object",
@@ -11497,7 +11625,7 @@
         "tags": [
           "Crash databases"
         ],
-        "description": "CR-002: 1,000 to 100,000 reports; 7 to 365 days or null for unlimited. Takes effect at the next ingest and the next hourly pass.",
+        "description": "CR-002: 1,000 to 100,000 reports; 7 to 365 days or null for unlimited, unless the deployment operator moved those bounds (FD-032; the read returns them). Takes effect at the next ingest and the next hourly pass.",
         "requestBody": {
           "required": true,
           "content": {
@@ -12133,6 +12261,24 @@
           {
             "schema": {
               "type": "string",
+              "maxLength": 36
+            },
+            "in": "query",
+            "name": "installationId",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 36
+            },
+            "in": "query",
+            "name": "sessionId",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
               "format": "date-time",
               "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
             },
@@ -12490,6 +12636,24 @@
             },
             "in": "query",
             "name": "userId",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 36
+            },
+            "in": "query",
+            "name": "installationId",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 36
+            },
+            "in": "query",
+            "name": "sessionId",
             "required": false
           },
           {
@@ -13361,6 +13525,24 @@
           },
           {
             "schema": {
+              "type": "string",
+              "maxLength": 36
+            },
+            "in": "query",
+            "name": "installationId",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 36
+            },
+            "in": "query",
+            "name": "sessionId",
+            "required": false
+          },
+          {
+            "schema": {
               "default": 20,
               "type": "integer",
               "minimum": 1,
@@ -13466,6 +13648,20 @@
                               "null"
                             ]
                           },
+                          "installationId": {
+                            "description": "CR-118: the SDK installation ID, lowercase and dashed.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "sessionId": {
+                            "description": "CR-118: the SDK session ID, lowercase and dashed.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
                           "envelope": {
                             "description": "The envelope as received (section 9.1). `context` is integrator-supplied and unreviewed."
                           }
@@ -13482,6 +13678,8 @@
                           "environment",
                           "os",
                           "userId",
+                          "installationId",
+                          "sessionId",
                           "envelope"
                         ],
                         "additionalProperties": false
@@ -13637,6 +13835,20 @@
                         "null"
                       ]
                     },
+                    "installationId": {
+                      "description": "CR-118: the SDK installation ID, lowercase and dashed.",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "sessionId": {
+                      "description": "CR-118: the SDK session ID, lowercase and dashed.",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
                     "envelope": {
                       "description": "The envelope as received (section 9.1). `context` is integrator-supplied and unreviewed."
                     }
@@ -13653,6 +13865,8 @@
                     "environment",
                     "os",
                     "userId",
+                    "installationId",
+                    "sessionId",
                     "envelope"
                   ],
                   "additionalProperties": false
@@ -13980,6 +14194,24 @@
           {
             "schema": {
               "type": "string",
+              "maxLength": 36
+            },
+            "in": "query",
+            "name": "installationId",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 36
+            },
+            "in": "query",
+            "name": "sessionId",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
               "format": "date-time",
               "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
             },
@@ -14278,6 +14510,24 @@
           {
             "schema": {
               "type": "string",
+              "maxLength": 36
+            },
+            "in": "query",
+            "name": "installationId",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 36
+            },
+            "in": "query",
+            "name": "sessionId",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
               "format": "date-time",
               "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
             },
@@ -14409,6 +14659,24 @@
             },
             "in": "query",
             "name": "userId",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 36
+            },
+            "in": "query",
+            "name": "installationId",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 36
+            },
+            "in": "query",
+            "name": "sessionId",
             "required": false
           },
           {

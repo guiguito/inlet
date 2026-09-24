@@ -165,6 +165,20 @@ export function SubmissionPage({ user }: { user: CurrentUser }) {
                     mono
                     note="The address the request came from, after trusted-proxy resolution. For a server-to-server submission this is the integrating server, not the respondent."
                   />
+                  {submission.data.sessionId || submission.data.userId || submission.data.installationId ? (
+                    <MetaRow
+                      label="SDK identity"
+                      value={[
+                        submission.data.userId && `user ${submission.data.userId}`,
+                        submission.data.sessionId && `session ${submission.data.sessionId}`,
+                        submission.data.installationId && `installation ${submission.data.installationId}`,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                      mono
+                      note="Attached by inlet-sdk (FR-204): the user ID your application set, and random session and installation IDs. None of it is derived from the device."
+                    />
+                  ) : null}
                   <MetaRow
                     label="Screenshots"
                     value={pluralize(submission.data.attachments.length, 'file')}

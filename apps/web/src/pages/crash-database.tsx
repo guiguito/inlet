@@ -200,6 +200,8 @@ function GroupsTab({ databaseId }: { databaseId: string }) {
     os: params.get('os') ?? undefined,
     environment: params.get('environment') ?? undefined,
     userId: params.get('userId') ?? undefined,
+    installationId: params.get('installationId') ?? undefined,
+    sessionId: params.get('sessionId') ?? undefined,
     q: params.get('q') ?? undefined,
   };
   const sort = (params.get('sort') as CrashGroupSort | null) ?? 'lastSeen';
@@ -269,6 +271,28 @@ function GroupsTab({ databaseId }: { databaseId: string }) {
           <CrashTimelineChart timeline={stats.data} range={range} onRangeChange={setRange} title="This crash database" />
         </CardContent>
       </Card>
+
+      {/* CR-040: identity filters arrive by link, from a report; shown so they can be removed. */}
+      {(['userId', 'installationId', 'sessionId'] as const).some((key) => filters[key]) ? (
+        <div className="flex flex-wrap items-center gap-2 text-sm" data-testid="identity-filters">
+          {(
+            [
+              ['userId', 'User'],
+              ['installationId', 'Installation'],
+              ['sessionId', 'Session'],
+            ] as const
+          ).map(([key, label]) =>
+            filters[key] ? (
+              <Badge key={key} variant="outline" className="gap-1 font-normal">
+                {label} <span className="font-mono text-xs">{filters[key]}</span>
+                <button type="button" className="ml-1 text-muted-foreground hover:text-foreground" aria-label={`Clear the ${label.toLowerCase()} filter`} onClick={() => setFilter(key, undefined)}>
+                  ×
+                </button>
+              </Badge>
+            ) : null,
+          )}
+        </div>
+      ) : null}
 
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex gap-1" role="group" aria-label="State">
@@ -666,6 +690,10 @@ ${options(release)}
           [
             'Electron renderer',
             `import { installElectronRenderer } from 'inlet-sdk/crash/electron-renderer';\n\n// Its own entry, with no Node imports, so a renderer bundler can take it.\n// Every capture routes through the main process over IPC; a renderer holds\n// no key and no queue.\nconst crash = installElectronRenderer();`,
+          ],
+          [
+            'React Native',
+            `import AsyncStorage from '@react-native-async-storage/async-storage';\nimport { AppState, Platform } from 'react-native';\nimport * as crash from 'inlet-sdk/crash/react-native';\n\n// React Native 0.74 or later. The modules are passed in; the entry imports nothing.\ncrash.init({\n${options("'1.0.0'")}\n  Platform,\n  storage: AsyncStorage,\n});\n\n// ErrorUtils is React Native's global. The handler it replaces still runs.\ncrash.installReactNativeHandlers({ ErrorUtils, AppState });`,
           ],
         ] as const
       ).map(([label, snippet]) => (

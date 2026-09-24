@@ -62,8 +62,8 @@ hands your interface a snapshot to draw. It ships no components, so the form sti
 like your product, and it handles the parts that are easy to get wrong — pinning one form
 version from render to submit, validating with this server's own rules, and retrying a
 submission the network lost without ever creating a duplicate. It works in browsers, in
-Node, in Electron, with or without React, and your application does not have to share an
-origin with Inlet.
+Node, in Electron, in React Native, with or without React, and your application does not
+have to share an origin with Inlet.
 
 ```ts
 import * as feedback from 'inlet-sdk/feedback/browser';
@@ -194,7 +194,7 @@ envelope has no field for content.
 
 **Project → Databases → New crash database.** Then open **Collect**. It shows the crash
 database ID, your project's publishable key, and an install snippet for Node, browsers,
-Electron's main process and Electron's renderer:
+Electron's main process, Electron's renderer and React Native:
 
 ```ts
 import * as crash from 'inlet-sdk/crash/node';
@@ -209,8 +209,9 @@ crash.installNodeHandlers();
 ```
 
 Each adapter is its own entry point, and the installer lives on that entry:
-`inlet-sdk/crash/node`, `/browser`, `/electron` for the main process and
-`/electron-renderer` for a renderer. `inlet-sdk/crash` on its own gives you `init` and the
+`inlet-sdk/crash/node`, `/browser`, `/electron` for the main process,
+`/electron-renderer` for a renderer and `/react-native`, which takes React Native's modules
+and your AsyncStorage as parameters. `inlet-sdk/crash` on its own gives you `init` and the
 `capture*` functions, which is what a shared module should import.
 
 By default an exception message is sent only when it matches a shape the runtime generates;
@@ -241,6 +242,11 @@ Open a group for its own timeline, a breakdown by release and by operating syste
 the most recent reports. Open a report to read its frames as a stack, with your own code
 in full and library frames marked external. **Raw JSON** shows exactly what was received.
 
+A report sent by `inlet-sdk` 0.2.0 or later also carries its **session**: a random ID the
+SDK keeps for as long as someone is using the application, shared with any feedback they
+submit in the same session. **Groups in this session** under a report lists everything
+that went wrong in that session, and the same ID appears on the feedback response.
+
 ### Resolving, and knowing when it came back
 
 **Resolve** a group, and name the release the fix ships in. From then on, reports from that
@@ -269,7 +275,9 @@ typed.
 
 **Settings → Retention.** A crash database keeps at most a number of reports (10,000 by
 default, between 1,000 and 100,000) for at most a number of days (90 by default, between 7
-and 365, or unlimited). Over the cap, the oldest reports of the fullest group go first, and
+and 365, or unlimited). The person who runs your Inlet can move those defaults and bounds
+([DEPLOYMENT.md](DEPLOYMENT.md#operator-limits)); the settings page always shows the ones
+in force. Over the cap, the oldest reports of the fullest group go first, and
 every group keeps its most recent report. Groups, their counts, their timelines and their
 release breakdowns are never subject to retention: a group whose reports have all expired
 still shows what happened and when.
@@ -279,8 +287,10 @@ retention in the last 24 hours, so a quiet chart is distinguishable from a full 
 
 ### What is never stored
 
-No request address is recorded on a crash report. The only identity is an opaque user ID
-your application chooses to send, and only if it does. Everything a report contains is in
+No request address is recorded on a crash report, and none is written to the server's
+logs. The only identities are an opaque user ID your application chooses to send, and only
+if it does, and the SDK's random session ID, which is generated in memory, derived from
+nothing about the device or the person, and turned off with `identity: false`. Everything a report contains is in
 the envelope your code built; `context` is whatever you put there, and the interface says
 so wherever it shows it.
 

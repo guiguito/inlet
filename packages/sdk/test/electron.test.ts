@@ -420,6 +420,21 @@ describe('the unclean-exit sentinel (CR-116)', () => {
     uninstall();
   });
 
+  it('files the report against the release that died, with no session of this run (CR-119)', async () => {
+    const userData = dir();
+    mkdirSync(join(userData, 'inlet-crash'), { recursive: true });
+    writeFileSync(sentinelAt(userData), JSON.stringify({ startedAt: Date.now() - 5_000, release: { version: '2.3.3', build: '812' } }));
+
+    // The update that replaced 2.3.3 is running now, as 2.3.4 (the fake app's version).
+    const { client, sent, uninstall } = await install(userData, { uncleanExit: true }, undefined, true);
+    await expect.poll(async () => { await client.flush(2_000); return sent.length; }, { timeout: 10_000 }).toBe(1);
+    expect(sent[0]!.release).toEqual({ version: '2.3.3', build: '812' });
+    expect(sent[0]).not.toHaveProperty('sessionId');
+    // This run's sentinel records this run's release for the next launch.
+    expect(JSON.parse(readFileSync(sentinelAt(userData), 'utf8')).release).toEqual({ version: '2.3.4' });
+    uninstall();
+  });
+
   it('uninstall removes the file, so the next launch reports nothing', async () => {
     const userData = dir();
     const { uninstall } = await install(userData, { uncleanExit: true }, undefined, true);

@@ -210,9 +210,11 @@ test('collects from another origin with no proxy, and sends only what the contra
   const finalize = await posted;
   expect((await finalize.allHeaders()).origin).toBe(APP_ORIGIN);
 
-  // FR-204: exactly the version, the answers, the attachment IDs and the clientContext.
+  // FR-204: exactly the version, the answers, the attachment IDs and the clientContext, plus
+  // the identity fields: with no analytics client and no user set, the session ID alone.
   const body = JSON.parse(finalize.postData()!) as Record<string, unknown>;
-  expect(Object.keys(body).sort()).toEqual(['answers', 'clientContext', 'formVersion']);
+  expect(Object.keys(body).sort()).toEqual(['answers', 'clientContext', 'formVersion', 'sessionId']);
+  expect(body.sessionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   expect(body.clientContext).toEqual({ app: 'e2e' });
   const answers = body.answers as Record<string, Record<string, unknown>>;
   expect(Object.keys(answers).sort()).toEqual([f.q.detail, f.q.mood, f.q.shot].sort());

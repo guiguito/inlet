@@ -50,7 +50,7 @@ export function clientRoutes(ctx: AppContext): FastifyPluginAsyncZod {
     app.get(
       '/:databaseId/form',
       {
-        config: { rateLimit: { max: 600, timeWindow: '5 minutes' } },
+        config: { rateLimit: { max: ctx.env.limits.feedbackFormReadsPerFiveMinutes, timeWindow: '5 minutes' } },
         schema: {
           tags: ['Client feedback flow'],
           summary: 'Retrieve the active published form definition',
@@ -80,7 +80,7 @@ export function clientRoutes(ctx: AppContext): FastifyPluginAsyncZod {
       {
         // FR-088: non-configurable security rate limits, tightest on the operation a
         // public client can call without any prior state.
-        config: { rateLimit: { max: 60, timeWindow: '1 hour' } },
+        config: { rateLimit: { max: ctx.env.limits.feedbackIntentsPerHour, timeWindow: '1 hour' } },
         schema: {
           tags: ['Client feedback flow'],
           summary: 'Create a short-lived submission intent',
@@ -103,7 +103,7 @@ export function clientRoutes(ctx: AppContext): FastifyPluginAsyncZod {
     app.post(
       '/:databaseId/submission-intents/:intentId/attachments',
       {
-        config: { rateLimit: { max: 120, timeWindow: '1 hour' } },
+        config: { rateLimit: { max: ctx.env.limits.feedbackUploadsPerHour, timeWindow: '1 hour' } },
         schema: {
           tags: ['Client feedback flow'],
           summary: 'Upload a screenshot under a submission intent',
@@ -205,7 +205,7 @@ export function clientRoutes(ctx: AppContext): FastifyPluginAsyncZod {
     app.post(
       '/:databaseId/submission-intents/:intentId/submit',
       {
-        config: { rateLimit: { max: 60, timeWindow: '1 hour' } },
+        config: { rateLimit: { max: ctx.env.limits.feedbackSubmitsPerHour, timeWindow: '1 hour' } },
         schema: {
           tags: ['Client feedback flow'],
           summary: 'Finalize the submission intent',
@@ -247,6 +247,11 @@ export function clientRoutes(ctx: AppContext): FastifyPluginAsyncZod {
           answers: request.body.answers,
           clientContext: request.body.clientContext,
           observedIp: observedIp(request),
+          identity: {
+            ...(request.body.installationId ? { installationId: request.body.installationId } : {}),
+            ...(request.body.sessionId ? { sessionId: request.body.sessionId } : {}),
+            ...(request.body.userId ? { userId: request.body.userId } : {}),
+          },
         });
 
         // 201 for the submission this call created, 200 for a replayed result.

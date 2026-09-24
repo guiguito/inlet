@@ -1,7 +1,7 @@
 # Inlet — Foundations PRD
 
 ## Document Status
-**Status:** Baseline for every Inlet capability — Feedback Collection shipped (Releases 1–5), Crash Reports shipped (Release 6), SDK shipped (Release 7), UX Analytics specified (Release 8, not yet built)
+**Status:** Baseline for every Inlet capability — Feedback Collection shipped (Releases 1–5), Crash Reports shipped (Release 6), SDK shipped (Release 7), UX Analytics specified (Release 8, not yet built; FD-016 and FD-032 built for the crash and feedback modules on September 24, 2026, their analytics parts waiting for the analytics module)
 **Product:** Inlet, the self-hosted place your applications report to
 **Language:** English
 **Notion page:** https://app.notion.com/p/3ddd33dfffca813c87daf018eec9aeb4
@@ -508,7 +508,7 @@ Beyond Release 4: notification destinations other than Slack, a digest instead o
 | 6 — Crash Reports | Crash | Crash databases, ingest, grouping, groups UI, new-group and regression notifications, MCP, `inlet-sdk/crash` with node, browser, electron and react entries | Shipped September 17, 2026, see the Crash Reports PRD |
 | 7 — SDK | Feedback + Foundations | `inlet-sdk/feedback` with node, browser, electron and react entries (Feedback Collection PRD section 25), FD-015 cross-origin collection routes, npm publication of `inlet-sdk` with both modules | Shipped September 18, 2026, see section 25 of the Feedback Collection PRD |
 | 7.1 — Remote MCP | Foundations | The MCP tools served over Streamable HTTP at `/v1/mcp`, authenticated by a secret server key (FR-126, FR-127, FD-025) | Shipped September 22, 2026 |
-| 8 — UX Analytics | Analytics + Foundations + Crash + Feedback | Analytics databases, ingest, Overview, Events, Funnels, Cohorts, Users, data health, MCP; `inlet-sdk/analytics` with browser, node, electron and react-native entries; the shared SDK identity (FD-016); React Native adapters for crash and feedback. See the UX Analytics PRD | Specified September 24, 2026; not started |
+| 8 — UX Analytics | Analytics + Foundations + Crash + Feedback | Analytics databases, ingest, Overview, Events, Funnels, Cohorts, Users, data health, MCP; `inlet-sdk/analytics` with browser, node, electron and react-native entries; the shared SDK identity (FD-016); React Native adapters for crash and feedback. See the UX Analytics PRD | Specified September 24, 2026; the shared identity, the React Native adapters for crash and feedback and the operator overrides of FD-032 for crash and feedback built the same day (`docs/DECISIONS.md` section 29); analytics not started |
 
 Release 5 — Reviewed (the response as the row, per-reader read markers, four-tab navigation, database switcher) shipped in September 2026 between Releases 4 and 6 and is specified in section 24 of the Feedback Collection PRD.
 

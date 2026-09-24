@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.2.0 — September 24, 2026
+
+The shared identity, and React Native. Needs nothing from your server to upgrade: against a
+deployment older than this release the new fields are simply not sent.
+
+- **One identity for the application** (Foundations FD-016). Crash reports carry a
+  `sessionId` and submissions carry `sessionId` and `userId`: a random, time-ordered UUID
+  that rotates after 30 minutes without activity and after 24 hours, and the user ID your
+  application set with `setUser` in either module. Both live in memory; nothing is written
+  to the device. **This is the one visible change for an application on 0.1.5**: its
+  reports gain a session ID. `identity: false` at `init` removes it.
+- **Only to a server that accepts it.** The fields go to a deployment whose `/v1/health`
+  lists `identity`, checked when the SDK sends and again after a failed probe. The probe
+  is shared by both modules and cached per origin.
+- **`inlet-sdk/crash/react-native` and `inlet-sdk/feedback/react-native`** (CR-120, FR-211)
+  for React Native 0.74 or later, resolvable by Metro without package-exports support.
+  See the README.
+- **`captureReport({ …, previousRun: true })`** for a report about the previous run, such as
+  a native crash summary read at launch. It carries none of the current run's IDs.
+- **The unclean-exit report is filed against the release that died.** The sentinel now
+  records the release it watches, so an update installed over a crashing version no longer
+  attributes the crash to the new one. A sentinel written by 0.1.x still reports, against
+  the current release as before.
+- **No `crypto` required.** Event IDs, session IDs and fingerprints fall back to the SDK's
+  own generator and SHA-256 where `crypto.getRandomValues` or `crypto.subtle` is missing.
+- **Truncation never splits an emoji.** Bounds are still counted in UTF-16 units, but a
+  cut that would leave half a surrogate pair gives up that unit instead.
+- **Every request times out**, feedback's included (20 seconds, `timeoutMs`), without
+  needing `AbortSignal.timeout`.
+- Feedback's `SDK_VERSION` constant now agrees with the package version; it said 0.1.0.
+
 ## 0.1.5 — September 22, 2026
 
 Two hardening fixes on the path 0.1.4 added. Found by a smoke test of the published 0.1.4

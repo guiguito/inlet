@@ -7,6 +7,7 @@ import {
   LIMITS,
   crashEnvelopeSchema,
   newId,
+  sanitizeDeep,
   utf8Length,
   type CrashEnvelope,
 } from '@inlet/shared';
@@ -19,7 +20,7 @@ import {
   requireCrashDatabase,
   requireProject,
 } from '../services/access.js';
-import { droppedLast24h, ingestCrashReport } from '../services/crashes.js';
+import { droppedLast24h, effectiveRetention, ingestCrashReport } from '../services/crashes.js';
 import { deleteNotificationRows } from '../services/projects.js';
 import { requireManagementPrincipal, requireProjectCredential } from '../services/principal.js';
 import { databaseIdParam, errorsFor, projectIdParam } from './schemas.js';
@@ -87,10 +88,12 @@ const BATCH_BODY_LIMIT = CRASH_LIMITS.batchMax * 96 * 1024;
  * `envelope_too_large`. Validation runs on the raw body, before any size or field check,
  * so an integrator learns about a typo before learning about a size.
  */
-export function parseEnvelope(raw: unknown): CrashEnvelope {
-  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+export function parseEnvelope(input: unknown): CrashEnvelope {
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) {
     throw apiError('invalid_envelope', 'A crash report is a JSON object.');
   }
+  // CR-011: U+0000 and lone surrogates would fail the jsonb insert; cleaned before validation.
+  const raw = sanitizeDeep(input);
   if (utf8Length(JSON.stringify(raw)) > CRASH_LIMITS.envelopeMaxBytes) {
     throw apiError('envelope_too_large', `A crash report is at most ${CRASH_LIMITS.envelopeMaxBytes / 1024} KiB serialized.`);
   }
@@ -124,7 +127,7 @@ export function crashRoutes(ctx: AppContext): FastifyPluginAsyncZod {
         name: row.name,
         type: 'crash' as const,
         groupingVersion: row.groupingVersion,
-        retention: { maxReports: row.retentionCap, maxAgeDays: row.retentionMaxAgeDays },
+        retention: effectiveRetention(row, ctx.env.limits),
         groupCount: Number(groups?.n ?? 0),
         reportCount: Number(reports?.n ?? 0),
         dropped24h: await droppedLast24h(ctx.db, row.id),
@@ -180,8 +183,8 @@ export function crashRoutes(ctx: AppContext): FastifyPluginAsyncZod {
             projectId: request.params.projectId,
             name: request.body.name,
             groupingVersion: CRASH_GROUPING_VERSION,
-            retentionCap: CRASH_LIMITS.retentionCapDefault,
-            retentionMaxAgeDays: CRASH_LIMITS.retentionMaxAgeDaysDefault,
+            retentionCap: ctx.env.limits.crashRetentionReportsDefault,
+            retentionMaxAgeDays: ctx.env.limits.crashRetentionDaysDefault,
             createdBy: principal.kind === 'user' ? principal.userId : null,
           })
           .returning();
@@ -281,20 +284,21 @@ export function crashRoutes(ctx: AppContext): FastifyPluginAsyncZod {
 
     // --- Retention (CR-002) -------------------------------------------------
 
+    // CR-002, FD-032: the bounds are this deployment's, which the operator may have moved.
+    const limits = ctx.env.limits;
     const retentionSchema = z.object({
-      maxReports: z.int().min(CRASH_LIMITS.retentionCapMin).max(CRASH_LIMITS.retentionCapMax),
-      maxAgeDays: z.int().min(CRASH_LIMITS.retentionMaxAgeDaysMin).max(CRASH_LIMITS.retentionMaxAgeDaysMax).nullable(),
+      maxReports: z.int().min(limits.crashRetentionReportsMin).max(limits.crashRetentionReportsMax),
+      maxAgeDays: z.int().min(limits.crashRetentionDaysMin).max(limits.crashRetentionDaysMax).nullable(),
       bounds: z.object({
         maxReports: z.object({ min: z.int(), max: z.int(), default: z.int() }),
         maxAgeDays: z.object({ min: z.int(), max: z.int(), default: z.int() }),
       }),
     });
     const retentionOf = (row: typeof crashDatabases.$inferSelect) => ({
-      maxReports: row.retentionCap,
-      maxAgeDays: row.retentionMaxAgeDays,
+      ...effectiveRetention(row, limits),
       bounds: {
-        maxReports: { min: CRASH_LIMITS.retentionCapMin, max: CRASH_LIMITS.retentionCapMax, default: CRASH_LIMITS.retentionCapDefault },
-        maxAgeDays: { min: CRASH_LIMITS.retentionMaxAgeDaysMin, max: CRASH_LIMITS.retentionMaxAgeDaysMax, default: CRASH_LIMITS.retentionMaxAgeDaysDefault },
+        maxReports: { min: limits.crashRetentionReportsMin, max: limits.crashRetentionReportsMax, default: limits.crashRetentionReportsDefault },
+        maxAgeDays: { min: limits.crashRetentionDaysMin, max: limits.crashRetentionDaysMax, default: limits.crashRetentionDaysDefault },
       },
     });
 
@@ -321,7 +325,7 @@ export function crashRoutes(ctx: AppContext): FastifyPluginAsyncZod {
         schema: {
           tags: ['Crash databases'],
           summary: 'Change the retention setting',
-          description: 'CR-002: 1,000 to 100,000 reports; 7 to 365 days or null for unlimited. Takes effect at the next ingest and the next hourly pass.',
+          description: 'CR-002: 1,000 to 100,000 reports; 7 to 365 days or null for unlimited, unless the deployment operator moved those bounds (FD-032; the read returns them). Takes effect at the next ingest and the next hourly pass.',
           params: databaseIdParam,
           body: retentionSchema.omit({ bounds: true }).partial(),
           response: { 200: retentionSchema, ...errorsFor(400, 401, 403, 404) },

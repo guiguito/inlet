@@ -43,7 +43,7 @@ async function fixture(request: APIRequestContext, name: string) {
   return { projectId, secretKey: (await secret.json()).secret as string, publishableKey: (await publishable.json()).secret as string };
 }
 
-async function report(request: APIRequestContext, databaseId: string, key: string, version: string) {
+async function report(request: APIRequestContext, databaseId: string, key: string, version: string, sessionId?: string) {
   const response = await request.post(`/v1/crash-databases/${databaseId}/reports`, {
     headers: { authorization: `Bearer ${key}` },
     data: {
@@ -53,6 +53,7 @@ async function report(request: APIRequestContext, databaseId: string, key: strin
       kind: 'exception',
       release: { version },
       os: { name: 'Windows', arch: 'x64' },
+      ...(sessionId ? { sessionId } : {}),
       exception: { type: 'RangeError', message: 'Maximum call stack size exceeded', handled: false, frames: [{ function: 'render', file: 'ui.js', inApp: true }] },
     },
   });
@@ -70,7 +71,8 @@ test('an agent triages a crash group end to end', async ({ request }) => {
     expect(database.id).toMatch(/^cdb_/);
     expect(database.type).toBe('crash');
 
-    for (let i = 0; i < 3; i += 1) await report(request, database.id, f.publishableKey, '2.0.0');
+    const sessionId = crypto.randomUUID();
+    for (let i = 0; i < 3; i += 1) await report(request, database.id, f.publishableKey, '2.0.0', i === 0 ? sessionId : undefined);
 
     const listed = parsed<{ groups: { id: string; count: number; exceptionType: string }[]; total: number }>(
       await session.client.callTool({ name: 'list_crash_groups', arguments: { crashDatabaseId: database.id, state: 'open', sort: 'lastSeen' } }),
@@ -94,6 +96,20 @@ test('an agent triages a crash group end to end', async ({ request }) => {
       await session.client.callTool({ name: 'get_crash_report', arguments: { crashDatabaseId: database.id, reportId: reports.reports[0]!.id } }),
     );
     expect(one.envelope.exception.type).toBe('RangeError');
+
+    // CR-118: the identity is on the report, and both list tools filter by it.
+    const bySession = parsed<{ total: number }>(
+      await session.client.callTool({ name: 'list_crash_groups', arguments: { crashDatabaseId: database.id, sessionId } }),
+    );
+    expect(bySession.total).toBe(1);
+    const sessionReports = parsed<{ reports: { id: string; sessionId: string }[] }>(
+      await session.client.callTool({ name: 'list_crash_reports', arguments: { crashDatabaseId: database.id, groupId, sessionId } }),
+    );
+    expect(sessionReports.reports).toHaveLength(1);
+    const withIdentity = parsed<{ sessionId: string; installationId: string | null }>(
+      await session.client.callTool({ name: 'get_crash_report', arguments: { crashDatabaseId: database.id, reportId: sessionReports.reports[0]!.id } }),
+    );
+    expect(withIdentity).toMatchObject({ sessionId, installationId: null });
 
     const resolved = parsed<{ state: string; resolvedInRelease: string }>(
       await session.client.callTool({

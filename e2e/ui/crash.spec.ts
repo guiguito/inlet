@@ -26,7 +26,7 @@ async function setup(request: APIRequestContext, name: string): Promise<Fixture>
   return { projectId, databaseId, key, name };
 }
 
-async function report(request: APIRequestContext, f: Fixture, version: string, fn = 'loadUser', userId?: string) {
+async function report(request: APIRequestContext, f: Fixture, version: string, fn = 'loadUser', userId?: string, sessionId?: string) {
   const response = await request.post(`/v1/crash-databases/${f.databaseId}/reports`, {
     headers: { authorization: `Bearer ${f.key}` },
     data: {
@@ -37,6 +37,7 @@ async function report(request: APIRequestContext, f: Fixture, version: string, f
       release: { version },
       os: { name: 'macOS', version: '15.1', arch: 'arm64' },
       ...(userId ? { user: { id: userId } } : {}),
+      ...(sessionId ? { sessionId } : {}),
       exception: {
         type: 'TypeError',
         message: `Cannot read properties of undefined (reading 'id') in ${fn}`,
@@ -175,10 +176,32 @@ test.describe('crash reports', () => {
     await expect(page.getByText('Retention updated.')).toBeVisible();
     await page.goto(`/crash-databases/${f.databaseId}?tab=settings&panel=general`);
     await page.getByRole('button', { name: 'Delete' }).click();
-    await expect(page.getByText(/1 group/)).toBeVisible();
+    // Scoped: the page header also says "1 group" once the database has loaded.
+    await expect(page.getByRole('dialog').getByText(/1 group/)).toBeVisible();
     await page.getByLabel(/Type .* to confirm/).fill(f.name);
     await page.getByRole('button', { name: 'Delete', exact: true }).last().click();
     await expect(page.getByRole('heading', { name: 'Crash databases' })).toBeVisible();
     await expect(page.getByText('No crash databases yet.')).toBeVisible();
+  });
+
+  test('shows a report’s SDK identity and opens the groups of its session (CR-040, CR-118)', async ({ page, request }) => {
+    const f = await setup(request, `Crash identity ${Date.now()}`);
+    const session = crypto.randomUUID();
+    const { groupId } = await report(request, f, '2.0.0', 'loadUser', undefined, session);
+    await report(request, f, '2.0.0', 'saveUser');
+
+    await signIn(page);
+    await page.goto(`/crash-databases/${f.databaseId}/groups/${groupId}`);
+    await page.getByTestId('crash-report-row').first().getByRole('button', { name: 'Open' }).click();
+    const identity = page.getByTestId('crash-report-identity');
+    await expect(identity.getByText(session)).toBeVisible();
+
+    await identity.getByRole('link', { name: 'Groups in this session' }).click();
+    await expect(page.getByTestId('identity-filters')).toContainText(session);
+    await expect(page.getByTestId('crash-group-row')).toHaveCount(1);
+    await expect(page.getByTestId('crash-group-row')).toContainText('loadUser');
+
+    await page.getByRole('button', { name: 'Clear the session filter' }).click();
+    await expect(page.getByTestId('crash-group-row')).toHaveCount(2);
   });
 });

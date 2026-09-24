@@ -6,8 +6,15 @@ report to. Two modules:
 - **`inlet-sdk/feedback`** collects a form's answers from inside your own interface.
 - **`inlet-sdk/crash`** reports application failures.
 
-Zero runtime dependencies, ESM and CommonJS, Node 18 or later and evergreen browsers. Each
-module has a Node, browser, Electron and React entry.
+Zero runtime dependencies, ESM and CommonJS, Node 18 or later, evergreen browsers and
+React Native 0.74 or later. Each module has a Node, browser, Electron, React and React
+Native entry.
+
+Both modules share one **identity** per application: a random session ID, rotated after
+30 minutes without activity or after 24 hours, and the user ID you set with `setUser`. It
+travels with crash reports and submissions so that Inlet can show you the crash and the
+feedback of the same session side by side. It lives in memory, is never derived from the
+device, and `identity: false` at `init` turns it off; see [Identity](#identity).
 
 If you have never seen Inlet: an Inlet **project** holds databases and owns two kinds of
 API key. A **publishable key** (`ipk_…`) can only send data in and is safe to ship in an
@@ -258,9 +265,10 @@ Exactly four things, at finalization:
 - the `clientContext` you supplied, if any.
 
 Never sent automatically: the page address, the user agent, the referrer, the language,
-the viewport, cookies, timing, or any identifier. A hosted form records operational
-context because it *is* the client; this is a library inside somebody else's client and
-records nothing on its own.
+the viewport, cookies, timing, or any identifier other than the [identity](#identity)
+both modules share: the session ID, and the user ID once your application set one. A
+hosted form records operational context because it *is* the client; this is a library
+inside somebody else's client and gathers no context of its own.
 
 ```ts
 feedback.init({ …, clientContext: { appVersion, plan: 'team' } });     // on every submission
@@ -446,6 +454,7 @@ Only the fields of the crash envelope, and nothing your code did not put there:
   whether it is your code);
 - your release, environment, operating system and runtime;
 - an opaque user ID, only after you call `setUser(id)`;
+- the session ID of the shared [identity](#identity), unless `identity: false`;
 - tags you set and any `context` you attach to a capture.
 
 Never sent automatically: environment variables, command-line arguments, URLs, headers,
@@ -585,4 +594,92 @@ frame — so a redacted message costs you less than it appears to.
 | `allowedKinds`, `tagAllowlist` | Electron main only: what the IPC channel accepts from a renderer. |
 | `ignoreRendererReasons`, `ignoreChildReasons` | Electron main only: exit reasons that are not crashes. Defaults `['clean-exit']` and `['clean-exit', 'killed']`. |
 | `uncleanExit` | Electron main only: report a previous run that never quit cleanly. Off by default, packaged builds only. |
+| `identity` | Attach the session ID of the shared [identity](#identity). Default true; `false` sends exactly what 0.1.5 sent. |
+| `random(bytes)` | Fills a buffer with random bytes, for a runtime without `crypto.getRandomValues`. React Native only needs it without a polyfill, and even then IDs are still unique. |
 | `debug(message, detail)` | Receives warnings and transport events. Silent by default. |
+
+---
+
+# React Native
+
+React Native 0.74 or later. Both React Native entries take React Native's modules and your
+storage as parameters and import nothing, so they add no native dependency you did not
+choose, and they touch no browser global when loaded.
+
+```ts
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { AppState, Platform } from 'react-native';
+import * as crash from 'inlet-sdk/crash/react-native';
+import * as feedback from 'inlet-sdk/feedback/react-native';
+
+const inlet = { baseUrl: 'https://inlet.example.com', publishableKey: 'ipk_…' };
+
+crash.init({ ...inlet, crashDatabaseId: 'cdb_…', release: '1.4.0', Platform, storage: AsyncStorage });
+// ErrorUtils is React Native's global. The handler it replaces still runs afterwards.
+const uninstall = crash.installReactNativeHandlers({ ErrorUtils, AppState });
+
+feedback.init({ ...inlet, feedbackDatabaseId: 'fdb_…', storage: AsyncStorage });
+```
+
+- **The release is required**: React Native cannot read the app version without a native
+  module, so pass it from your build configuration.
+- **What a report says**: platform `other`, runtime `react-native` with its version, and
+  `iOS` or `Android` with the version a person reads (on Android, `Platform.constants.Release`,
+  not the API level in `Platform.Version`).
+- **Frames**: Hermes stacks are parsed, and every frame from your JavaScript bundle —
+  `index.android.bundle`, `main.jsbundle`, or the development server's `index.bundle` — is
+  your code, reported by the bundle's name and never its path on the device.
+- **The global handler**: an error reaching `ErrorUtils` is captured, written to the store,
+  and then handed to the handler that was there before, so the red box in development
+  and the crash in release are unchanged. A fatal error is reported unhandled; a
+  non-fatal one, which the application survives, as handled.
+- **Unhandled promise rejections** are observed through Hermes' tracker in release builds.
+  Under `__DEV__` React Native already tracks them for LogBox and a second tracker would
+  replace it, so the default is off there; `trackRejections: true` turns it on anyway.
+- **Storage**: one report per key and at most 2 MB of crash reports, 1 MB of pending
+  submissions, oldest dropped first, adjustable with `maxStoreBytes`, so that the modules
+  together stay inside the 6 MB Android gives AsyncStorage by default.
+- **The fatal write** happens before the previous handler runs only when the store is
+  synchronous. AsyncStorage is not, so with it the write is best effort: a crash that
+  kills the JavaScript thread at once may lose its report. For a guarantee, give `storage`
+  a synchronous store such as MMKV behind the same three methods:
+  `{ getItem: (k) => mmkv.getString(k) ?? null, setItem: (k, v) => mmkv.set(k, v), removeItem: (k) => mmkv.delete(k) }`.
+- **Flushes** when the application moves to the background.
+- **Not observed**: native crashes, and there is no unclean-exit sentinel. A native crash
+  summary you read at the next launch goes in `captureReport({ …, previousRun: true })`.
+- **Screenshots** are the file descriptors an image picker returns, `{ uri, name, type, size? }`,
+  uploaded through React Native's `FormData` with progress. Without `size` the size check
+  happens on the server rather than before the upload. `useFeedbackSession` from
+  `inlet-sdk/feedback/react` works unchanged.
+- **IDs without `crypto`**: the SDK uses `crypto.getRandomValues` where a polyfill provides
+  it, the `random` option if you pass one, and otherwise its own generator; fingerprints use
+  the SDK's own SHA-256, which gives the server's exact result.
+- **Metro** before React Native 0.79 does not read the package's `exports`. The package
+  ships a directory per entry React Native imports, so the imports above resolve on 0.74
+  with the default Metro configuration.
+
+---
+
+# Identity
+
+Both modules of one application share one identity, whatever entry initialised them:
+
+| | What it is | Where it lives |
+| --- | --- | --- |
+| **Session ID** | A random, time-ordered UUID. A new one after 30 minutes without activity, after 24 hours, and on every process start or page load. A capture or a submission is activity. | Memory |
+| **User ID** | What you pass to `setUser(id)` in either module; `setUser(null)` clears it. | Memory |
+| **Installation ID** | Created only by the analytics module, which arrives with Inlet's UX Analytics release. Until your application runs it, nothing sends one. | — |
+
+Nothing is written to the device for the identity, the unclean-exit sentinel included. It
+is sent only to a deployment whose `/v1/health` lists `identity`; an older deployment gets
+exactly the fields it has always accepted, so upgrading the SDK before the server loses no
+report. A report about the previous run — the unclean-exit report, or
+`captureReport({ …, previousRun: true })` — carries no session ID, because the only session
+it could honestly carry is one an analytics client recorded for that run.
+
+In the server, reports and submissions keep these IDs so that you can filter crash groups
+by session or installation, and see one respondent's crash beside their feedback.
+`identity: false` on either module's `init` turns it off for that module: a crash report is
+then exactly what 0.1.5 sent, the user ID from `setUser` included, and a submission carries
+no identity field at all.
+
