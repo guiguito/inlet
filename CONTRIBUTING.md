@@ -29,11 +29,10 @@ npm run dev              # API on :3000, web on :5173
 
 ```bash
 npm run typecheck
-npm run lint
 npm run test:all
 ```
 
-All three pass before a pull request is ready. `test:all` needs the local services up.
+Both pass before a pull request is ready. `test:all` needs the local services up.
 
 ### The live Slack test
 
