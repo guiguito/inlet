@@ -274,7 +274,8 @@ test.describe('managing roles', () => {
     // The API refuses to narrow them, and the interface reports the refusal.
     await row.getByLabel('Role').click();
     await page.getByRole('option', { name: 'viewer' }).click();
-    await expect(page.getByText(/cannot be narrowed/)).toBeVisible();
+    // The toast, not the panel's explanation, which says the same thing in general terms.
+    await expect(page.locator('[data-sonner-toast]').filter({ hasText: /cannot be narrowed/ })).toBeVisible();
 
     await page.reload();
     await expect(page.getByTestId(`member-${admin.email}`).getByLabel('Role')).toContainText(

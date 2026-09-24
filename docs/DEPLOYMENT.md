@@ -22,7 +22,7 @@ build step to run on the server, no queue broker, and no separate worker process
 | | |
 | --- | --- |
 | PostgreSQL | 14 or newer. Developed and tested against 18. |
-| Object storage | Any S3-compatible store. MinIO, AWS S3, Cloudflare R2, Backblaze B2, Scaleway, Wasabi. |
+| Object storage | Any S3-compatible store that supports object tagging and lifecycle rules filtered by tag: AWS S3, MinIO, and most others. The bundled deployment includes one. |
 | A container runtime | Or Node.js 22+ if you would rather run it directly. |
 | TLS | Terminate it in front of Inlet. Inlet speaks plain HTTP. |
 
@@ -73,6 +73,19 @@ line `database schema is up to date` means there was nothing to apply.
 ClamAV publishes `linux/amd64` images only, so the optional malware-scanning service
 declares `platform: linux/amd64` and runs under emulation. Everything else is
 multi-architecture.
+
+### The bundled object store
+
+The compose file's `minio` service runs `ghcr.io/guiguito/inlet-minio`, which is MinIO's
+last community release (`RELEASE.2025-10-15T17-29-55Z`) built by this repository from its
+archived source (`docker/minio/Dockerfile`). MinIO withdrew its own images and binaries in
+September 2026, so `minio/minio` can no longer be pulled. The image behaves as the old one
+did, with data in the same `miniodata` volume, so an existing deployment upgrades by pulling.
+
+That source is no longer maintained and will receive no security fixes. The bucket is only
+reachable on the compose network, apart from the console port, which you can close by
+removing its `ports` entry. For anything beyond a small or internal deployment, point
+`INLET_S3_*` at a maintained provider instead (see "Using managed PostgreSQL and S3").
 
 ## Configuration
 

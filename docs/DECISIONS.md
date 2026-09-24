@@ -2482,3 +2482,47 @@ carries the bounds itself, since they are now the deployment's.
 - Feedback requests now time out at 20 seconds, as crash requests did, without
   `AbortSignal.timeout`; uploads are exempt, since a 10 MB screenshot on a phone can take longer.
 - No database reset: migration 0007 only adds nullable columns and indexes.
+
+## 30. The bundled object store after MinIO withdrew its distribution
+
+On September 11, 2026 MinIO stopped distributing its community edition: `dl.min.io`
+answers 410 Gone and the `minio/minio` images were deleted from Docker Hub. Three things in
+this repository depended on them — the bundled `docker-compose.yml`, the dev compose file,
+and `scripts/local-services.mjs`, which downloads the server binary for the test suites. All
+three kept working on machines that had cached them, which is why the first GitHub Actions
+run was the first to notice.
+
+**Decision: build MinIO ourselves, from its archived source, as a stopgap.**
+`docker/minio/Dockerfile` builds `RELEASE.2025-10-15T17-29-55Z`, the last community release,
+with MinIO's own version stamping, for amd64 and arm64 by cross-compiling, and
+`.github/workflows/minio-image.yml` publishes it as `ghcr.io/guiguito/inlet-minio`. Both
+compose files pin it. CI builds the same tag into `.dev/bin/minio` with
+`scripts/build-minio.sh`. The API integration suite, which exercises the tag-filtered
+lifecycle rule and retagging, passes against the image unchanged, and the bundled stack
+serves a full feedback flow with a screenshot.
+
+Why not the alternatives, for now:
+
+- **Pin a community rebuild** from another registry. It puts a stranger's binary in the
+  default deployment of a self-hosted product, a supply-chain choice the operator never made.
+- **Switch to another S3 server immediately.** Inlet depends on one feature many lack: a
+  lifecycle rule filtered by the `inlet-state=pending` tag expires uploads never attached
+  to a submission (`apps/api/src/lib/storage.ts`). Without it the server starts, warns, and
+  abandoned uploads accumulate. A replacement has to be proven against that first.
+- **Drop the bundled store** and require the operator's own. It breaks the one-command
+  deployment the Foundations PRD promises.
+
+The cost is real: the source is archived and gets no security fixes. It is acceptable as a
+stopgap because the store sits on the compose network, and `DEPLOYMENT.md` says so.
+
+**Next step, not done here:** evaluate RustFS (Apache-2.0, MinIO-compatible, lifecycle and
+tagging) against the integration suite as the long-term bundled store; Garage is the
+fallback, which filters lifecycle rules by prefix rather than tag and so would need pending
+uploads moved under a `pending/` prefix and copied out on submit.
+
+### 30.1 Found on the way: the Docker image had not built since the SDK joined `build`
+
+Commit `0a8cf7c` added `inlet-sdk` to the root `npm run build`, but the Dockerfile never
+copies `packages/sdk`, so `docker compose up --build` failed with "No workspaces found:
+--workspace=inlet-sdk". The image now runs `npm run build:server`, which builds exactly what
+the server ships. The SDK is published to npm and never served, so it stays out of the image.

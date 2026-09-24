@@ -23,8 +23,10 @@ services:
       timeout: 5s
       retries: 20
 
+  # MinIO's last community release, built by this repository from its archived source,
+  # because MinIO withdrew its own images in September 2026 (docker/minio/Dockerfile).
   minio:
-    image: minio/minio:latest
+    image: ghcr.io/guiguito/inlet-minio:RELEASE.2025-10-15T17-29-55Z
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
@@ -36,7 +38,7 @@ services:
       # The console, for inspecting stored screenshots. Not needed by Inlet itself.
       - '${MINIO_CONSOLE_PORT:-9001}:9001'
     healthcheck:
-      test: ['CMD-SHELL', 'mc ready local || exit 1']
+      test: ['CMD-SHELL', 'wget -q --spider http://127.0.0.1:9000/minio/health/live || exit 1']
       interval: 5s
       timeout: 5s
       retries: 30
