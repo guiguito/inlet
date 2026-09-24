@@ -5,7 +5,7 @@ import { runMigrations } from '../../src/db/migrate.js';
 import { TEST_DATABASE, TEST_ENV } from './config.js';
 
 /**
- * Brings up a real PostgreSQL and a real MinIO once for the whole run, then creates
+ * Brings up a real PostgreSQL and a real RustFS once for the whole run, then creates
  * and migrates a dedicated test database.
  *
  * Real services rather than fakes because the behaviour under test is largely

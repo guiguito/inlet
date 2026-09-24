@@ -188,18 +188,18 @@ confirmation. See [docs/MCP.md](docs/MCP.md).
 
 ## Running it for development
 
-Needs Node.js 22+. PostgreSQL and MinIO run as local binaries, no Docker required.
+Needs Node.js 22+. PostgreSQL and RustFS run as local binaries, no Docker required.
 
 ```bash
 npm install
-npm run services:up      # local PostgreSQL and MinIO
+npm run services:up      # local PostgreSQL and RustFS
 cp .env.example .env
 npm run dev              # API on :3000, web on :5173
 ```
 
 ```bash
 npm run test:unit         # pure logic: validation, hashing, CSV, images
-npm run test:integration  # the API against real PostgreSQL and real MinIO
+npm run test:integration  # the API against real PostgreSQL and real RustFS
 npm run test:e2e          # the HTTP contract and the interface in a browser
 npm run test:all
 ```
@@ -222,7 +222,7 @@ image ships, so what is tested is what is deployed.
 | `apps/mcp` | `inlet-mcp`, a thin layer over the HTTP API. Runs as a stdio process, and the API serves the same tools at `/v1/mcp`. |
 | `e2e` | Playwright suites: the HTTP contract, the SDK in Node and in a real browser, and the interface in a browser. |
 | `docs` | PRD, API guide, MCP guide, deployment guide, technical decisions, generated OpenAPI. |
-| `scripts` | Local PostgreSQL and MinIO, and the end-to-end server. |
+| `scripts` | Local PostgreSQL and RustFS, and the end-to-end server. |
 
 ## Documentation
 

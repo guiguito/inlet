@@ -1,9 +1,9 @@
-/** Starts local PostgreSQL and MinIO and keeps them running until interrupted. */
+/** Starts local PostgreSQL and RustFS and keeps them running until interrupted. */
 import { startLocalServices } from './local-services.mjs';
 
 const services = await startLocalServices({ quiet: false });
 console.log(`PostgreSQL  ${services.env.INLET_DATABASE_URL}${services.postgres.reused ? '  (reused)' : ''}`);
-console.log(`MinIO       ${services.env.INLET_S3_ENDPOINT}${services.minio.reused ? '  (reused)' : ''}`);
+console.log(`RustFS      ${services.env.INLET_S3_ENDPOINT}${services.storage.reused ? '  (reused)' : ''}`);
 console.log('Press Ctrl-C to stop.');
 
 const shutdown = async () => {

@@ -2481,9 +2481,13 @@ carries the bounds itself, since they are now the deployment's.
   it, an update installed over a crashing version filed the crash against the new version.
 - Feedback requests now time out at 20 seconds, as crash requests did, without
   `AbortSignal.timeout`; uploads are exempt, since a 10 MB screenshot on a phone can take longer.
-- No database reset: migration 0007 only adds nullable columns and indexes.
+- No database reset was needed at the time: migration 0007 only added nullable columns and
+  indexes. (Since folded into the baseline migration, section 30.3.)
 
 ## 30. The bundled object store after MinIO withdrew its distribution
+
+> **Superseded by 30.3:** the bundled store is now RustFS, and nothing MinIO remains in the
+> repository. What follows up to 30.2 is the history of how that was decided.
 
 On September 11, 2026 MinIO stopped distributing its community edition: `dl.min.io`
 answers 410 Gone and the `minio/minio` images were deleted from Docker Hub. Three things in
@@ -2562,3 +2566,35 @@ It clears the bar the bundled store has to clear. Whether to switch, and when, i
 owner's call; the recommendation is in the conversation of September 25 and is to switch
 with a migration command and an unpublished console, rather than to keep an archived
 server that will never be fixed.
+
+### 30.3 Switched to RustFS, and started the schema from one baseline (September 25, 2026)
+
+The owner approved the switch, with no migration path: the only running instance is to be
+reinstalled from scratch. So the project now reads as if it had started this way.
+
+- **RustFS is the only object store.** `docker-compose.yml` runs it as the `storage` service
+  (`rustfs/rustfs:1.0.0`, volume `storagedata`, no published port), and the dev compose file
+  and `scripts/local-services.mjs` do the same. The local services download the RustFS
+  release binary, check it against a SHA-256 pinned in the script — pinning, not fetching
+  `SHA256SUMS` from the same release, is what makes it an integrity check — and run it on
+  loopback. CI caches that binary instead of building MinIO with Go.
+- **The web console is turned off explicitly** (`RUSTFS_CONSOLE_ENABLE=false`). The switch
+  found that the binary starts the console on every interface by default, although its
+  help text calls it opt-in; that console carried the one critical advisory relevant to
+  Inlet (30.2).
+- **Everything MinIO is gone**: `docker/minio/`, the image workflow, `scripts/build-minio.sh`,
+  and the `ghcr.io/guiguito/inlet-minio` package. Sections 30 to 30.2 above are the history.
+- **One baseline migration.** `apps/api/drizzle/` now holds `0000_initial_schema.sql`,
+  generated from `schema.ts`. Before deleting the eight migrations, both histories were
+  applied to scratch databases and compared with `pg_dump --schema-only`: the same tables,
+  columns, types, defaults, 76 constraints, 43 indexes and 13 enums, differing only in the
+  order of columns that were once added by `ALTER TABLE`. An installation from before this
+  date cannot upgrade; `DEPLOYMENT.md` gives the reinstall.
+- Rejected: a MinIO-to-RustFS copy command and keeping the migration history. Both exist
+  only to carry data forward, and the one deployment with data is being reinstalled; each
+  would have been code to maintain for no user.
+
+Found on the way, both fixed: `docker-compose.dev.yml` mounted PostgreSQL 18 at
+`/var/lib/postgresql/data`, which that image refuses (the bundled file already knew); and
+`services-down` stopped PostgreSQL with SIGTERM, its "smart" shutdown, which waits for every
+client to disconnect and so could leave it running indefinitely. It now sends SIGINT.

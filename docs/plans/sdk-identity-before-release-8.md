@@ -66,18 +66,19 @@ What the analytics module must build on top of this, and where it plugs in:
 7. **Erasure** (CR-047, AN-183): delete crash reports and group-user associations carrying
    the IDs (adjusting affected users and `latestReportId`), and feedback submissions with
    their attachments. The indexes on `installation_id`, `session_id` and `user_id` are in place
-   (migration 0007).
+   (in the baseline schema).
 8. **Analytics operator limits** (FD-032): add rows to `OPERATOR_LIMITS` in
    `apps/api/src/env.ts` and to the table in `docs/DEPLOYMENT.md`.
 9. **Renderer `setUserId`** (CR-111, AN-238): accepted from the analytics renderer entry
    unless `installElectronMain` is told not to.
 10. **Usage profile link** (AN-154): on a crash report and a submission carrying the IDs.
 
-## Migration
+## Schema
 
-`apps/api/drizzle/0007_release_8_sdk_identity.sql` adds nullable `installation_id uuid` and
-`session_id uuid` to `crash_reports` and `submissions`, `user_id text` to `submissions`, and
-an index on each with its database ID. Existing rows keep null. No reset.
+`installation_id uuid` and `session_id uuid` on `crash_reports` and `submissions`, and
+`user_id text` on `submissions`, each nullable and indexed with its database ID. They first
+shipped as migration 0007; on September 25, 2026 every migration was folded into the one
+baseline, `apps/api/drizzle/0000_initial_schema.sql` (DECISIONS.md 30.3).
 
 ## Verification
 

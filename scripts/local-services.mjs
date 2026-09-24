@@ -9,10 +9,11 @@
  * PostgreSQL comes from the `embedded-postgres` package, which unpacks genuine
  * PostgreSQL 18 binaries: the integration tests exercise real transactions, row
  * locks and `select for update`, which a WASM or in-memory substitute cannot
- * reproduce. Object storage is the real MinIO server binary, so lifecycle rules and
- * object tagging behave as they do in production.
+ * reproduce. Object storage is the real RustFS server binary, the same server the bundled
+ * deployment runs, so lifecycle rules and object tagging behave as they do in production.
  */
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import net from 'node:net';
@@ -22,18 +23,23 @@ import EmbeddedPostgres from 'embedded-postgres';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const devDir = path.join(repoRoot, '.dev');
-const minioBinary = path.join(devDir, 'bin', 'minio');
-const MINIO_DOWNLOAD = 'https://dl.min.io/server/minio/release';
+const rustfsBinary = path.join(devDir, 'bin', 'rustfs');
+const RUSTFS_VERSION = '1.0.0';
+/** From https://github.com/rustfs/rustfs/releases/download/1.0.0/SHA256SUMS */
+const RUSTFS_SHA256 = {
+  'macos-aarch64': '06e32a681c16930fb5414df64c96151fe3370321fab0403a83a83a015874c39a',
+  'linux-x86_64-musl': 'c30a95b76546f25122c9ca387090ddb30c391ca5605621b0d7c881703c0f21c8',
+  'linux-aarch64-musl': '88202c0446d0aa31fa475b1dc8cdb92f6d32e62d6f34a63f2018899c1943f100',
+};
 
 export const DEFAULTS = {
   postgresPort: 5433,
   postgresUser: 'inlet',
   postgresPassword: 'inlet',
   postgresDatabase: 'inlet',
-  minioPort: 9010,
-  minioConsolePort: 9011,
-  minioAccessKey: 'inletdev',
-  minioSecretKey: 'inletdevsecret',
+  storagePort: 9010,
+  storageAccessKey: 'inletdev',
+  storageSecretKey: 'inletdevsecret',
 };
 
 export function databaseUrl(options = {}) {
@@ -45,7 +51,7 @@ export function databaseUrl(options = {}) {
 }
 
 export function s3Endpoint(options = {}) {
-  return `http://127.0.0.1:${{ ...DEFAULTS, ...options }.minioPort}`;
+  return `http://127.0.0.1:${{ ...DEFAULTS, ...options }.storagePort}`;
 }
 
 async function portIsOpen(port) {
@@ -115,67 +121,74 @@ export async function startPostgres(options = {}) {
   };
 }
 
-async function ensureMinioBinary() {
-  if (existsSync(minioBinary)) return minioBinary;
+/**
+ * The RustFS release binary for this machine, downloaded once into .dev/bin and checked
+ * against a checksum pinned here, so a changed or tampered release is refused rather than
+ * run. Upgrading RustFS is changing RUSTFS_VERSION and these four sums together, from the
+ * release's SHA256SUMS.
+ */
+async function ensureRustfsBinary() {
+  if (existsSync(rustfsBinary)) return rustfsBinary;
 
-  const platform = process.platform === 'darwin' ? 'darwin' : 'linux';
-  const arch = process.arch === 'arm64' ? 'arm64' : 'amd64';
-  const url = `${MINIO_DOWNLOAD}/${platform}-${arch}/minio`;
-
-  await fs.mkdir(path.dirname(minioBinary), { recursive: true });
-  const response = await fetch(url);
-  if (!response.ok) {
-    // MinIO withdrew its community binaries on September 11, 2026; dl.min.io answers 410.
-    throw new Error(
-      response.status === 410
-        ? `MinIO no longer publishes server binaries (${url} answered 410). Build it from source with scripts/build-minio.sh (needs Go and git), which puts it in .dev/bin/minio, or start any S3-compatible server on port ${DEFAULTS.minioPort} with the access key ${DEFAULTS.minioAccessKey} and secret ${DEFAULTS.minioSecretKey}.`
-        : `Could not download the MinIO server binary from ${url}: ${response.status}`,
-    );
+  const target =
+    process.platform === 'darwin'
+      ? 'macos-aarch64'
+      : process.arch === 'arm64'
+        ? 'linux-aarch64-musl'
+        : 'linux-x86_64-musl';
+  if (process.platform === 'darwin' && process.arch !== 'arm64') {
+    throw new Error('RustFS publishes no Intel macOS binary. Run the object store with `docker compose -f docker-compose.dev.yml up -d storage` instead; the scripts reuse anything listening on port 9010.');
   }
-  await fs.writeFile(minioBinary, Buffer.from(await response.arrayBuffer()));
-  await fs.chmod(minioBinary, 0o755);
-  return minioBinary;
+  const asset = `rustfs-${target}-v${RUSTFS_VERSION}.zip`;
+  const url = `https://github.com/rustfs/rustfs/releases/download/${RUSTFS_VERSION}/${asset}`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Could not download RustFS from ${url}: ${response.status}`);
+  const archive = Buffer.from(await response.arrayBuffer());
+  const sum = createHash('sha256').update(archive).digest('hex');
+  if (sum !== RUSTFS_SHA256[target]) {
+    throw new Error(`${asset} has SHA-256 ${sum}, not the pinned ${RUSTFS_SHA256[target]}. Refusing to run it.`);
+  }
+
+  await fs.mkdir(path.dirname(rustfsBinary), { recursive: true });
+  const zip = `${rustfsBinary}.zip`;
+  await fs.writeFile(zip, archive);
+  // The archive holds the one `rustfs` binary. `unzip` ships with macOS and the CI image.
+  execFileSync('unzip', ['-o', '-q', zip, 'rustfs', '-d', path.dirname(rustfsBinary)]);
+  await fs.rm(zip);
+  await fs.chmod(rustfsBinary, 0o755);
+  return rustfsBinary;
 }
 
-/** Starts MinIO, or attaches to one already listening. */
-export async function startMinio(options = {}) {
+/** Starts RustFS, or attaches to any S3 server already listening on the port. */
+export async function startObjectStore(options = {}) {
   const config = { ...DEFAULTS, ...options };
-  const dataDir = options.dataDir ?? path.join(devDir, 'minio');
+  const dataDir = options.dataDir ?? path.join(devDir, 'storage');
 
-  if (await portIsOpen(config.minioPort)) {
+  if (await portIsOpen(config.storagePort)) {
     return { endpoint: s3Endpoint(config), stop: async () => {}, reused: true };
   }
 
-  const binary = await ensureMinioBinary();
+  const binary = await ensureRustfsBinary();
   await fs.mkdir(dataDir, { recursive: true });
 
   // Bound to loopback, not every interface. These are development credentials, and
   // Inlet reaches the store over 127.0.0.1, so there is no reason for a local object
-  // store holding submitted screenshots to answer the network.
-  const child = spawn(
-    binary,
-    [
-      'server',
-      dataDir,
-      '--address',
-      `127.0.0.1:${config.minioPort}`,
-      '--console-address',
-      `127.0.0.1:${config.minioConsolePort}`,
-    ],
-    {
-      env: {
-        ...process.env,
-        MINIO_ROOT_USER: config.minioAccessKey,
-        MINIO_ROOT_PASSWORD: config.minioSecretKey,
-        MINIO_UPDATE: 'off',
-      },
-      stdio: options.quiet === false ? 'inherit' : 'ignore',
-      detached: false,
+  // store holding submitted screenshots to answer the network, and the console is off.
+  const child = spawn(binary, ['server', dataDir, '--address', `127.0.0.1:${config.storagePort}`], {
+    env: {
+      ...process.env,
+      RUSTFS_ACCESS_KEY: config.storageAccessKey,
+      RUSTFS_SECRET_KEY: config.storageSecretKey,
+      // The binary starts its web console on every interface unless told not to.
+      RUSTFS_CONSOLE_ENABLE: 'false',
+      RUSTFS_OBS_LOGGER_LEVEL: 'error',
     },
-  );
+    stdio: options.quiet === false ? 'inherit' : 'ignore',
+    detached: false,
+  });
   child.unref();
 
-  await waitForPort(config.minioPort, 'MinIO');
+  await waitForPort(config.storagePort, 'RustFS');
 
   return {
     endpoint: s3Endpoint(config),
@@ -189,21 +202,21 @@ export async function startMinio(options = {}) {
 /** Both services, with the environment variables Inlet expects. */
 export async function startLocalServices(options = {}) {
   const postgres = await startPostgres(options);
-  const minio = await startMinio(options);
+  const storage = await startObjectStore(options);
   const config = { ...DEFAULTS, ...options };
 
   return {
     postgres,
-    minio,
+    storage,
     env: {
       INLET_DATABASE_URL: postgres.url,
-      INLET_S3_ENDPOINT: minio.endpoint,
-      INLET_S3_ACCESS_KEY_ID: config.minioAccessKey,
-      INLET_S3_SECRET_ACCESS_KEY: config.minioSecretKey,
+      INLET_S3_ENDPOINT: storage.endpoint,
+      INLET_S3_ACCESS_KEY_ID: config.storageAccessKey,
+      INLET_S3_SECRET_ACCESS_KEY: config.storageSecretKey,
       INLET_S3_FORCE_PATH_STYLE: 'true',
     },
     stop: async () => {
-      await minio.stop();
+      await storage.stop();
       await postgres.stop();
     },
   };
