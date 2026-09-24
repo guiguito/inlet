@@ -18,18 +18,18 @@ Node.js 22 or newer.
 
 ```bash
 npm install
-npm run services:up      # local PostgreSQL and MinIO binaries, no Docker needed
+npm run services:up      # local PostgreSQL and RustFS binaries, no Docker needed
 cp .env.example .env
 npm run dev              # API on :3000, web on :5173
 ```
 
 `npm run services:down` stops them again.
 
-MinIO no longer publishes its server binary (September 2026), so on a machine that has
-never had one, `services:up` stops and says so. Build it once from its archived source
-with `scripts/build-minio.sh` (needs Go 1.24 and git), which puts it where the script looks.
-Or run the Docker services instead: `docker compose -f docker-compose.dev.yml up -d` uses
-the same ports and credentials, and its MinIO image is the one this repository builds.
+The first run downloads PostgreSQL (through `embedded-postgres`) and the RustFS release
+binary, which is checked against a SHA-256 pinned in `scripts/local-services.mjs`, into
+`.dev/`. On an Intel Mac, which RustFS publishes no binary for, run the Docker services
+instead: `docker compose -f docker-compose.dev.yml up -d` uses the same ports and
+credentials, and the scripts reuse whatever already listens on them.
 
 ## What is expected of a change
 

@@ -22,7 +22,7 @@ build step to run on the server, no queue broker, and no separate worker process
 | | |
 | --- | --- |
 | PostgreSQL | 14 or newer. Developed and tested against 18. |
-| Object storage | Any S3-compatible store that supports object tagging and lifecycle rules filtered by tag: AWS S3, MinIO, and most others. The bundled deployment includes one. |
+| Object storage | Any S3-compatible store that supports object tagging and lifecycle rules filtered by tag: AWS S3, RustFS, and most others. The bundled deployment includes RustFS. |
 | A container runtime | Or Node.js 22+ if you would rather run it directly. |
 | TLS | Terminate it in front of Inlet. Inlet speaks plain HTTP. |
 
@@ -31,7 +31,7 @@ workers wake on a timer. A small VM is enough for a team's feedback.
 
 ## The fastest path: Docker Compose
 
-The bundled `docker-compose.yml` brings up PostgreSQL, MinIO and Inlet together. It is
+The bundled `docker-compose.yml` brings up PostgreSQL, RustFS and Inlet together. It is
 meant as a working starting point, not a hardened production deployment — read
 [Configuration](#configuration) before exposing it.
 
@@ -76,16 +76,16 @@ multi-architecture.
 
 ### The bundled object store
 
-The compose file's `minio` service runs `ghcr.io/guiguito/inlet-minio`, which is MinIO's
-last community release (`RELEASE.2025-10-15T17-29-55Z`) built by this repository from its
-archived source (`docker/minio/Dockerfile`). MinIO withdrew its own images and binaries in
-September 2026, so `minio/minio` can no longer be pulled. The image behaves as the old one
-did, with data in the same `miniodata` volume, so an existing deployment upgrades by pulling.
+The compose file's `storage` service is [RustFS](https://github.com/rustfs/rustfs), an
+Apache-2.0, S3-compatible object store, pinned to `rustfs/rustfs:1.0.0` for amd64 and arm64.
+Its data lives in the `storagedata` volume. It publishes no port and its web console is
+turned off, so only Inlet, on the compose network, can reach it; the credentials are
+`INLET_S3_ACCESS_KEY_ID` and `INLET_S3_SECRET_ACCESS_KEY`, which you should set in `.env`
+to something other than the defaults.
 
-That source is no longer maintained and will receive no security fixes. The bucket is only
-reachable on the compose network, apart from the console port, which you can close by
-removing its `ports` entry. For anything beyond a small or internal deployment, point
-`INLET_S3_*` at a maintained provider instead (see "Using managed PostgreSQL and S3").
+The version is pinned on purpose. RustFS is young and publishes security fixes often, so
+read its [release notes](https://github.com/rustfs/rustfs/releases) and move the pin in
+`docker-compose.yml` when a release concerns you.
 
 ## Configuration
 
@@ -125,10 +125,10 @@ Every setting is an environment variable. Two are required and have no default.
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `INLET_S3_ENDPOINT` | — | Omit for AWS S3. Set it for MinIO, R2, B2 and the rest. |
+| `INLET_S3_ENDPOINT` | — | Omit for AWS S3. Set it for RustFS, R2, B2 and the rest. |
 | `INLET_S3_REGION` | `us-east-1` | |
 | `INLET_S3_BUCKET` | `inlet` | |
-| `INLET_S3_FORCE_PATH_STYLE` | `true` | `true` for MinIO. `false` for AWS S3 virtual-hosted style. |
+| `INLET_S3_FORCE_PATH_STYLE` | `true` | `true` for RustFS and most self-hosted stores. `false` for AWS S3 virtual-hosted style. |
 | `INLET_S3_CREATE_BUCKET` | `true` | Creates the bucket if absent. Set `false` if the credentials are not allowed to. |
 
 ### Limits and lifecycles
@@ -241,7 +241,7 @@ Expect `204` and exactly one `access-control-allow-origin: *`. The same request 
 
 ## Using managed PostgreSQL and S3
 
-Nothing in Inlet assumes the bundled services. Drop `postgres` and `minio` from the
+Nothing in Inlet assumes the bundled services. Drop `postgres` and `storage` from the
 compose file, or run the image alone, and point the variables at your providers.
 
 **AWS S3:**
@@ -316,12 +316,19 @@ docker compose up -d --build
 Migrations apply at startup. **Back up the database first** — Inlet does not roll
 migrations back for you.
 
-Migrations to date are additive: new tables and columns, no destructive rewrites. The
-latest, `0007_release_8_sdk_identity`, adds nullable `installation_id` and `session_id`
-columns to crash reports and submissions, and `user_id` to submissions, with their
-indexes; existing rows keep them null and no reset is needed. That
-is a property of the migrations that exist, not a promise about future ones, so read
-the release notes.
+The schema starts from one baseline migration, `0000_initial_schema`, as of September 25,
+2026. **An installation from before that date cannot be upgraded**: it has the earlier
+migration history and the earlier object store (MinIO). Reinstall it instead, which
+deletes its data:
+
+```bash
+git pull
+docker compose down -v        # removes the database and object-store volumes
+docker volume rm <project>_miniodata 2>/dev/null   # the old store's volume, if left
+docker compose up -d --build
+```
+
+From the baseline on, migrations are additive: read the release notes before upgrading.
 
 ## Backups and what is where
 
@@ -339,7 +346,10 @@ Back up PostgreSQL with `pg_dump`:
 docker compose exec postgres pg_dump -U inlet inlet | gzip > inlet-$(date +%F).sql.gz
 ```
 
-Back up the bucket with whatever your provider offers, or `mc mirror` for MinIO. The
+Back up the bucket with whatever your provider offers. For the bundled store, copy it with
+any S3 client (`rclone sync`, `aws s3 sync --endpoint-url`), or archive its volume while it
+is stopped:
+`docker run --rm -v <project>_storagedata:/data -v "$PWD":/backup alpine tar czf /backup/storage.tgz -C /data .`. The
 two are consistent enough to back up independently: a screenshot whose response is
 missing is orphaned bytes, and a response whose screenshot is missing renders a broken
 image. Neither corrupts the other.

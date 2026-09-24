@@ -5,57 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1788904793000,
-      "tag": "0000_majestic_hannibal_king",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1788925028440,
-      "tag": "0001_release_2_scan_status",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1788927213506,
-      "tag": "0002_hosted_forms",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1788939144172,
-      "tag": "0003_slack_notifications",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1788945316648,
-      "tag": "0004_submission_views",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "7",
-      "when": 1789659110672,
-      "tag": "0005_crash_reports",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "7",
-      "when": 1789679499609,
-      "tag": "0006_crash_list_indexes",
-      "breakpoints": true
-    },
-    {
-      "idx": 7,
-      "version": "7",
-      "when": 1790277199154,
-      "tag": "0007_release_8_sdk_identity",
+      "when": 1790290454764,
+      "tag": "0000_initial_schema",
       "breakpoints": true
     }
   ]

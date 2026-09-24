@@ -14,7 +14,7 @@ import {
 import type { Env } from '../env.js';
 
 /**
- * S3-compatible object storage (section 12.6). The bundled deployment runs MinIO;
+ * S3-compatible object storage (section 12.6). The bundled deployment runs RustFS;
  * pointing at AWS S3 or another gateway is configuration only.
  *
  * Pending-upload expiry (FR-067, section 12.3) is a storage lifecycle rule keyed on

@@ -25,7 +25,7 @@ playwright/.cache/
 .vite/
 *.log
 
-# Local PostgreSQL and MinIO, created by `npm run services:up`
+# Local PostgreSQL and RustFS, created by `npm run services:up`
 .dev/
 
 # Generated: the OpenAPI document is written to docs/openapi.json, which is tracked.

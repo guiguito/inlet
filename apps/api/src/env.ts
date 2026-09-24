@@ -53,7 +53,7 @@ const envSchema = z.object({
   INLET_S3_BUCKET: z.string().min(1).default('inlet'),
   INLET_S3_ACCESS_KEY_ID: z.string().min(1),
   INLET_S3_SECRET_ACCESS_KEY: z.string().min(1),
-  /** MinIO and most self-hosted gateways need path-style addressing. */
+  /** RustFS and most self-hosted gateways need path-style addressing. */
   INLET_S3_FORCE_PATH_STYLE: bool.default(true),
   /** Create the bucket at startup when it is missing. Off for managed buckets. */
   INLET_S3_CREATE_BUCKET: bool.default(true),
