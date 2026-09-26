@@ -2861,3 +2861,85 @@ The PRDs had never removed a requirement. A withdrawn one keeps its ID and its l
 reads `**AN-024:** (Withdrawn September 26, 2026: reason.)`, so every citation still
 resolves and the numbering never shifts. AN-024 (dimension sets), AN-038 (the session
 record) and Appendix B.7 (the data-source rule) are the first.
+
+## 32. Release 9: Remote Config, the specification's technical choices
+
+Specified on September 26, 2026 (Remote Config PRD, `RC-xxx`), before any code, to ship
+before Release 8. The owner's decisions are in section 14 of the PRD; this section records
+the technical choices behind the requirements and what was rejected. Nothing here is
+measured yet: the 9.1 load test must confirm the fetch budget of PRD section 9.4.
+
+### 32.1 Where things live
+- **PostgreSQL only.** Drafts, versions and hourly reach counters are small and relational.
+  Remote Config depends on no optional service (Foundations FD-009), so it works on a
+  deployment without the `analytics` profile.
+- **The template is one `jsonb` document** per draft and per version, validated by one
+  schema in `@inlet/shared` that the API, the MCP server and the SDK share, as the form
+  template is. Parameters and conditions are not normalised into rows: a version is read
+  whole, compiled whole, diffed whole and exported whole.
+
+### 32.2 The fetch path
+- **Server-side evaluation, compiled in memory.** Each active version is compiled once, at
+  publish, into an evaluator: lists become sets, versions are pre-parsed, and each
+  condition becomes a closure over the normalised context.
+- **Answers memoised by outcome.** Evaluating a context yields the vector of true
+  conditions and assigned variants. The answer and its ETag depend only on the version and
+  that vector, so the serialised, compressed answer is cached per `(version, vector,
+  encoding)` in a map bounded in bytes, with misses bounded per database, and built once
+  per version for each shape of the fleet. The refresh interval travels in the cached body,
+  so a settings change drops the cache; an answer carrying warnings is built per request.
+- **The ETag hashes the answer, not the outcome.** An ETag over the version and the true
+  conditions would change every context's ETag on every publish, sending whole answers to
+  the whole fleet, and would let anyone holding the key tell whether a user ID is on a list
+  that gives no parameter a value. Hashing the serialised values, experiments and live keys
+  changes it only when what the context receives changes.
+- **The ETag travels in the body, and "not modified" is a small `200`.** A `304` answering
+  a `POST` is handled inconsistently by browsers' `fetch`, React Native and intermediaries.
+  A `GET` would put installation and user IDs in the address, which proxies log.
+- **No database work per fetch.** Credentials and databases are cached for ten seconds,
+  unknown ones as absent for as long, and a credential's last-used time is written by the
+  worker instead of per request as `touchCredential` does today; reach counts accumulate in memory and the worker writes them every ten seconds, as the
+  analytics data-health counters do (AN-006).
+- **Rejected: client-side evaluation.** It ships user-ID lists and unreleased values to
+  every device; the vendors that do it had to add hashed comparisons, encrypted payloads
+  or opt-in exposure per flag.
+- **Rejected: streaming updates in Release 9.** A held connection per foreground device is
+  the opposite of a light server. The later path is an invalidation event carrying a
+  version number, after which the SDK fetches.
+
+### 32.3 Evaluation
+- **Buckets:** SHA-256 over `salt:p:unit` or `salt:v:unit`, the first four bytes modulo
+  10,000. Percentages are stored as integer hundredths of a percent, as weights are:
+  `bucket < 0.07 × 100` in floating point admits one bucket too many for 573 of the 10,001
+  possible values. SHA-256 is in every runtime Inlet targets, the modulo bias is below one in
+  400,000, and separate tags keep a split's population percentage independent of its
+  variants. The salt is per condition, so reordering or editing conditions never moves a
+  unit; only Reshuffle does.
+- **No regular expressions.** A Creator-supplied pattern run by a backtracking engine on a
+  public route is a denial-of-service lever; RE2-style engines are a native dependency.
+- **A missing attribute fails every rule except `notExists`,** so `notIn` never admits a
+  context that simply did not say.
+- **Version comparison** is a small parser (Appendix B.2 of the PRD), not a semver
+  library: application versions are often two or four parts.
+
+### 32.4 Lifecycle and SDK
+- **Rollback publishes a new version** rather than reactivating an old one, unlike forms
+  (FR-042E): the reach per version and "clients on version 16" must never be ambiguous.
+- **The draft lock is the forms' revision check,** plus per-parameter and per-condition
+  routes, so that agents and concurrent editors do not overwrite each other's work.
+- **The config module creates the installation ID** (Foundations FD-016 amended), because
+  Release 9 ships before the analytics module that was meant to own it. It writes the ID
+  under one key every module reads, so that the analytics module adopts it. It is held
+  apart from the `installationId` field the crash and feedback modules attach, because the
+  published 0.2.x modules attach that field whenever it is set: filling it would put a
+  persistent device ID on every crash report of an application without analytics.
+- **Answers are bound to the context they were fetched for,** by app version, build and user
+  ID, so that a launch after an update never starts on values resolved for the previous
+  version, and a change of user activates the new user's answer at once.
+- **Activation at the next launch, except the first fetch before any read and live
+  parameters.** Rejected: Firebase's separate fetch and activate calls, the most reported
+  source of "I published and nothing changed"; and immediate application by default, which
+  changes screens under users.
+- **A lenient fetch context.** Ingest envelopes are strict because they store what they
+  accept; a fetch stores nothing, and refusing one would leave an application on stale
+  values because a newer SDK added a field.
