@@ -17,8 +17,12 @@ const cache = new WeakMap<typeof fetch, Map<string, Promise<string[] | null>>>()
 /** The one default fetch, so the modules of one application share one probe. */
 export const defaultFetch: typeof fetch = (input, init) => fetch(input, init);
 
-/** The capability list, or null when the probe failed. */
-export function capabilities(baseUrl: string, impl: typeof fetch, timeoutMs = 20_000): Promise<string[] | null> {
+/**
+ * The capability list, or null when the probe failed. `refresh` asks again even after an
+ * answer, for the analytics module's re-read every ten minutes while `analytics` is not
+ * listed (AN-241); the new answer replaces the cached one for every module.
+ */
+export function capabilities(baseUrl: string, impl: typeof fetch, timeoutMs = 20_000, refresh = false): Promise<string[] | null> {
   let byOrigin = cache.get(impl);
   if (!byOrigin) {
     byOrigin = new Map();
@@ -26,7 +30,7 @@ export function capabilities(baseUrl: string, impl: typeof fetch, timeoutMs = 20
   }
   const key = baseUrl.replace(/\/$/, '');
   const known = byOrigin.get(key);
-  if (known) return known;
+  if (known && !refresh) return known;
   const probe = (async () => {
     const timeout = timeoutSignal(timeoutMs);
     try {

@@ -1,20 +1,23 @@
 # inlet-sdk
 
 The client SDK for [Inlet](../../README.md), the self-hosted place your applications
-report to. Two modules:
+report to. Three modules:
 
 - **`inlet-sdk/feedback`** collects a form's answers from inside your own interface.
 - **`inlet-sdk/crash`** reports application failures.
+- **`inlet-sdk/analytics`** sends usage events: sessions, retention, funnels, crash-free
+  sessions. See [UX analytics](#ux-analytics).
 
 Zero runtime dependencies, ESM and CommonJS, Node 18 or later, evergreen browsers and
-React Native 0.74 or later. Each module has a Node, browser, Electron, React and React
-Native entry.
+React Native 0.74 or later. Feedback and crash have a Node, browser, Electron, React and
+React Native entry; analytics has a browser and a Node entry so far.
 
-Both modules share one **identity** per application: a random session ID, rotated after
+The modules share one **identity** per application: a random session ID, rotated after
 30 minutes without activity or after 24 hours, and the user ID you set with `setUser`. It
 travels with crash reports and submissions so that Inlet can show you the crash and the
-feedback of the same session side by side. It lives in memory, is never derived from the
-device, and `identity: false` at `init` turns it off; see [Identity](#identity).
+feedback of the same session side by side. Without the analytics module it lives in memory,
+is never derived from the device, and `identity: false` at `init` turns it off; see
+[Identity](#identity).
 
 If you have never seen Inlet: an Inlet **project** holds databases and owns two kinds of
 API key. A **publishable key** (`ipk_…`) can only send data in and is safe to ship in an
@@ -594,9 +597,240 @@ frame — so a redacted message costs you less than it appears to.
 | `allowedKinds`, `tagAllowlist` | Electron main only: what the IPC channel accepts from a renderer. |
 | `ignoreRendererReasons`, `ignoreChildReasons` | Electron main only: exit reasons that are not crashes. Defaults `['clean-exit']` and `['clean-exit', 'killed']`. |
 | `uncleanExit` | Electron main only: report a previous run that never quit cleanly. Off by default, packaged builds only. |
-| `identity` | Attach the session ID of the shared [identity](#identity). Default true; `false` sends exactly what 0.1.5 sent. |
+| `identity` | Attach the session ID of the shared [identity](#identity), and the installation ID while an analytics client is enabled. Default true; `false` sends exactly what 0.1.5 sent. Crash flags for crash-free sessions do not depend on it. |
 | `random(bytes)` | Fills a buffer with random bytes, for a runtime without `crypto.getRandomValues`. React Native only needs it without a polyfill, and even then IDs are still unique. |
 | `debug(message, detail)` | Receives warnings and transport events. Silent by default. |
+
+---
+
+# UX analytics
+
+`inlet-sdk/analytics` sends named events to an **analytics database** (`adb_…`): what your
+users do, sessions, retention, funnels and crash-free sessions per version, on your own
+server. It needs a deployment whose `/v1/health` lists `analytics` (the event store is an
+optional service; see the server's deployment guide). Until it does, events wait in the
+queue and the SDK asks again every ten minutes, so collection starts by itself once your
+operator turns analytics on.
+
+## Consent first
+
+**An installation ID stored on a device generally requires consent in the European Union.
+You decide the lawful basis of its collection.** So initialise the module disabled and turn
+it on in your consent callback:
+
+```ts
+import * as analytics from 'inlet-sdk/analytics/browser';
+
+analytics.init({
+  baseUrl: 'https://inlet.example.com',
+  publishableKey: 'ipk_…',
+  analyticsDatabaseId: 'adb_…',
+  app: { version: '1.4.0' },
+  enabled: false, // nothing is stored or sent until consent
+});
+
+// In your consent banner's callback, once the person agrees (and at every start after):
+analytics.setEnabled(true);
+
+analytics.track('checkout_completed', { params: { plan: 'pro', items: 3 } });
+analytics.screen('Checkout');
+```
+
+While disabled the module creates no installation, sends nothing, drops every `track` with
+the reason `disabled`, and writes nothing to the device but its opt-out choice. Without
+`enabled` at `init`, a stored opt-out applies; an explicit `enabled` overrides it.
+
+When the person withdraws consent:
+
+```ts
+await analytics.setEnabled(false, { forget: true });
+```
+
+`forget` deletes the installation ID, the session ID, attribution and experiments, the
+stored app version, crash flags not yet sent and the analytics queue, and removes the
+installation ID from crash reports and feedback submissions still waiting to be sent. The
+next `setEnabled(true)` begins a new installation. (Deleting what the server already holds
+is an erasure, which an Admin runs from the project's settings.)
+
+## The entries
+
+| Entry | For | Keeps |
+| --- | --- | --- |
+| `inlet-sdk/analytics/browser` | Web pages | The identity in `localStorage`, the queue in IndexedDB |
+| `inlet-sdk/analytics/node` | Backends (server mode, the default) and command-line tools (device mode) | Memory in server mode; files under `persistenceDir` in device mode |
+| `inlet-sdk/analytics` | Any other runtime with `fetch` | Memory, or the `store` you give it |
+
+Electron and React Native entries arrive in a later version. Each entry exposes the same
+functions: `init`, `track`, `screen`, `setUserId`, `setAttribution`, `setExperiment`,
+`setEnabled`, `reset`, `getInstallationId`, `getSessionId`, `flush` and `close`. One
+analytics client and one identity serve the whole application, whichever entry
+initialised them; a `track` before `init` warns once in the console.
+
+## Server mode and device mode
+
+**Server mode** (the Node entry's default) is a backend reporting on behalf of its users.
+No identity is kept, no standard event is sent, events carry the platform `server` and
+count as background events (never as active installations), and every `track` must name
+whose event it is, or it is dropped with the reason `missing-identity`:
+
+```ts
+import * as analytics from 'inlet-sdk/analytics/node';
+
+analytics.init({ baseUrl, publishableKey, analyticsDatabaseId, app: { version: '2.3.0' } });
+analytics.track('invoice_paid', { userId: user.id, params: { amount: 49 } });
+```
+
+**In a serverless function, `await analytics.flush()` before the handler returns.** The
+queue is in memory there, and a frozen or recycled instance loses what it had not sent.
+
+A server-mode `track` may also pass `installationId` (forwarded by your app from
+`getInstallationId()`), `sessionId`, and `context` (`platform`, `os`, `runtime`, `locale`,
+`country`).
+
+**Device mode** (`mode: 'device'`, the browser's and the bare entry's default) is an
+application on a person's device: an installation, sessions and the standard events. On
+Node it is for a command-line tool or a desktop application without Electron:
+
+```ts
+analytics.init({ baseUrl, publishableKey, analyticsDatabaseId, app: { version: '1.0.0' }, mode: 'device', persistenceDir: '/path/to/app-data/inlet' });
+```
+
+Give the crash and feedback modules the same directory, so all three share one
+installation. The platform is `macos`, `windows` or `linux` with the version the system
+reports, which on macOS is the kernel's (`24.1.0`); pass `os: { name: 'macOS', version: '15.1' }`
+to report the product version. Node, Bun and Deno are detected (`runtime`); where a
+runtime permission refuses file or system access, the module keeps memory and leaves the
+version out.
+
+## What gets sent
+
+Exactly the fields of the analytics envelope and nothing else: an event ID (UUID v7), the
+time, the name, an optional category, the installation ID, the user ID you set, the session
+ID, your attribution and experiments, your params, the app version, build and ID, the
+platform, the operating system and browser with their **major** versions, the language, the
+environment, whether the identity is ephemeral, and the SDK's name and version.
+
+Params, attribution, experiments and the user ID are yours: the SDK sends them only when you
+set them. The user-agent string, the page address, the referrer, the screen and anything
+fingerprintable are never sent, and no high-entropy client hint is requested. Browsers now
+freeze parts of the user-agent string (macOS 10.15.7, Windows 10.0, Android 10); those
+versions say nothing about the device, so they are left out rather than reported wrongly.
+
+Every event is checked against the server's own rules before it is queued, with the same
+code the server runs. What the server would truncate is truncated; what it would refuse is
+dropped here, through `onDrop(reason, detail)` with one of `disabled`, `bounds`,
+`beforeSend`, `queue-full`, `refused` or `missing-identity`. `beforeSend(event)` runs
+synchronously on every event, standard ones included, and may return it, a changed copy or
+`null`; its result is checked again.
+
+## Standard events and sessions
+
+In device mode the module sends, unless `standardEvents` turns one off:
+
+| Event | When | Params |
+| --- | --- | --- |
+| `app_installed` | The first enable for an installation | — |
+| `app_updated` | The app version or build differs from the last run's | `previousVersion`, `previousBuild` |
+| `app_started` | Each session start | `trigger` (`launch`, `resume`, `reset`), `crashReporting` |
+| `session_crashed` | A crash ended a session (see below) | `kind`, `crashedAt` |
+| `screen_viewed` | Only when you call `screen(name)` | `screen` |
+
+`app_installed` is the first run the SDK saw: adding the SDK to an app already in use makes
+every existing user a new installation on their first launch, so read cohorts from your
+rollout date on. Turning `app_started` off leaves sessions, retention and crash-free sessions
+without data.
+
+A session ends after `sessionTimeoutMinutes` without activity (30 by default, 1 to 240) and
+after 24 hours; activity is a `track`, a crash capture, a feedback submission, or the page
+coming back to the foreground. `reset()` — for a sign-out — clears the user ID and starts a
+new session, keeping the installation.
+
+**Several tabs.** Every tab of an origin shares one installation and one session. Opening a
+new tab continues the session and sends nothing; the tab that notices the session expired
+rotates it under a Web Lock, so exactly one `app_started` is sent. Where Web Locks are
+unavailable (outside a secure context) the next session ID is derived from the expired one,
+so tabs rotating at once agree on it. One tab at a time sends what every tab queued.
+
+Outside browsers every process start begins a session with `trigger: 'launch'`.
+
+**Web identity has limits.** Browsers clear storage when the user asks, Safari removes
+script-written storage after seven days without a visit, and a private window keeps nothing.
+When `localStorage` or IndexedDB is unavailable the module keeps memory for the page, marks
+its events `ephemeral` (they count everywhere except new installations and cohorts) and says
+so through `debug`. Call `setUserId` after sign-in to follow signed-in people across devices.
+
+## Attribution, experiments and the user ID
+
+```ts
+analytics.setUserId('u_123');                 // the same user ID the crash and feedback modules send
+analytics.setAttribution('spring-campaign');  // sticky: every later event carries it
+analytics.setExperiment('checkout', 'b');     // sticky, at most five
+analytics.track('clicked', { attribution: 'newsletter', experiments: { checkout: 'c' } }); // this event only
+```
+
+Attribution and experiments are stored with the installation, so they survive a restart;
+`null` clears one. The server keeps an installation's first attribution as its install
+attribution, whatever you set later. A sixth experiment is refused with a `debug` message.
+
+## Crash-free sessions
+
+With the crash module in the same application, analytics measures crash-free sessions per
+version. When the crash module captures a crash — an unhandled exception or rejection, a
+native crash, an unclean exit, a renderer that died — it flags the session, synchronously
+where storage allows, so a crash that kills the process is found at the next start; the
+analytics module then sends `session_crashed` with the time of the crash, however long the
+application stayed closed. The flag is raised after `beforeSendSync` (drop a report there
+and it is not a crash) and before dedupe and sampling, so every crashing session counts once
+even when its report is never sent.
+
+In a browser, only an error whose stack has a frame in your own code counts, so a browser
+extension's error does not. `app_started` reports `crashReporting: true` only when a crash
+module is enabled **and at least one of the page's scripts lies within its `appRoots`**. If
+your scripts are served from another origin — a CDN — pass it:
+
+```ts
+crash.init({ baseUrl, publishableKey, crashDatabaseId, release: '1.4.0', appRoots: [location.origin, 'https://cdn.example.com/app'] });
+```
+
+Otherwise that version reads as "not measured" rather than wrongly crash-free.
+
+## Delivery
+
+Events are written to the queue before they are sent and replayed on the next start. They
+go in batches of up to `batchSize` (50) every `flushIntervalMs` (5 s in browsers, 10 s
+elsewhere), at once when a full batch is queued, and on `flush()`. When the page is hidden
+or closed the module sends what fits in 60 KiB of `keepalive` requests (browsers allow 64
+KiB per page); the rest waits for the next page. A transport failure backs off
+exponentially with jitter; a `429`, or a `503` with `Retry-After`, pauses analytics for that
+long — and only analytics: the crash module keeps sending. An event the server answered,
+accepted or refused, is never sent again. Past `queueSize` (1,000) the oldest of your events
+is dropped first, the standard events last.
+
+**Size.** `inlet-sdk/analytics/browser` is 15.1 KB minified and gzipped, the event rules
+included. The build fails past 20 KB.
+
+## Analytics options
+
+| Option | Purpose |
+| --- | --- |
+| `baseUrl`, `publishableKey`, `analyticsDatabaseId`, `app` | Required. `app` is `{ version, build?, id? }`; `id` tells apart the apps of one product. A secret key or an empty version throws at `init`. |
+| `enabled` | Collect or not. Default true, unless a stored opt-out applies. |
+| `mode` | `device` or `server`. The Node entry defaults to `server`, the others to `device`. |
+| `environment` | Defaults to `production`. |
+| `userId`, `attribution`, `experiments` | Initial values of the calls above. |
+| `standardEvents` | `{ app_installed, app_updated, app_started, session_crashed }`, each on by default. |
+| `sessionTimeoutMinutes` | 30 by default, 1 to 240. |
+| `flushIntervalMs`, `batchSize`, `queueSize` | 5000 in browsers or 10000; 50, at most 100; 1,000. |
+| `beforeSend(event)` | Synchronous; return the event, a changed one, or `null`. |
+| `onDrop(reason, detail)` | Every dropped event, with its reason. |
+| `timeoutMs` | Per request. Default 20000. |
+| `store` | The bare entry: a store for the identity and the queue (the crash module's `QueueStore` shape; synchronous `getSync`/`setSync` keep crash flags through a fatal crash). |
+| `persistenceDir`, `os` | Node device mode: where the identity and queue live; the OS to report. |
+| `fetch`, `random(bytes)`, `debug(message, detail)` | As in the other modules. |
+
+`getInstallationId()` returns the installation ID — to forward to your backend, or to quote
+in a data-subject request — or `null` while disabled and in server mode. `getSessionId()`
+returns the current session ID or `null`.
 
 ---
 
@@ -662,20 +896,26 @@ feedback.init({ ...inlet, feedbackDatabaseId: 'fdb_…', storage: AsyncStorage }
 
 # Identity
 
-Both modules of one application share one identity, whatever entry initialised them:
+The modules of one application share one identity, whatever entry initialised them:
 
 | | What it is | Where it lives |
 | --- | --- | --- |
-| **Session ID** | A random, time-ordered UUID. A new one after 30 minutes without activity, after 24 hours, and on every process start or page load. A capture or a submission is activity. | Memory |
-| **User ID** | What you pass to `setUser(id)` in either module; `setUser(null)` clears it. | Memory |
-| **Installation ID** | Created only by the analytics module, which arrives with Inlet's UX Analytics release. Until your application runs it, nothing sends one. | — |
+| **Session ID** | A random, time-ordered UUID. A new one after 30 minutes without activity (the analytics module's `sessionTimeoutMinutes`), after 24 hours, and on every process start. A capture, a submission or a `track` is activity. | Memory; with analytics enabled in a browser, `localStorage`, shared by the origin's tabs |
+| **User ID** | What you pass to `setUser(id)` or `setUserId(id)` in any module; `null` clears it. | Memory |
+| **Installation ID** | A random UUID the analytics module creates at its first enable, kept until `forget`. Crash reports and submissions carry it **only while an analytics client is enabled**. | With analytics enabled: `localStorage`, or `installation-id.json` under the persistence directory |
 
-Nothing is written to the device for the identity, the unclean-exit sentinel included. It
-is sent only to a deployment whose `/v1/health` lists `identity`; an older deployment gets
+Without an enabled analytics client nothing is written to the device for the identity, the
+unclean-exit sentinel included, and a page load begins a new session. With one, the identity
+is stored under keys every module reads (`inlet-sdk:installation-id` and its siblings in
+`localStorage`; files of the same names on disk), so give every module the same persistence
+directory on Node. While analytics is disabled the only thing written is its opt-out.
+
+It is sent only to a deployment whose `/v1/health` lists `identity`; an older deployment gets
 exactly the fields it has always accepted, so upgrading the SDK before the server loses no
 report. A report about the previous run — the unclean-exit report, or
-`captureReport({ …, previousRun: true })` — carries no session ID, because the only session
-it could honestly carry is one an analytics client recorded for that run.
+`captureReport({ …, previousRun: true })` — carries the session and installation IDs the
+sentinel recorded for that run, which it records only while analytics is enabled, and
+otherwise none.
 
 In the server, reports and submissions keep these IDs so that you can filter crash groups
 by session or installation, and see one respondent's crash beside their feedback.

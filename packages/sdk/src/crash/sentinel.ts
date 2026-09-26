@@ -29,7 +29,14 @@ export type PreviousRun = {
    * by 0.1.x, which did not record it.
    */
   release?: SentinelRelease;
+  /** CR-119: the session and installation of the run that died, when analytics recorded them. */
+  identity?: SentinelIdentity;
+  /** The file's last touch: when the run that died was last seen alive (AN-230's `crashedAt`). */
+  lastSeenAt?: number;
 };
+
+/** CR-119: recorded only while an analytics client is enabled. */
+export type SentinelIdentity = { sessionId?: string; installationId?: string; appVersion?: string };
 
 export type SentinelOptions = {
   /** Where the sentinel lives. Its directory is created if needed. */
@@ -39,6 +46,11 @@ export type SentinelOptions = {
   intervalMs: number;
   /** CR-119: the release of this run, recorded for the next launch to report against. */
   release?: SentinelRelease;
+  /**
+   * CR-119: the identity to record, read at every write. Returns nothing unless an analytics
+   * client is enabled, so a crash-only application's sentinel holds what 0.2.0's did.
+   */
+  identity?: () => SentinelIdentity;
   debug: (message: string, detail?: unknown) => void;
 };
 
@@ -47,6 +59,8 @@ export type Sentinel = {
   previous: PreviousRun | null;
   /** Disarms: stops the timer and removes the file, so the next launch reports nothing. */
   stop: () => void;
+  /** CR-119: rewrites the file now, after the session rotated. */
+  refresh: () => void;
 };
 
 /**
@@ -55,21 +69,26 @@ export type Sentinel = {
  */
 export function startSentinel(options: SentinelOptions): Sentinel {
   const previous = readPrevious(options);
-  write(options, options.now(), options.release);
-
-  const timer = setInterval(() => {
+  const startedAt = options.now();
+  write(options, startedAt);
+  const touch = () => {
     try {
-      write(options, undefined);
+      write(options, startedAt);
     } catch (error) {
       options.debug('The unclean-exit sentinel could not be refreshed.', error);
     }
-  }, options.intervalMs);
+  };
+
+  const timer = setInterval(touch, options.intervalMs);
   // The sentinel must never be the reason a process stays alive.
   (timer as unknown as { unref?: () => void }).unref?.();
 
   let stopped = false;
   return {
     previous,
+    refresh: () => {
+      if (!stopped) touch();
+    },
     stop: () => {
       if (stopped) return;
       stopped = true;
@@ -97,23 +116,20 @@ function readPrevious(options: SentinelOptions): PreviousRun | null {
   // A corrupt file still reports. The previous run died either way, and discarding it is the
   // one outcome that loses information; an unknown uptime is a smaller loss than a lost crash.
   try {
-    const parsed = JSON.parse(raw) as { startedAt?: unknown; release?: unknown };
+    const parsed = JSON.parse(raw) as { startedAt?: unknown; release?: unknown; identity?: unknown };
     const release = recordedRelease(parsed?.release);
+    const identity = recordedIdentity(parsed?.identity);
+    const extra = { ...(release ? { release } : {}), ...(identity ? { identity } : {}), lastSeenAt: Math.round(touchedAt) };
     const startedAt = typeof parsed?.startedAt === 'number' ? parsed.startedAt : null;
-    if (startedAt === null) return release ? { release } : {};
+    if (startedAt === null) return extra;
     const uptime = Math.round(touchedAt) - startedAt;
-    return { ...(uptime >= 0 ? { lastUptimeMs: uptime } : {}), ...(release ? { release } : {}) };
+    return { ...(uptime >= 0 ? { lastUptimeMs: uptime } : {}), ...extra };
   } catch {
     return {};
   }
 }
 
-/**
- * Writes the sentinel. With a `startedAt` it stamps a new run; without one it rewrites what is
- * already there, which is what moves the mtime forward. Staged through a temporary file and
- * renamed, so a process that dies mid-write leaves the previous sentinel intact rather than a
- * truncated one — the same shape `FileStore` uses.
- */
+/** CR-119: the release a sentinel recorded, absent from one written by 0.1.x. */
 function recordedRelease(value: unknown): SentinelRelease | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const release = value as Record<string, unknown>;
@@ -125,18 +141,31 @@ function recordedRelease(value: unknown): SentinelRelease | undefined {
   };
 }
 
-function write(options: SentinelOptions, startedAt: number | undefined, release?: SentinelRelease): void {
-  let body: string;
-  if (startedAt !== undefined) {
-    body = JSON.stringify({ startedAt, ...(release ? { release } : {}) });
-  } else {
-    try {
-      body = readFileSync(options.file, 'utf8');
-    } catch {
-      // Something removed it underneath us; re-arm from now rather than stop reporting.
-      body = JSON.stringify({ startedAt: options.now(), ...(options.release ? { release: options.release } : {}) });
-    }
-  }
+function recordedIdentity(value: unknown): SentinelIdentity | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const record = value as Record<string, unknown>;
+  const identity: SentinelIdentity = {
+    ...(typeof record.sessionId === 'string' ? { sessionId: record.sessionId } : {}),
+    ...(typeof record.installationId === 'string' ? { installationId: record.installationId } : {}),
+    ...(typeof record.appVersion === 'string' ? { appVersion: record.appVersion } : {}),
+  };
+  return identity.sessionId ? identity : undefined;
+}
+
+/**
+ * Writes the sentinel: the whole body every time — start time, release, and the identity as
+ * it is now — so a touch moves the mtime forward and also records a session that rotated
+ * (CR-119); a file removed underneath us is simply written again. Staged through a temporary
+ * file and renamed, so a process that dies mid-write leaves the previous sentinel intact
+ * rather than a truncated one — the same shape `FileStore` uses.
+ */
+function write(options: SentinelOptions, startedAt: number): void {
+  const identity = options.identity?.();
+  const body = JSON.stringify({
+    startedAt,
+    ...(options.release ? { release: options.release } : {}),
+    ...(identity?.sessionId ? { identity } : {}),
+  });
   mkdirSync(dirname(options.file), { recursive: true });
   const staging = `${options.file}.${process.pid}.tmp`;
   writeFileSync(staging, body);

@@ -5,6 +5,7 @@ import { IPC_CHANNEL } from './electron-renderer.js';
 import { getClient } from './index.js';
 import { init as initNode, installNodeHandlers, type NodeHandlerOptions, type NodeInitOptions } from './node.js';
 import { startSentinel } from './sentinel.js';
+import { sharedIdentity } from '../identity.js';
 import type { CrashKind, CrashReportInput } from './types.js';
 
 export * from './index.js';
@@ -234,6 +235,7 @@ export async function installElectronMain(
 
   // CR-116. Armed only when asked for and only in a packaged build.
   let sentinel: { stop: () => void } | null = null;
+  let unwatch: (() => void) | null = null;
   let onWillQuit: (() => void) | null = null;
   if (uncleanExit && app.isPackaged === true) {
     const started = startSentinel({
@@ -246,16 +248,32 @@ export async function installElectronMain(
         ...(client.options.build ? { build: client.options.build } : {}),
         ...(client.options.channel ? { channel: client.options.channel } : {}),
       },
+      // CR-119: the session and installation, only while an analytics client is enabled.
+      identity: () => {
+        const identity = sharedIdentity();
+        const sessionId = identity.analyticsEnabled ? identity.peekSessionId(Date.now()) : null;
+        if (!sessionId) return {};
+        return {
+          sessionId,
+          ...(identity.installationId ? { installationId: identity.installationId } : {}),
+          ...(identity.analyticsApp ? { appVersion: identity.analyticsApp.version } : {}),
+        };
+      },
     });
     sentinel = started;
+    // Rewritten when the session rotates or analytics is enabled or disabled.
+    unwatch = sharedIdentity().watch(() => started.refresh());
     if (started.previous) {
       // `reason` is not decoration: it becomes the group's exception type and part of the
       // fingerprint, so without it every unclean exit in a database collapses into one
       // untitled group. One group for "the app died without quitting" is right — they are one
       // event class — but a run whose sentinel was unreadable means something else.
       const known = started.previous.lastUptimeMs !== undefined;
-      // CR-119: a previous-run report. It carries the release the sentinel recorded and no
-      // session of this run; only an enabled analytics client records a session to carry.
+      // CR-119: a previous-run report. It carries the release the sentinel recorded and the
+      // session and installation it recorded, never this run's; only an enabled analytics
+      // client records any, and the report flags that session (AN-151).
+      const recorded = started.previous.identity;
+      sharedIdentity().previousRun = recorded ? { ...recorded, ...(started.previous.lastSeenAt !== undefined ? { lastSeenAt: started.previous.lastSeenAt } : {}) } : null;
       void client.captureReport({
         kind: 'unclean-exit',
         previousRun: true,
@@ -285,6 +303,7 @@ export async function installElectronMain(
       if (onWillQuit) off(app, 'will-quit', onWillQuit as Listener);
       // Removing the file matters as much as stopping the timer: left behind, it reports an
       // unclean exit on the next launch that never happened.
+      unwatch?.();
       sentinel?.stop();
     },
   };

@@ -1,9 +1,10 @@
-import { uuidV7 } from '@inlet/shared/crash-core';
+import { sha256Hex, uuidV7 } from '@inlet/shared/crash-core';
 
 type RandomSource = (bytes: Uint8Array) => void;
 
 /**
- * The SDK identity (Foundations FD-016, Crash Reports CR-118, Feedback Collection FR-204).
+ * The SDK identity (Foundations FD-016, Crash Reports CR-118, CR-119, Feedback Collection
+ * FR-204, UX Analytics AN-224 to AN-230, Remote Config RC-119).
  *
  * One per application, whatever entry created it, through a key on `globalThis` as the
  * crash client already is (CR-110): every entry is bundled standalone, so a module
@@ -11,27 +12,114 @@ type RandomSource = (bytes: Uint8Array) => void;
  *
  * What lives here:
  *
- * - the **session ID**, a UUID v7 that rotates after 30 minutes without activity and
- *   after 24 hours, in memory. A new process or page load begins a new one, which is
- *   FD-016's "at each process start outside browsers" and its in-memory rule for a
- *   browser without analytics. Activity in any module extends it.
- * - the **user ID**, set by any module's `setUser`, in memory.
- * - the **installation ID**, which only the analytics module creates (Release 8). Until
- *   one is attached nothing sets it, so the crash and feedback modules never send one.
+ * - the **session ID**, a UUID v7 that rotates after 30 minutes without activity (the
+ *   analytics module's `sessionTimeoutMinutes`) and after 24 hours. Without an enabled
+ *   analytics client it is in memory: a new process or page load begins a new one, which is
+ *   FD-016's rule for an application without analytics. While a browser analytics client is
+ *   enabled it is shared by every tab of the origin through `storage` (AN-229).
+ * - the **user ID**, set by any module's `setUser` or `setUserId`, in memory.
+ * - the **installation ID**, in two places on purpose (RC-119). The persisted one is under
+ *   `IDENTITY_KEYS.installationId` in the storage, which the analytics module creates or
+ *   adopts and a config module may create first. `installationId` below is the field the
+ *   crash and feedback modules attach, which only an enabled analytics client fills, so that a
+ *   published 0.2.x module bundled beside a config module never attaches a config-created ID.
+ *   The modules of this version decide by `analyticsEnabled`, never by an ID being present.
+ * - **crash flags** (AN-151): raised by the crash module, recorded in the storage
+ *   synchronously where it can, and sent by the analytics module as `session_crashed`.
  *
- * Nothing here is written to the device: FD-016 writes identity only while an analytics
- * client is enabled, and the analytics module owns that persistence when it arrives.
+ * Nothing is written to the device unless an enabled analytics client installed a storage
+ * (FD-016); while analytics is disabled the analytics module writes only its opt-out.
  */
 
 export const SESSION_TIMEOUT_MS = 30 * 60_000;
 export const SESSION_MAX_AGE_MS = 24 * 60 * 60_000;
+/** AN-229: a browser writes the last activity at most this often. */
+export const SESSION_WRITE_INTERVAL_MS = 30_000;
+
+/**
+ * The storage keys every module reads (FD-016). `installationId` is the ONE key of the
+ * installation ID: a config module reads and writes the same one, so each adopts the ID the
+ * other created. The browser adapter prefixes them (`inlet-sdk:`) in `localStorage`; on disk
+ * each is a file of that name under the persistence directory.
+ */
+export const IDENTITY_KEYS = {
+  installationId: 'installation-id',
+  optOut: 'analytics-opt-out',
+  /** Attribution, experiments, the stored app version and build, and the installation announced. */
+  state: 'analytics-state',
+  /** Browser only: the session every tab of the origin shares. */
+  session: 'session',
+  crashFlags: 'crash-flags',
+} as const;
+
+/**
+ * Synchronous storage over what an adapter can reach synchronously: `localStorage`, a file,
+ * or memory written through to an asynchronous store (React Native, piece 11b). `null`
+ * deletes the key.
+ */
+export type IdentityStorage = {
+  read(key: string): string | null;
+  write(key: string, value: string | null): void;
+};
+
+export class MemoryIdentityStorage implements IdentityStorage {
+  readonly values = new Map<string, string>();
+  read(key: string): string | null {
+    return this.values.get(key) ?? null;
+  }
+  write(key: string, value: string | null): void {
+    if (value === null) this.values.delete(key);
+    else this.values.set(key, value);
+  }
+}
+
+export type SessionRecord = { id: string; startedAt: number; lastActivityAt: number; announced?: boolean };
+export type SessionTrigger = 'launch' | 'resume' | 'reset';
+
+/** AN-151: a session that ended in a crash, until the analytics module has queued its event. */
+export type CrashFlag = {
+  sessionId: string;
+  installationId?: string;
+  appVersion?: string;
+  appBuild?: string;
+  kind: string;
+  /** Epoch milliseconds of the crash; `crashedAt` on the event. */
+  at: number;
+};
+
+/** CR-119: what the unclean-exit sentinel recorded for the run that died. */
+export type PreviousRunIdentity = { sessionId?: string; installationId?: string; appVersion?: string; lastSeenAt?: number };
 
 export class Identity {
-  private session: { id: string; startedAt: number; lastActivityAt: number } | null = null;
+  private session: SessionRecord | null = null;
   private random: RandomSource | undefined;
+  private started = false;
+  private lastWrite = 0;
+  private deferred: CrashFlag[] = [];
+  private readonly forgetters = new Set<(installationId: string | null) => void | Promise<void>>();
+  private readonly watchers = new Set<() => void>();
   userId: string | null = null;
-  /** Set by the analytics module while one is enabled (FD-016). Null otherwise. */
+  /** The attached field: set by an enabled analytics client, null otherwise (FD-016, RC-119). */
   installationId: string | null = null;
+  /** Whether an analytics client of this application is enabled. The crash and feedback modules decide by this. */
+  analyticsEnabled = false;
+  /** AN-221: the analytics module's `sessionTimeoutMinutes`, for every module's session. */
+  timeoutMs = SESSION_TIMEOUT_MS;
+  /** Installed by an analytics client; crash flags go here. Null without one. */
+  storage: IdentityStorage | null = null;
+  /** AN-229: the session is shared through `storage` (a browser with analytics enabled). */
+  sharedSession = false;
+  /** AN-229: no Web Locks, so the next session ID is derived and tabs rotating together converge. */
+  deriveSessions = false;
+  /** The analytics client's hooks: a new session began, a crash was flagged. */
+  onRotate: ((session: SessionRecord, trigger: SessionTrigger) => void) | null = null;
+  onCrashFlag: ((flag: CrashFlag) => void) | null = null;
+  /** CR-119, AN-150: whether a crash module is enabled (and, in a browser, its roots match a page script). */
+  crashReporting: (() => boolean) | null = null;
+  /** AN-151: the analytics app, recorded with a crash flag. */
+  analyticsApp: { version: string; build?: string } | null = null;
+  /** CR-119: the IDs the sentinel recorded for the previous run, set by the adapter that read it. */
+  previousRun: PreviousRunIdentity | null = null;
 
   /** The first injected source of random values wins; React Native adapters supply one (AN-239). */
   useRandom(source: RandomSource | undefined): void {
@@ -43,22 +131,230 @@ export class Identity {
    * that is not activity, such as a report describing the previous run, passes false.
    */
   sessionId(now: number, activity = true): string {
-    const current = this.session;
-    if (!current || now - current.lastActivityAt > SESSION_TIMEOUT_MS || now - current.startedAt > SESSION_MAX_AGE_MS) {
-      this.session = { id: uuidV7(now, this.random), startedAt: now, lastActivityAt: now };
-      return this.session.id;
-    }
-    if (activity) current.lastActivityAt = now;
-    return current.id;
+    return this.currentSession(now, activity).id;
   }
+
+  /** The current session, adopting one another tab wrote, rotating one that expired. */
+  currentSession(now: number, activity = true): SessionRecord {
+    let current = this.session;
+    const stored = this.sharedSession ? this.readStored() : null;
+    if (stored && (!current || stored.id !== current.id || stored.lastActivityAt > current.lastActivityAt || stored.announced !== current.announced)) {
+      // Another tab rotated or was active: its record is the session (AN-229).
+      current = current && current.id === stored.id ? { ...stored, lastActivityAt: Math.max(stored.lastActivityAt, current.lastActivityAt) } : stored;
+      this.session = current;
+      this.started = true;
+    }
+    if (!current || this.expired(current, now)) return this.rotate(now, this.started ? 'resume' : 'launch', current);
+    if (activity) {
+      current.lastActivityAt = now;
+      this.writeSession(now, false);
+    }
+    return current;
+  }
+
+  /** The session ID without activity and without rotating; null when none is current. */
+  peekSessionId(now: number): string | null {
+    const current = this.sharedSession ? (this.readStored() ?? this.session) : this.session;
+    return current && !this.expired(current, now) ? current.id : null;
+  }
+
+  /** AN-226: a new session whatever the state of the current one. */
+  rotate(now: number, trigger: SessionTrigger, expired: SessionRecord | null = this.session): SessionRecord {
+    const id = trigger !== 'reset' && this.deriveSessions && expired && this.installationId ? derivedSessionId(this.installationId, expired.id) : uuidV7(now, this.random);
+    this.session = { id, startedAt: now, lastActivityAt: now };
+    this.started = true;
+    this.writeSession(now, true);
+    this.onRotate?.(this.session, trigger);
+    this.notify();
+    return this.session;
+  }
+
+  /** The analytics client announced this session's `app_started`; other tabs read it. */
+  markAnnounced(id: string, now: number): void {
+    if (this.session?.id !== id) return;
+    this.session.announced = true;
+    this.writeSession(now, true);
+  }
+
+  /** Adopts a session another tab wrote (AN-229), when a rotation lost the race to it. */
+  adopt(record: SessionRecord): void {
+    this.session = { ...record };
+    this.notify();
+  }
+
+  readStored(): SessionRecord | null {
+    try {
+      const raw = this.storage?.read(IDENTITY_KEYS.session);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as SessionRecord;
+      return typeof parsed?.id === 'string' && typeof parsed.startedAt === 'number' && typeof parsed.lastActivityAt === 'number' ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Forgets the session in memory and in storage (forget, AN-225). */
+  clearSession(): void {
+    this.session = null;
+    this.started = false;
+    try {
+      this.storage?.write(IDENTITY_KEYS.session, null);
+    } catch {
+      // Storage refused: the in-memory session is gone either way.
+    }
+    this.notify();
+  }
+
+  /** Stops sharing: the session stays in memory as it is (FD-016, analytics disabled). */
+  stopSharing(): void {
+    this.sharedSession = false;
+  }
+
+  private expired(session: SessionRecord, now: number): boolean {
+    return now - session.lastActivityAt > this.timeoutMs || now - session.startedAt > SESSION_MAX_AGE_MS;
+  }
+
+  /** AN-229: the last activity at most every 30 s, a new or announced session at once. */
+  private writeSession(now: number, force: boolean): void {
+    if (!this.sharedSession || !this.storage || !this.session) return;
+    if (!force && now - this.lastWrite < SESSION_WRITE_INTERVAL_MS) return;
+    this.lastWrite = now;
+    try {
+      this.storage.write(IDENTITY_KEYS.session, JSON.stringify(this.session));
+    } catch {
+      // A full or refused storage: the session carries on in memory.
+    }
+  }
+
+  /**
+   * Writes the last activity now, for a page being hidden. A background tab being closed holds
+   * a record other tabs may have moved past: it never overwrites another session, nor later
+   * activity of its own session, which would cut the other tabs' session short (AN-229).
+   */
+  flushSession(now: number): void {
+    const stored = this.readStored();
+    if (stored && this.session && (stored.id !== this.session.id || stored.lastActivityAt >= this.session.lastActivityAt)) return;
+    this.writeSession(now, true);
+  }
+
+  // --- Crash flags (AN-150, AN-151, CR-119) ------------------------------------------------
+
+  /**
+   * Records a crash flag, synchronously where the storage is, then tells the analytics
+   * client. Only while an analytics client is enabled; the crash module checks the kind.
+   * `defer` is for a report about the previous run, read at launch, often before analytics is
+   * initialised: the flag waits in memory, and is recorded when analytics is enabled — or
+   * never, and nothing is written, if it is not.
+   */
+  flagCrash(flag: CrashFlag, defer = false): void {
+    if (!this.analyticsEnabled) {
+      if (defer) this.deferred.push(flag);
+      return;
+    }
+    this.writeFlags([...this.pendingFlags(), flag]);
+    this.onCrashFlag?.(flag);
+  }
+
+  /** The analytics client, on enable: flags deferred until now are recorded (AN-151). */
+  recordDeferredFlags(): void {
+    if (!this.analyticsEnabled || this.deferred.length === 0) return;
+    this.writeFlags([...this.pendingFlags(), ...this.deferred]);
+    this.deferred = [];
+  }
+
+  /** `forget` (AN-225): pending crash flags go, deferred ones included. */
+  dropFlags(): void {
+    this.deferred = [];
+    this.writeFlags([]);
+  }
+
+  pendingFlags(): CrashFlag[] {
+    try {
+      const raw = this.storage?.read(IDENTITY_KEYS.crashFlags);
+      const parsed = raw ? (JSON.parse(raw) as CrashFlag[]) : [];
+      return Array.isArray(parsed) ? parsed.filter((flag) => typeof flag?.sessionId === 'string' && typeof flag.at === 'number') : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Removes flags whose `session_crashed` is queued. */
+  settleFlags(settled: CrashFlag[]): void {
+    const done = new Set(settled.map(flagKey));
+    this.writeFlags(this.pendingFlags().filter((flag) => !done.has(flagKey(flag))));
+  }
+
+  private writeFlags(flags: CrashFlag[]): void {
+    try {
+      this.storage?.write(IDENTITY_KEYS.crashFlags, flags.length > 0 ? JSON.stringify(flags) : null);
+    } catch {
+      // Refused storage: the analytics client is told anyway and sends it this run.
+    }
+  }
+
+  // --- Forget and watchers --------------------------------------------------------------------
+
+  /** Crash and feedback register what removes the installation ID from their queues (AN-225). */
+  onForget(fn: (installationId: string | null) => void | Promise<void>): () => void {
+    this.forgetters.add(fn);
+    return () => this.forgetters.delete(fn);
+  }
+
+  async forgetQueued(installationId: string | null): Promise<void> {
+    await Promise.all([...this.forgetters].map(async (fn) => fn(installationId)));
+  }
+
+  /** CR-119: the sentinel rewrites itself when the session or the attached installation changes. */
+  watch(fn: () => void): () => void {
+    this.watchers.add(fn);
+    return () => this.watchers.delete(fn);
+  }
+
+  notify(): void {
+    for (const fn of this.watchers) {
+      try {
+        fn();
+      } catch {
+        // A watcher never breaks the identity.
+      }
+    }
+  }
+}
+
+function flagKey(flag: CrashFlag): string {
+  return `${flag.sessionId}:${flag.at}:${flag.kind}`;
+}
+
+/**
+ * AN-229: the next session ID where Web Locks are unavailable, from the installation ID and
+ * the expired session ID, so that tabs rotating together converge on one session. SHA-256
+ * from the shared core, which is the same everywhere `crypto.subtle` is or is not. A UUID of
+ * version 8 (RFC 9562, custom): it is not time-ordered, and says so.
+ */
+export function derivedSessionId(installationId: string, expiredSessionId: string): string {
+  const digest = sha256Hex(new TextEncoder().encode(`inlet-session:${installationId}:${expiredSessionId}`));
+  // Version 8 in the version nibble, the RFC variant in the next.
+  const variant = ((parseInt(digest[16]!, 16) & 0x3) | 0x8).toString(16);
+  const hex = `${digest.slice(0, 12)}8${digest.slice(13, 16)}${variant}${digest.slice(17, 32)}`;
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 const SLOT = Symbol.for('inlet-sdk.identity');
 
 export function sharedIdentity(): Identity {
   const holder = globalThis as unknown as { [SLOT]?: Identity };
-  holder[SLOT] ??= new Identity();
-  return holder[SLOT];
+  const current = holder[SLOT];
+  if (!current) return (holder[SLOT] = new Identity());
+  // An application can bundle two versions of the package, and an older one's crash module
+  // (0.2.x) may have created the identity first, without the methods this version calls.
+  // Upgraded in place rather than replaced, so the older module keeps sharing it: its
+  // fields (session, user ID, attached installation ID) mean the same here.
+  if (Object.getOwnPropertyNames(Identity.prototype).some((name) => typeof (current as unknown as Record<string, unknown>)[name] !== 'function')) {
+    const fresh = new Identity() as unknown as Record<string, unknown>;
+    for (const key of Object.keys(fresh)) if (!(key in current)) (current as unknown as Record<string, unknown>)[key] = fresh[key];
+    Object.setPrototypeOf(current, Identity.prototype);
+  }
+  return current;
 }
 
 /** Tests start each case with a fresh identity. */

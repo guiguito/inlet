@@ -1,7 +1,7 @@
 {
   "name": "inlet-sdk",
   "version": "0.2.0",
-  "description": "The Inlet client SDK. Feedback collection and crash reports, with Node, browser, Electron, React and React Native entries.",
+  "description": "The Inlet client SDK. Feedback collection, crash reports and UX analytics, with Node, browser, Electron, React and React Native entries.",
   "license": "MIT",
   "author": "Guilhem Duch\u00e9",
   "homepage": "https://github.com/guiguito/inlet/tree/main/packages/sdk#readme",
@@ -22,6 +22,7 @@
     "crash-reporting",
     "error-tracking",
     "error-reporting",
+    "analytics",
     "self-hosted",
     "electron",
     "browser",
@@ -109,6 +110,21 @@
       "types": "./dist/feedback/react-native.d.ts",
       "import": "./dist/feedback/react-native.js",
       "require": "./dist/feedback/react-native.cjs"
+    },
+    "./analytics": {
+      "types": "./dist/analytics/index.d.ts",
+      "import": "./dist/analytics/index.js",
+      "require": "./dist/analytics/index.cjs"
+    },
+    "./analytics/node": {
+      "types": "./dist/analytics/node.d.ts",
+      "import": "./dist/analytics/node.js",
+      "require": "./dist/analytics/node.cjs"
+    },
+    "./analytics/browser": {
+      "types": "./dist/analytics/browser.d.ts",
+      "import": "./dist/analytics/browser.js",
+      "require": "./dist/analytics/browser.cjs"
     },
     "./package.json": "./package.json"
   },

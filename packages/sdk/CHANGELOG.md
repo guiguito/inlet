@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased
+
+UX analytics, and the identity it shares. **Nothing changes for an application that does
+not install the analytics module**: its crash reports and submissions carry exactly what
+0.2.0 sent, and nothing new is written to the device.
+
+- **`inlet-sdk/analytics`**, with `/browser` and `/node` entries (UX Analytics AN-220 to
+  AN-242): `init`, `track`, `screen`, `setUserId`, `setAttribution`, `setExperiment`,
+  `setEnabled` (with `forget`), `reset`, `getInstallationId`, `getSessionId`, `flush`,
+  `close`. Consent first: initialise with `enabled: false` and call `setEnabled(true)` in your
+  consent callback. Events are checked with the server's own rules before they are queued.
+  Standard events (`app_installed`, `app_updated`, `app_started`, `session_crashed`,
+  `screen_viewed`), sessions shared by the tabs of an origin, a persistent queue in IndexedDB
+  or on disk, `keepalive` delivery when a page closes. The browser entry is 15.1 KB minified
+  and gzipped. Needs a deployment whose `/v1/health` lists `analytics`; until then events
+  wait, and the SDK asks again every ten minutes. Electron and React Native entries follow.
+- **The installation ID only while analytics is enabled.** Crash reports and submissions
+  carry `installationId` while an analytics client of the application is enabled, decided by
+  that state, never by an ID being present (Foundations FD-016). Disable analytics and they
+  stop carrying it; `setEnabled(false, { forget: true })` also removes it from reports and
+  submissions still queued.
+- **Crash-free sessions.** With analytics enabled, the crash module flags the session of a
+  crashing report (an unhandled exception or rejection, a native crash, an unclean exit, a
+  renderer that died) after `beforeSendSync` and before dedupe and sampling, so the analytics
+  module sends `session_crashed`; in a browser only errors with a frame in your own code
+  count. Nothing is flagged without analytics. See "Crash-free sessions" in the README for
+  `appRoots` when your scripts come from a CDN.
+- **The unclean-exit sentinel records the session and installation** of the run it watches,
+  only while analytics is enabled, and the previous-run report carries them. Without
+  analytics it holds what 0.2.0's did.
+- **`app_started` asks the crash module** whether it is enabled and, in a browser, whether a
+  page script lies within its `appRoots`.
+- With analytics enabled in a browser, the session ID lives in `localStorage` and every tab
+  of the origin shares it; crash reports from those tabs carry that shared session.
+
 ## 0.2.0 — September 24, 2026
 
 The shared identity, and React Native. Needs nothing from your server to upgrade: against a
