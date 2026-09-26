@@ -36,7 +36,8 @@ import { hostedRoutes } from './routes/hosted.js';
 import { memberRoutes } from './routes/members.js';
 import { crashRoutes } from './routes/crashes.js';
 import { crashReadRoutes } from './routes/crash-reads.js';
-import { requireCrashDatabase } from './services/access.js';
+import { analyticsRoutes } from './routes/analytics.js';
+import { requireAnalyticsDatabase, requireCrashDatabase } from './services/access.js';
 import { mcpRoutes } from './routes/mcp.js';
 import { projectRoutes } from './routes/projects.js';
 import { attachmentRoutes, submissionRoutes } from './routes/submissions.js';
@@ -131,6 +132,17 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
           return { name: database.name };
         }),
         { prefix: '/crash-databases' },
+      );
+      // UX Analytics, Release 8: analytics databases (AN-001 to AN-005).
+      await v1.register(analyticsRoutes(ctx));
+      // And a third time for analytics databases (AN-190). Their messages announce data-health
+      // incidents only, so `contentLevel` is stored like any database's and never read for them.
+      await v1.register(
+        slackNotificationRoutes(ctx, async (principal, databaseId) => {
+          const { database } = await requireAnalyticsDatabase(ctx.db, principal, databaseId, 'creator');
+          return { name: database.name };
+        }),
+        { prefix: '/analytics-databases' },
       );
     },
     { prefix: '/v1' },

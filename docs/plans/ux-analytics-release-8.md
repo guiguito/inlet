@@ -59,7 +59,7 @@ pieces land; a piece that departs from one says so in its report and in that sec
 | # | Piece | Scope | Status |
 | --- | --- | --- | --- |
 | 1 | Event store foundation | ClickHouse in local services, CI and compose (profile `analytics`); client, readiness, migrations, schema; `/v1/health`; harness; the 8.1 spike and storage measurement | verified and committed (`04ba43c`; DECISIONS 33.1) |
-| 2 | Contract and analytics databases | `@inlet/shared` analytics contract; PostgreSQL tables; create, read, rename, delete; fourth access scope; operator limits; project page, switcher, database shell with Settings; MCP database tools | pending |
+| 2 | Contract and analytics databases | `@inlet/shared` analytics contract; PostgreSQL tables; create, read, rename, delete; fourth access scope; operator limits; project page, switcher, database shell with Settings; MCP database tools | verified and committed (DECISIONS 33.2) |
 | 3 | Ingest and Collect | The batch route and every derivation at ingest; rate limits; country; catalog writes; live feed; test event; counters; the analytics worker; Collect tab; its tools | pending |
 | 4 | Catalog, Lexicon and trends | Query layer (slots, limits, filters, ranges, periods, coverage, the erasure skip); catalog, event detail, filter values, hide, block, delete; trends and their export; catalog export; Events tab; tools | pending |
 | 5 | Overview | Every figure of AN-140, sessions, retention D1/D7/D30, crash-free sessions; Overview tab; tool | pending |
@@ -310,6 +310,108 @@ database locally after doing so); afterwards, only new files.
 **Measurement.** `scripts/analytics-seed.mjs` seeds and measures (DECISIONS 33.1); rerun it
 after any schema change that could move bytes per event.
 
+### From piece 2: the contract and analytics databases
+
+**Shared contract** (`packages/shared`).
+
+- `@inlet/shared/analytics-core` (subpath, no Zod, no Node import; the SDK bundles it):
+  `ANALYTICS_LIMITS` (9.1 bounds, batch and event sizes, description and saved-name
+  lengths), `ANALYTICS_DEFAULTS` (every section 14 default, including the storage triple,
+  rate limits, query limits, SDK and session values, incident thresholds; `OPERATOR_LIMITS`
+  takes its defaults from it), `ANALYTICS_PLATFORMS`, `PLACEHOLDER_USER_IDS` and
+  `isPlaceholderUserId`, `STANDARD_EVENTS` (names, platform-written descriptions for AN-055,
+  params with descriptions), `STANDARD_CATEGORY`, `TEST_EVENT_NAME`, `TEST_EVENT_CATEGORY`,
+  `ANALYTICS_REJECTION_CODES`, `ANALYTICS_WARNING_CODES`, the name/key patterns, `isRfc3339`,
+  `utf8Bytes`, and **`validateEvent(raw)`** → `{ ok: true, event: AnalyticsEvent, warnings }` or
+  `{ ok: false, code, field?, message }`. It never throws, even on a nested or circular value
+  (it sanitises two levels deep and refuses anything deeper at its field), and a `__proto__` key
+  is a field, never a prototype. `event` has the defaults applied
+  (`platform: 'other'`, `environment: 'production'`), UUIDs lowercase dashed, `country` upper
+  case, strings sanitised and truncated; `timestamp` is the string as sent (piece 3 computes
+  the effective time). It checks nothing that needs state: the name, param-key and category
+  limits, the acceptance floor and rate limits are piece 3's.
+  Also the declared query types (`AnalyticsFilter`, `AnalyticsRange`, `AnalyticsSplit`,
+  `AnalyticsTrendQuery`, `AnalyticsFunnelDefinition`, `AnalyticsFunnelRun`,
+  `AnalyticsCohortDefinition`, `AnalyticsCohortRun`, …), `filterOpsFor(field)`, the field,
+  op, preset, interval, metric, split and population-field lists, `ANY_EVENT`, and
+  `RETENTION_COHORT_NAME` / `RETENTION_COHORT_DEFINITION`.
+- `@inlet/shared` (`analytics.ts`, Zod): `analyticsBatchSchema` (events stay `unknown`; map
+  its failures to `too_many_events` / `malformed_json` in the route), database create and
+  update bodies, `analyticsFilterSchema`, `analyticsRangeSchema`, `analyticsSplitSchema`,
+  `analyticsTrendQuerySchema`, funnel step/window/view/definition/run and create/update body
+  schemas, cohort start/return/definition/run and create/update body schemas,
+  `analyticsDescriptionSchema`. Defaults are applied by the schemas. Each rule is reported at
+  its own path; piece 4 maps issues to `invalid_query` with `details[].path`. `Assert<Exact<…>>`
+  keeps schemas and declared types identical and fails the build when they drift (a new schema
+  gets its line there). A bad range or filter value inside a union is reported at the union's
+  path (`range`, `values.0`) with Zod's generic message; piece 4 words those itself. A filter's
+  `installationId` values are not normalised by the schema: the query layer normalises them
+  with `normalizeUuid` before binding.
+- IDs `adb`, `afn`, `aco`. Error codes of PRD 7.4, plus `confirmation_mismatch` (400), now
+  in `ERROR_STATUS`; `errorsFor` gained `503`.
+
+**PostgreSQL** (`apps/api/drizzle/0001_ux_analytics.sql`; tables in `schema.ts` under
+"UX Analytics"): `analytics_databases` (`key` identity, the event store's `database_key`;
+`timezone`, `max_age_days`, `max_events` bigint, `lateness_days`, `country_derivation`,
+`kept_from` date for piece 9 to write and piece 3 to read, `installation_secret`),
+`analytics_database_memberships`, `invitations.analytics_database_id`; with no foreign key,
+keyed by `database_key`: `analytics_event_names` (bigint identity `id` = `event_name_id`, one
+sequence for the whole deployment, capped at 2^32 - 1 because the event store's column is a
+`UInt32` that would silently wrap; never `INSERT … ON CONFLICT DO NOTHING` a name on the ingest
+path, which spends an ID per attempt: look it up first; unique `(database_key, name)`; `category`, `description`, `hidden`, `blocked`, `standard`,
+`first_seen_at`, `last_seen_at`, `events_24h`, `installations_24h`, `users_24h`,
+`computed_at`), `analytics_event_params` (`observed_types text[]`), `analytics_event_categories`,
+`analytics_dropped_counts` (one bigint column per AN-168 reason, `removed_by_cap`,
+`truncated`, `param_keys_dropped`, `categories_dropped`, `placeholders_dropped`,
+`duplicates`, `accepted`), `analytics_pending_erasures` (`installation_ids uuid[]`),
+`analytics_database_removals`; with cascade: `analytics_funnels`, `analytics_cohorts`
+(`standard`), `analytics_incidents` (partial unique index: one open per database and kind;
+kinds are the enum `inlet_analytics_incident_kind`); `erasures` (project-level; actor columns
+without foreign keys); `notification_deliveries.analytics_incident_id` and the delivery kind
+`analytics_data_health`. The harness truncates all of them. Later pieces add columns only.
+
+**API.**
+
+- Routes in `apps/api/src/routes/analytics.ts` (`analyticsRoutes`, registered without a
+  prefix): list, create, read (with `eventStore`), update (`name`; `countryDerivation` needs
+  Admin), deletion impact, delete. Piece 3 adds ingest to this file, as `crashes.ts` holds
+  crash ingest. Members and invitations are in `routes/members.ts`; the shared Slack plugin
+  is registered a third time for `/analytics-databases` in `app.ts`.
+- `services/analytics.ts`: `effectiveStorage(row, limits)` (use it wherever a database's
+  storage settings are enforced: the acceptance floor, retention, the Storage panel),
+  `analyticsDatabaseLimits(limits)` (the name, param-key and category limits ingest applies),
+  `apiListsTimezone`, `assertReportingTimezone`, `createAnalyticsDatabase`,
+  `deleteAnalyticsDatabase` (records the removal), `analyticsDeletionImpact` (asks
+  `reachable()` first, so a hung store costs two seconds, not the query timeout),
+  `ANALYTICS_DELETION_NOTICE`.
+- `services/access.ts`: `requireAnalyticsDatabase(db, principal, id, role)` (PostgreSQL only;
+  every analytics route starts with it, then calls `requireEventStore` only if it touches the
+  store), `analyticsDatabaseRoleOf`, `listAccessibleAnalyticsDatabaseIds`,
+  **`requireClientAnalyticsDatabase(db, credential, id)`** for ingest: any key of the owning
+  project, else `403 analytics_database_inaccessible`.
+- `EventStore.reachable(timeoutMs = 2000)`: for a screen that says the store is down, never
+  a guard.
+- `OPERATOR_LIMITS` analytics rows in `env.ts` (`ctx.env.limits.analytics…`): databases,
+  event names, new names per hour, param keys, categories, the three storage triples, ingest
+  per key 5 min and hour, per installation 5 min, per address per minute, query slots, query
+  time, funnel trend time, query memory, query threads (`0` = half the event store's own
+  `max_threads`, which piece 4 resolves with `SELECT getSetting('max_threads')`), erasure bound.
+  Tests move a limit by assigning `h.ctx.env.limits.x` and restoring it.
+- `deleteProject` records a removal for each of the project's analytics databases.
+
+**MCP.** `apps/mcp/src/analytics-tools.ts` (`registerAnalyticsTools`, called from
+`registerTools`): add every later analytics tool there. `databasePath` routes `adb_`. The
+server instructions' analytics paragraph is in `app.ts`; piece 12 completes it. The e2e list
+of tools in `e2e/api/mcp.spec.ts` must gain each new tool.
+
+**Web.** `apps/web/src/pages/analytics-database.tsx`: `TABS` (groups and panels) and
+`COMING` (the empty states each later piece replaces by putting its panel in the `TabsContent`
+switch); `EVENT_STORE_UNREACHABLE`, the one sentence every analytics screen shows when a call
+answers `analytics_unavailable`. `lib/api.ts`: `AnalyticsDatabase`, `AnalyticsDatabaseRead`,
+`AnalyticsDeletionImpact`, the database calls; `databaseBase` routes `adb_`.
+`lib/timezones.ts`: `formerTimezoneName`. The access panel takes `kind: 'analyticsDatabase'`;
+the notification panel runs with `hideContentLevel`.
+
 ## Left out, and why
 
 Each piece appends what it did not build and the reason.
@@ -331,4 +433,33 @@ Each piece appends what it did not build and the reason.
 - **Erasure batching**: the measured cost of a lightweight DELETE is per statement and per
   part touched, so the erasure worker (piece 10) should delete many IDs in one statement.
   Nothing in piece 1 deletes.
+
+### From piece 2
+
+- **The export offer before deletion** (AN-212, FR-025): the confirmation states that the
+  export contains the stored events only, but offers no download; the streaming event export
+  is piece 10's, which adds the button to `GeneralSettings`.
+- **A test message worded for analytics**: the shared Slack test message still renders the
+  feedback sample for an analytics database, as it does for a crash database. Piece 9 writes
+  the analytics renderer and may give the test message its own text.
+- **The Storage panel** is an empty state; piece 9 builds it and the `PATCH …/storage` route
+  with `storage_setting_out_of_bounds`.
+- **Ingest-time checks**: the event-name, param-key and category limits, the acceptance floor,
+  rate limits and the `installation_secret`'s use are piece 3's; this piece stores and reports
+  what they need.
+- **Timeouts against a hung event store** (verification, piece 2): creation's
+  `system.time_zones` lookup waits the reader's 40-second timeout before answering
+  `503 analytics_unavailable` when ClickHouse accepts connections and never answers (a refused
+  connection answers at once). Left as piece 1 set the query timeout; the database read and the
+  deletion impact are bounded by `reachable()`'s two seconds.
+- **Piece 3 and piece 11, from the envelope**: `locale` must be BCP 47 with hyphens (`en_US`
+  rejects the whole event), `country` accepts any two letters, and a JSON `null` in an optional
+  field (`"userId": null`, as Jackson and many serialisers write) is `invalid_event`, not an
+  absent field; the SDK must omit absent fields and normalise the locale. Whether `null` should
+  count as absent is an open product question in the verification report.
+- **PRD amendments for the orchestrator** (not applied here): PRD 9.3 "Analytics Database"
+  should drop "event-name, param-key and category limits" and say a read reports the
+  deployment's values; the funnel definition's `defaultRange`/`defaultView` field names and
+  the cohort run's `granularity`/`filters` overrides should be written into 9.2; see the
+  piece 2 report for the exact text.
 

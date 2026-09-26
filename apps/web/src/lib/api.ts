@@ -199,9 +199,11 @@ export type Member = {
 export type Invitation = {
   id: string;
   role: Role;
-  scope: 'project' | 'feedback_database';
+  scope: 'project' | 'feedback_database' | 'crash_database' | 'analytics_database';
   projectId: string | null;
   feedbackDatabaseId: string | null;
+  crashDatabaseId: string | null;
+  analyticsDatabaseId: string | null;
   scopeName: string;
   status: 'pending' | 'redeemed' | 'revoked' | 'expired';
   createdAt: string;
@@ -215,7 +217,7 @@ export type InvitationWithLink = Invitation & { token: string; url: string };
 
 export type InvitationPreview = {
   role: Role;
-  scope: 'project' | 'feedback_database';
+  scope: 'project' | 'feedback_database' | 'crash_database' | 'analytics_database';
   scopeName: string;
   projectName: string;
   expiresAt: string;
@@ -358,8 +360,38 @@ export type SlackNotificationsPatch = {
  * live under each type's own routes. The ID prefix says which.
  */
 function databaseBase(databaseId: string): string {
-  return databaseId.startsWith('cdb_') ? `/v1/crash-databases/${databaseId}` : `/v1/feedback-databases/${databaseId}`;
+  if (databaseId.startsWith('cdb_')) return `/v1/crash-databases/${databaseId}`;
+  if (databaseId.startsWith('adb_')) return `/v1/analytics-databases/${databaseId}`;
+  return `/v1/feedback-databases/${databaseId}`;
 }
+
+// --- UX Analytics (Release 8) ----------------------------------------------------
+
+export type AnalyticsDatabase = {
+  id: string;
+  projectId: string;
+  name: string;
+  type: 'analytics';
+  timezone: string;
+  countryDerivation: boolean;
+  storage: { maxAgeDays: number; maxEvents: number; latenessDays: number };
+  limits: { eventNames: number; newEventNamesPerHour: number; paramKeysPerEventName: number; categoriesPerEventName: number };
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** The single read also says whether the event store answers now (UX Analytics 8.1). */
+export type AnalyticsDatabaseRead = AnalyticsDatabase & { eventStore: 'available' | 'unavailable' };
+
+export type AnalyticsDeletionImpact = {
+  events: number | null;
+  installations: number | null;
+  users: number | null;
+  eventStore: 'available' | 'unavailable';
+  funnels: number;
+  cohorts: number;
+  notice: string;
+};
 
 // --- Crash Reports (Release 6) -------------------------------------------------
 
@@ -507,6 +539,19 @@ function crashQuery(params: Record<string, string | number | undefined>): string
 }
 
 export const api = {
+  // --- Analytics databases (AN-001 to AN-005) ---
+  listAnalyticsDatabases: (projectId: string) =>
+    request<AnalyticsDatabase[]>(`/v1/projects/${projectId}/analytics-databases`),
+  createAnalyticsDatabase: (projectId: string, name: string, timezone: string) =>
+    request<AnalyticsDatabase>(`/v1/projects/${projectId}/analytics-databases`, { method: 'POST', body: { name, timezone } }),
+  getAnalyticsDatabase: (databaseId: string) => request<AnalyticsDatabaseRead>(`/v1/analytics-databases/${databaseId}`),
+  updateAnalyticsDatabase: (databaseId: string, patch: { name?: string; countryDerivation?: boolean }) =>
+    request<AnalyticsDatabase>(`/v1/analytics-databases/${databaseId}`, { method: 'PATCH', body: patch }),
+  deleteAnalyticsDatabase: (databaseId: string) =>
+    request<{ deleted: true }>(`/v1/analytics-databases/${databaseId}`, { method: 'DELETE' }),
+  analyticsDeletionImpact: (databaseId: string) =>
+    request<AnalyticsDeletionImpact>(`/v1/analytics-databases/${databaseId}/deletion-impact`),
+
   // --- Crash databases ---
   listCrashDatabases: (projectId: string) =>
     request<CrashDatabase[]>(`/v1/projects/${projectId}/crash-databases`),

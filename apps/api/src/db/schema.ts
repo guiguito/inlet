@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import {
   bigint,
   boolean,
+  date,
   index,
   integer,
   jsonb,
@@ -13,7 +14,14 @@ import {
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
-import { SLACK_CONTENT_LEVELS, type CrashEnvelope, type FormDefinition, type StoredAnswers } from '@inlet/shared';
+import {
+  SLACK_CONTENT_LEVELS,
+  type AnalyticsCohortDefinition,
+  type AnalyticsFunnelDefinition,
+  type CrashEnvelope,
+  type FormDefinition,
+  type StoredAnswers,
+} from '@inlet/shared';
 
 /**
  * The Inlet schema (PRD section 10).
@@ -53,6 +61,8 @@ export const deliveryKindEnum = pgEnum('inlet_delivery_kind', [
   'submission_received',
   'crash_group_opened',
   'crash_group_regressed',
+  // UX Analytics AN-192: the opening or resolution of a data-health incident.
+  'analytics_data_health',
 ]);
 
 /** CR-026. */
@@ -484,6 +494,8 @@ export const invitations = pgTable(
     }),
     /** FD-007: the third scope. Exactly one of project, feedback database or crash database is set. */
     crashDatabaseId: text('crash_database_id').references(() => crashDatabases.id, { onDelete: 'cascade' }),
+    /** FD-007: the fourth scope (Release 8). Exactly one of the four scope columns is set. */
+    analyticsDatabaseId: text('analytics_database_id').references(() => analyticsDatabases.id, { onDelete: 'cascade' }),
     role: roleEnum('role').notNull(),
     createdBy: text('created_by').references(() => users.id, { onDelete: 'set null' }),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
@@ -564,7 +576,9 @@ export const notificationDeliveries = pgTable(
     kind: deliveryKindEnum('kind').notNull().default('submission_received'),
     submissionId: text('submission_id').references(() => submissions.id, { onDelete: 'cascade' }),
     crashGroupId: text('crash_group_id').references(() => crashGroups.id, { onDelete: 'cascade' }),
-    /** The database whose Slack settings render and receive the message; `fdb_` or `cdb_`. */
+    /** AN-192: the source of an `analytics_data_health` delivery; it goes with its incident. */
+    analyticsIncidentId: integer('analytics_incident_id').references(() => analyticsIncidents.id, { onDelete: 'cascade' }),
+    /** The database whose Slack settings render and receive the message; `fdb_`, `cdb_` or `adb_`. */
     feedbackDatabaseId: text('feedback_database_id').notNull(),
     status: deliveryStatusEnum('status').notNull().default('pending'),
     attempts: integer('attempts').notNull().default(0),
@@ -802,6 +816,298 @@ export const crashReports = pgTable(
   ],
 );
 
+// ---------------------------------------------------------------------------
+// UX Analytics (UX Analytics PRD section 9.3, "In PostgreSQL"). Release 8, additive.
+// The events themselves live in the event store (apps/api/clickhouse/); these tables hold
+// what is small, mutable or needs a transaction (DECISIONS 31.2).
+// ---------------------------------------------------------------------------
+
+export const erasureKindEnum = pgEnum('inlet_erasure_kind', ['installation', 'user']);
+/** AN-169. */
+export const analyticsIncidentKindEnum = pgEnum('inlet_analytics_incident_kind', [
+  'storage_cap_reached',
+  'storage_cap_exceeded',
+  'rate_limited',
+  'event_name_limit',
+  'event_name_rate',
+  'invalid_events',
+]);
+
+/**
+ * AN-001 to AN-003. The event-name, param-key and category limits are not columns: they
+ * are the deployment's (Foundations FD-032), and a read returns the operator's current
+ * values as the database's limits (DECISIONS 33.2).
+ */
+export const analyticsDatabases = pgTable(
+  'analytics_databases',
+  {
+    id: text('id').primaryKey(),
+    /**
+     * The event store's `database_key` (UInt32). An identity, so a key is never reused,
+     * even after its database is deleted (AN-004): the event store may still hold its rows
+     * until the removal worker has dropped them.
+     */
+    key: integer('key').notNull().generatedAlwaysAsIdentity(),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    /** AN-002: the IANA name exactly as given at creation. Never changes. */
+    timezone: text('timezone').notNull(),
+    /** AN-160: stored as set; a read applies the operator's current bounds to them. */
+    maxAgeDays: integer('max_age_days').notNull(),
+    maxEvents: bigint('max_events', { mode: 'number' }).notNull(),
+    /** AN-160: taken from the operator's default at creation. */
+    latenessDays: integer('lateness_days').notNull(),
+    /** AN-003: on by default; applies to events received afterwards. */
+    countryDerivation: boolean('country_derivation').notNull().default(true),
+    /**
+     * AN-163: the start of the oldest week the retention pass keeps, written before it drops
+     * a week, so that ingest's acceptance floor survives a restart. Null until a week is dropped.
+     */
+    keptFrom: date('kept_from', { mode: 'string' }),
+    /** AN-017: derives server installation IDs. Never returned or logged. */
+    installationSecret: text('installation_secret').notNull(),
+    createdBy: text('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt,
+    updatedAt,
+  },
+  (table) => [
+    index('analytics_databases_project_idx').on(table.projectId),
+    uniqueIndex('analytics_databases_key_idx').on(table.key),
+  ],
+);
+
+/** Same shape as the other database memberships (Foundations 10.6, FD-007). */
+export const analyticsDatabaseMemberships = pgTable(
+  'analytics_database_memberships',
+  {
+    analyticsDatabaseId: text('analytics_database_id')
+      .notNull()
+      .references(() => analyticsDatabases.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    role: roleEnum('role').notNull(),
+    createdAt,
+    updatedAt,
+  },
+  (table) => [
+    primaryKey({ columns: [table.analyticsDatabaseId, table.userId] }),
+    index('analytics_database_memberships_user_idx').on(table.userId),
+  ],
+);
+
+// The tables below are keyed by the database *key* and carry no foreign key to
+// `analytics_databases` (AN-004): deleting a database must never cascade through them inside
+// the request. The removal worker (piece 9) deletes their rows in bounded batches.
+
+/**
+ * AN-034, AN-050 to AN-059: the catalog and Lexicon. The identity is the `event_name_id`
+ * the events carry; deleting a name retires its ID, and a name sent again gets a new one
+ * (AN-056).
+ */
+export const analyticsEventNames = pgTable(
+  'analytics_event_names',
+  {
+    /**
+     * The event store's `event_name_id` is a `UInt32`, and ClickHouse reads 2^32 into one as
+     * 0, "any event": the sequence stops at 2^32 - 1, so an ID past it fails here, loudly.
+     * An `INSERT … ON CONFLICT DO NOTHING` spends an ID even when it inserts nothing, so
+     * ingest looks names up before inserting (piece 3).
+     */
+    id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity({ maxValue: 4_294_967_295 }),
+    databaseKey: integer('database_key').notNull(),
+    name: text('name').notNull(),
+    /** AN-051: the latest category, refreshed by the background pass. */
+    category: text('category'),
+    /** AN-053: at most 500 characters. */
+    description: text('description'),
+    hidden: boolean('hidden').notNull().default(false),
+    blocked: boolean('blocked').notNull().default(false),
+    standard: boolean('standard').notNull().default(false),
+    firstSeenAt: timestamp('first_seen_at', { withTimezone: true }).notNull().defaultNow(),
+    // --- AN-051: refreshed from events by the background pass ---
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
+    events24h: bigint('events_24h', { mode: 'number' }).notNull().default(0),
+    installations24h: bigint('installations_24h', { mode: 'number' }).notNull().default(0),
+    users24h: bigint('users_24h', { mode: 'number' }).notNull().default(0),
+    computedAt: timestamp('computed_at', { withTimezone: true }),
+  },
+  (table) => [uniqueIndex('analytics_event_names_key_name_idx').on(table.databaseKey, table.name)],
+);
+
+/** AN-034, AN-022: a param key per event name, inserted and never updated but for its description. */
+export const analyticsEventParams = pgTable(
+  'analytics_event_params',
+  {
+    databaseKey: integer('database_key').notNull(),
+    eventNameId: bigint('event_name_id', { mode: 'number' }).notNull(),
+    key: text('key').notNull(),
+    /** The value types observed: `string`, `number`, `boolean`. */
+    observedTypes: text('observed_types').array().notNull().default(sql`'{}'::text[]`),
+    description: text('description'),
+    firstSeenAt: timestamp('first_seen_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.databaseKey, table.eventNameId, table.key] })],
+);
+
+/** AN-034, AN-022: at most 10 categories per event name, inserted and never updated. */
+export const analyticsEventCategories = pgTable(
+  'analytics_event_categories',
+  {
+    databaseKey: integer('database_key').notNull(),
+    eventNameId: bigint('event_name_id', { mode: 'number' }).notNull(),
+    category: text('category').notNull(),
+    firstSeenAt: timestamp('first_seen_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.databaseKey, table.eventNameId, table.category] })],
+);
+
+/**
+ * AN-006, AN-168: per database and hour, what was refused, removed, truncated or dropped,
+ * and what was accepted, since the `invalid_events` incident needs the hour's total
+ * (AN-169). Written by the worker from counters in memory; kept eight days.
+ */
+export const analyticsDroppedCounts = pgTable(
+  'analytics_dropped_counts',
+  {
+    databaseKey: integer('database_key').notNull(),
+    hour: timestamp('hour', { withTimezone: true }).notNull(),
+    // --- Refused, by the reason of AN-168 ---
+    rateLimitExceeded: bigint('rate_limit_exceeded', { mode: 'number' }).notNull().default(0),
+    installationRateLimited: bigint('installation_rate_limited', { mode: 'number' }).notNull().default(0),
+    eventTooOld: bigint('event_too_old', { mode: 'number' }).notNull().default(0),
+    eventTooLarge: bigint('event_too_large', { mode: 'number' }).notNull().default(0),
+    eventNameLimit: bigint('event_name_limit', { mode: 'number' }).notNull().default(0),
+    eventNameRate: bigint('event_name_rate', { mode: 'number' }).notNull().default(0),
+    eventBlocked: bigint('event_blocked', { mode: 'number' }).notNull().default(0),
+    invalidEvent: bigint('invalid_event', { mode: 'number' }).notNull().default(0),
+    unknownField: bigint('unknown_field', { mode: 'number' }).notNull().default(0),
+    missingIdentity: bigint('missing_identity', { mode: 'number' }).notNull().default(0),
+    // --- Removed, warned, or merely counted ---
+    removedByCap: bigint('removed_by_cap', { mode: 'number' }).notNull().default(0),
+    truncated: bigint('truncated', { mode: 'number' }).notNull().default(0),
+    paramKeysDropped: bigint('param_keys_dropped', { mode: 'number' }).notNull().default(0),
+    categoriesDropped: bigint('categories_dropped', { mode: 'number' }).notNull().default(0),
+    placeholdersDropped: bigint('placeholders_dropped', { mode: 'number' }).notNull().default(0),
+    duplicates: bigint('duplicates', { mode: 'number' }).notNull().default(0),
+    accepted: bigint('accepted', { mode: 'number' }).notNull().default(0),
+  },
+  (table) => [primaryKey({ columns: [table.databaseKey, table.hour] })],
+);
+
+/**
+ * AN-184: every read skips the rows of `erasedId` and `installationIds` received before
+ * `createdAt`, until the worker has removed them from the event store's files.
+ */
+export const analyticsPendingErasures = pgTable(
+  'analytics_pending_erasures',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    databaseKey: integer('database_key').notNull(),
+    kind: erasureKindEnum('kind').notNull(),
+    erasedId: text('erased_id').notNull(),
+    installationIds: uuid('installation_ids').array().notNull().default(sql`'{}'::uuid[]`),
+    createdAt,
+  },
+  (table) => [index('analytics_pending_erasures_key_idx').on(table.databaseKey)],
+);
+
+/**
+ * AN-004, Foundations FD-005: a deleted database whose rows remain in the event store and
+ * in the key-scoped tables above. Written in the deleting transaction; deleted by the
+ * worker once nothing of that key remains in either store.
+ */
+export const analyticsDatabaseRemovals = pgTable('analytics_database_removals', {
+  databaseKey: integer('database_key').primaryKey(),
+  recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+// These go with their database's row, by cascade, in the deleting request.
+
+/** AN-080 to AN-082. */
+export const analyticsFunnels = pgTable(
+  'analytics_funnels',
+  {
+    id: text('id').primaryKey(),
+    analyticsDatabaseId: text('analytics_database_id')
+      .notNull()
+      .references(() => analyticsDatabases.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    definition: jsonb('definition').$type<AnalyticsFunnelDefinition>().notNull(),
+    createdBy: text('created_by').references(() => users.id, { onDelete: 'set null' }),
+    updatedBy: text('updated_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt,
+    updatedAt,
+  },
+  (table) => [index('analytics_funnels_db_idx').on(table.analyticsDatabaseId)],
+);
+
+/** AN-100, AN-101, AN-107: `standard` marks the Retention cohort, which cannot change. */
+export const analyticsCohorts = pgTable(
+  'analytics_cohorts',
+  {
+    id: text('id').primaryKey(),
+    analyticsDatabaseId: text('analytics_database_id')
+      .notNull()
+      .references(() => analyticsDatabases.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    definition: jsonb('definition').$type<AnalyticsCohortDefinition>().notNull(),
+    standard: boolean('standard').notNull().default(false),
+    createdBy: text('created_by').references(() => users.id, { onDelete: 'set null' }),
+    updatedBy: text('updated_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt,
+    updatedAt,
+  },
+  (table) => [index('analytics_cohorts_db_idx').on(table.analyticsDatabaseId)],
+);
+
+/** AN-169, AN-191: `figures` is the snapshot the Slack message reports. */
+export const analyticsIncidents = pgTable(
+  'analytics_incidents',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    analyticsDatabaseId: text('analytics_database_id')
+      .notNull()
+      .references(() => analyticsDatabases.id, { onDelete: 'cascade' }),
+    kind: analyticsIncidentKindEnum('kind').notNull(),
+    openedAt: timestamp('opened_at', { withTimezone: true }).notNull().defaultNow(),
+    resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+    figures: jsonb('figures').$type<Record<string, unknown>>().notNull().default({}),
+  },
+  (table) => [
+    // AN-169: at most one incident of each kind is open at a time.
+    uniqueIndex('analytics_incidents_open_idx')
+      .on(table.analyticsDatabaseId, table.kind)
+      .where(sql`${table.resolvedAt} is null`),
+    index('analytics_incidents_db_opened_idx').on(table.analyticsDatabaseId, table.openedAt),
+  ],
+);
+
+/**
+ * Foundations FD-033, AN-185: one row per erasure across a project, with its actor and
+ * counts per database, and never the erased ID. The actor columns carry no foreign key, so
+ * the record outlives a deleted account or a revoked key.
+ */
+export const erasures = pgTable(
+  'erasures',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    /** Exactly one of the two is set. */
+    actorUserId: text('actor_user_id'),
+    actorCredentialId: text('actor_credential_id'),
+    kind: erasureKindEnum('kind').notNull(),
+    /** Per database ID, what was deleted there. */
+    counts: jsonb('counts').$type<Record<string, Record<string, number>>>().notNull().default({}),
+    createdAt,
+  },
+  (table) => [index('erasures_project_idx').on(table.projectId, table.createdAt)],
+);
+
 export type UserRow = typeof users.$inferSelect;
 export type ProjectRow = typeof projects.$inferSelect;
 export type FeedbackDatabaseRow = typeof feedbackDatabases.$inferSelect;
@@ -822,3 +1128,5 @@ export type CrashDatabaseMembershipRow = typeof crashDatabaseMemberships.$inferS
 export type CrashReleaseRow = typeof crashReleases.$inferSelect;
 export type CrashGroupRow = typeof crashGroups.$inferSelect;
 export type CrashReportRow = typeof crashReports.$inferSelect;
+export type AnalyticsDatabaseRow = typeof analyticsDatabases.$inferSelect;
+export type AnalyticsDatabaseMembershipRow = typeof analyticsDatabaseMemberships.$inferSelect;

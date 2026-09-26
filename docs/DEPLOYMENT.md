@@ -145,9 +145,9 @@ Every setting is an environment variable. Two are required and have no default.
 
 ### Operator limits
 
-The limits of the collection routes and the bounds of crash retention are platform
-defaults that people using Inlet cannot change. You, the operator, can, through the
-variables below (Foundations FD-032). A value outside the hard limits stops the server at
+The limits of the collection routes, the bounds of crash retention and the analytics
+limits and storage settings are platform defaults that people using Inlet cannot change.
+You, the operator, can, through the variables below (Foundations FD-032). A value outside the hard limits stops the server at
 startup with a message naming the variable, as does a set of retention bounds whose
 minimum, default and maximum are out of order. Leave a variable unset to keep its default.
 
@@ -172,11 +172,39 @@ in memory on the API process (see Health and observability).
 | `INLET_CRASH_RETENTION_DAYS_MIN` | `7` | 1 to 3,650 | Shortest age limit a team may set |
 | `INLET_CRASH_RETENTION_DAYS_MAX` | `365` | 1 to 3,650 | Longest age limit a team may set (unlimited stays allowed) |
 | `INLET_CRASH_RETENTION_DAYS_DEFAULT` | `90` | 1 to 3,650 | Age limit of a new crash database |
+| `INLET_ANALYTICS_DATABASES_MAX` | `50` | 1 to 175 | Analytics databases on the whole deployment. Each adds about 57 weekly partitions to the event store at 13 months; 175 keeps it near 10,000 |
+| `INLET_ANALYTICS_EVENT_NAMES_MAX` | `500` | 10 to 5,000 | Distinct event names per analytics database |
+| `INLET_ANALYTICS_NEW_EVENT_NAMES_PER_HOUR` | `50` | 1 to 5,000 | New event names an analytics database accepts in an hour |
+| `INLET_ANALYTICS_PARAM_KEYS_PER_EVENT` | `100` | 1 to 1,000 | Distinct param keys per event name |
+| `INLET_ANALYTICS_CATEGORIES_PER_EVENT` | `10` | 1 to 100 | Distinct categories per event name |
+| `INLET_ANALYTICS_MAX_AGE_DAYS_MIN` | `7` | 7 to 3,650 | Shortest maximum age a team may set |
+| `INLET_ANALYTICS_MAX_AGE_DAYS_MAX` | `760` | 7 to 3,650 | Longest maximum age a team may set |
+| `INLET_ANALYTICS_MAX_AGE_DAYS_DEFAULT` | `395` | 7 to 3,650 | Maximum age of a new analytics database (13 months) |
+| `INLET_ANALYTICS_MAX_EVENTS_MIN` | `100000` | 10,000 to 1,000,000,000,000 | Lowest event cap a team may set |
+| `INLET_ANALYTICS_MAX_EVENTS_MAX` | `10000000000` | 10,000 to 1,000,000,000,000 | Highest event cap a team may set |
+| `INLET_ANALYTICS_MAX_EVENTS_DEFAULT` | `500000000` | 10,000 to 1,000,000,000,000 | Event cap of a new analytics database |
+| `INLET_ANALYTICS_LATENESS_DAYS_MIN` | `1` | 1 to 365 | Shortest lateness window a team may set |
+| `INLET_ANALYTICS_LATENESS_DAYS_MAX` | `90` | 1 to 365 | Longest lateness window a team may set, never beyond the database's maximum age |
+| `INLET_ANALYTICS_LATENESS_DAYS_DEFAULT` | `30` | 1 to 365 | Lateness window of a new analytics database; at most `INLET_ANALYTICS_MAX_AGE_DAYS_DEFAULT` |
+| `INLET_LIMIT_ANALYTICS_PER_KEY_5M` | `200000` | 1,000 to 100,000,000 | Analytics events per key per 5 minutes |
+| `INLET_LIMIT_ANALYTICS_PER_KEY_HOUR` | `2000000` | 1,000 to 1,000,000,000 | Analytics events per key per hour |
+| `INLET_LIMIT_ANALYTICS_PER_INSTALLATION_5M` | `1000` | 10 to 1,000,000 | Analytics events per installation per 5 minutes; only that installation's excess is refused |
+| `INLET_LIMIT_ANALYTICS_PER_ADDRESS_PER_MINUTE` | `6000` | 60 to 1,000,000 | Analytics ingest requests per client address per minute, applied only behind a trusted proxy |
+| `INLET_ANALYTICS_QUERY_SLOTS` | `3` | 2 to 64 | Analytics queries running at once; one is always kept for signed-in users |
+| `INLET_ANALYTICS_QUERY_TIME_S` | `30` | 1 to 600 | Time limit of an analytics query |
+| `INLET_ANALYTICS_FUNNEL_TREND_TIME_S` | `120` | 1 to 3,600 | Time limit of a funnel's trend view |
+| `INLET_ANALYTICS_QUERY_MEMORY_BYTES` | `805306368` (768 MiB) | 64 MiB to 1 TiB | Memory limit of an analytics query. Sized for the Small host, whose ClickHouse is capped at about 3 GB: three slots use 2.25 GiB and leave the rest to inserts and merges. Raise it to about 8 GB on the reference host |
+| `INLET_ANALYTICS_QUERY_THREADS` | `0` | 0 to 256 | Threads per analytics query; `0` means half of what the event store reports as its own `max_threads`, its cores by default |
+| `INLET_ANALYTICS_ERASURE_BOUND_DAYS` | `30` | 1 to 30 | Days within which erased analytics events leave the event store's files. You may only shorten it |
 
 Narrowing the retention bounds rewrites nobody's setting. A crash database whose stored
 cap or age now falls outside them is enforced at the nearest bound, and its retention
-read reports that effective value, until someone sets it again. The analytics limits of
-the same requirement arrive with the analytics capability.
+read reports that effective value, until someone sets it again. The analytics storage
+settings follow the same rule: narrowing their bounds rewrites no database, and a read
+reports the value enforced. The analytics limits (event names, param keys, categories) are
+the deployment's, not a database's: every analytics database reports and applies your
+current values. The three storage triples must each keep MIN ≤ DEFAULT ≤ MAX, and the default
+lateness must not exceed the default maximum age, or the server refuses to start.
 
 ### Analytics event store
 

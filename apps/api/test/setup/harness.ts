@@ -29,6 +29,18 @@ export type Harness = {
 
 const TABLES = [
   'notification_deliveries',
+  'analytics_database_removals',
+  'analytics_pending_erasures',
+  'analytics_dropped_counts',
+  'analytics_event_categories',
+  'analytics_event_params',
+  'analytics_event_names',
+  'analytics_incidents',
+  'analytics_cohorts',
+  'analytics_funnels',
+  'analytics_database_memberships',
+  'analytics_databases',
+  'erasures',
   'crash_reports',
   'crash_group_daily',
   'crash_group_users',

@@ -104,6 +104,30 @@ export const ERROR_STATUS = {
   analytics_busy: 503,
   /** UX Analytics 9.5: a query exceeded the event store's time or memory limit. */
   query_limit_exceeded: 503,
+  analytics_database_not_found: 404,
+  analytics_database_inaccessible: 403,
+  /** AN-001: the deployment already holds its limit of analytics databases (Foundations FD-032). */
+  analytics_database_limit: 409,
+  /** AN-002: a missing zone, or one the API's or the event store's timezone data does not list. */
+  timezone_invalid: 400,
+  /** Section 9.2: a query definition outside the contract. The detail path names the field. */
+  invalid_query: 400,
+  event_not_found: 404,
+  funnel_not_found: 404,
+  cohort_not_found: 404,
+  profile_not_found: 404,
+  /** AN-107: the standard Retention cohort cannot be edited or deleted. */
+  standard_cohort_immutable: 409,
+  /** AN-055: a standard event cannot be deleted or blocked. */
+  standard_event_undeletable: 409,
+  /** AN-160: a storage setting outside the deployment's bounds, which the message names. */
+  storage_setting_out_of_bounds: 400,
+  /** AN-010: a batch larger than 256 KiB serialized. */
+  batch_too_large: 413,
+  /** AN-010: a batch of more than 100 events, or of none. */
+  too_many_events: 400,
+  /** FD-022: a destructive action whose echoed name or ID does not match. */
+  confirmation_mismatch: 400,
 
   // --- Notifications -------------------------------------------------------
   /**

@@ -3,9 +3,12 @@ import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { ROLES } from '@inlet/shared';
 import type { AppContext } from '../context.js';
 import { apiError } from '../lib/errors.js';
-import { requireCrashDatabase, requireDatabase, requireProject } from '../services/access.js';
+import { requireAnalyticsDatabase, requireCrashDatabase, requireDatabase, requireProject } from '../services/access.js';
 import { requireManagementPrincipal } from '../services/principal.js';
 import {
+  clearAnalyticsDatabaseRole,
+  listAnalyticsDatabaseMembers,
+  setAnalyticsDatabaseRole,
   clearCrashDatabaseRole,
   clearDatabaseRole,
   listCrashDatabaseMembers,
@@ -427,6 +430,119 @@ export function memberRoutes(ctx: AppContext): FastifyPluginAsyncZod {
         const principal = await requireManagementPrincipal(ctx, request);
         await requireCrashDatabase(ctx.db, principal, request.params.databaseId, 'admin');
         return revokeInvitation(ctx, request.params.invitationId, { kind: 'crashDatabase', crashDatabaseId: request.params.databaseId });
+      },
+    );
+
+    // --- Analytics databases: the fourth scope (FD-007) ---------------------
+
+    app.get(
+      '/analytics-databases/:databaseId/members',
+      {
+        schema: {
+          tags: ['Access'],
+          summary: 'List who can reach one analytics database',
+          params: databaseIdParam,
+          response: { 200: z.array(memberSchema), ...errorsFor(401, 403, 404) },
+        },
+      },
+      async (request) => {
+        const principal = await requireManagementPrincipal(ctx, request);
+        await requireAnalyticsDatabase(ctx.db, principal, request.params.databaseId, 'viewer');
+        return listAnalyticsDatabaseMembers(ctx, request.params.databaseId);
+      },
+    );
+
+    app.put(
+      '/analytics-databases/:databaseId/members/:userId',
+      {
+        schema: {
+          tags: ['Access'],
+          summary: 'Assign a role on one analytics database',
+          params: databaseIdParam.extend({ userId: z.string().min(1) }),
+          body: setRoleBodySchema,
+          response: { 200: memberSchema, ...errorsFor(400, 401, 403, 404) },
+        },
+      },
+      async (request) => {
+        const principal = await requireManagementPrincipal(ctx, request);
+        await requireAnalyticsDatabase(ctx.db, principal, request.params.databaseId, 'admin');
+        return setAnalyticsDatabaseRole(ctx, request.params.databaseId, request.params.userId, request.body.role);
+      },
+    );
+
+    app.delete(
+      '/analytics-databases/:databaseId/members/:userId',
+      {
+        schema: {
+          tags: ['Access'],
+          summary: 'Clear an analytics-database assignment',
+          params: databaseIdParam.extend({ userId: z.string().min(1) }),
+          response: { 200: okSchema, ...errorsFor(401, 403, 404) },
+        },
+      },
+      async (request) => {
+        const principal = await requireManagementPrincipal(ctx, request);
+        await requireAnalyticsDatabase(ctx.db, principal, request.params.databaseId, 'admin');
+        await clearAnalyticsDatabaseRole(ctx, request.params.databaseId, request.params.userId);
+        return { ok: true as const };
+      },
+    );
+
+    app.get(
+      '/analytics-databases/:databaseId/invitations',
+      {
+        schema: {
+          tags: ['Access'],
+          summary: 'List an analytics database’s invitations',
+          params: databaseIdParam,
+          response: { 200: z.array(invitationSchema), ...errorsFor(401, 403, 404) },
+        },
+      },
+      async (request) => {
+        const principal = await requireManagementPrincipal(ctx, request);
+        await requireAnalyticsDatabase(ctx.db, principal, request.params.databaseId, 'admin');
+        return listInvitations(ctx, { kind: 'analyticsDatabase', analyticsDatabaseId: request.params.databaseId });
+      },
+    );
+
+    app.post(
+      '/analytics-databases/:databaseId/invitations',
+      {
+        schema: {
+          tags: ['Access'],
+          summary: 'Invite someone to one analytics database',
+          params: databaseIdParam,
+          body: createInvitationBodySchema,
+          response: { 201: invitationWithLinkSchema, ...errorsFor(400, 401, 403, 404) },
+        },
+      },
+      async (request, reply) => {
+        const principal = await requireManagementPrincipal(ctx, request);
+        await requireAnalyticsDatabase(ctx.db, principal, request.params.databaseId, 'admin');
+        const created = await createInvitation(
+          ctx,
+          { kind: 'analyticsDatabase', analyticsDatabaseId: request.params.databaseId },
+          request.body.role,
+          principal.kind === 'user' ? principal.userId : null,
+        );
+        return reply.code(201).send({ ...created.invitation, token: created.token, url: invitationUrl(ctx, created.token) });
+      },
+    );
+
+    app.post(
+      '/analytics-databases/:databaseId/invitations/:invitationId/revoke',
+      {
+        schema: {
+          tags: ['Access'],
+          summary: 'Revoke an unredeemed analytics-database invitation',
+          params: databaseIdParam.extend({ invitationId: z.string().min(1) }),
+          response: { 200: invitationSchema, ...errorsFor(401, 403, 404, 409) },
+        },
+      },
+      async (request) => {
+        const principal = await requireManagementPrincipal(ctx, request);
+        await requireAnalyticsDatabase(ctx.db, principal, request.params.databaseId, 'admin');
+        return revokeInvitation(ctx, request.params.invitationId, { kind: 'analyticsDatabase', analyticsDatabaseId: request.params.databaseId });
       },
     );
 

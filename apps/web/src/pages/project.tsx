@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { api, ApiError, type Credential, type CurrentUser } from '@/lib/api';
+import { formerTimezoneName } from '@/lib/timezones';
 import { AccessPanel } from '@/components/access-panel';
 import { AppShell, PageHeader } from '@/components/app-shell';
 import { ConfirmDialog } from '@/components/confirm-dialog';
@@ -20,6 +21,7 @@ import { EmptyState } from '@/components/empty-state';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog,
   DialogContent,
@@ -96,6 +98,11 @@ export function ProjectPage({ user }: { user: CurrentUser }) {
                 <section className="space-y-3">
                   <h2 className="text-base font-semibold">Crash databases</h2>
                   <CrashDatabasesSection projectId={projectId} />
+                </section>
+                {/* FD-001, FD-003, UX Analytics 8.1: the third type, under its own heading. */}
+                <section className="space-y-3">
+                  <h2 className="text-base font-semibold">Analytics databases</h2>
+                  <AnalyticsDatabasesSection projectId={projectId} />
                 </section>
               </div>
             </TabsContent>
@@ -305,6 +312,194 @@ function CrashDatabasesSection({ projectId }: { projectId: string }) {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+/**
+ * UX Analytics 8.1: the project's analytics databases. Creating one asks for a reporting
+ * timezone, proposed from the browser and confirmed by the person (AN-002), because it
+ * decides every day, week and month the database reports and can never change.
+ */
+function AnalyticsDatabasesSection({ projectId }: { projectId: string }) {
+  const [creating, setCreating] = useState(false);
+  const databases = useQuery({
+    queryKey: ['analytics-databases', projectId],
+    queryFn: () => api.listAnalyticsDatabases(projectId),
+  });
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm text-muted-foreground">
+          An analytics database counts how a product is used: active installations, funnels and
+          retention, from the events its apps send.
+        </p>
+        <Button variant="outline" onClick={() => setCreating(true)}>
+          <PlusIcon />
+          New analytics database
+        </Button>
+      </div>
+
+      {databases.isLoading ? (
+        <Skeleton className="h-24" />
+      ) : databases.data && databases.data.length > 0 ? (
+        <Card>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Reporting timezone</TableHead>
+                <TableHead>Created</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {databases.data.map((database) => (
+                <TableRow key={database.id}>
+                  <TableCell>
+                    <Link to={`/analytics-databases/${database.id}`} className="font-medium hover:text-primary">
+                      {database.name}
+                    </Link>
+                    <p className="font-mono text-xs text-muted-foreground">{database.id}</p>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">{database.timezone}</TableCell>
+                  <TableCell className="numeric text-muted-foreground">{formatRelative(database.createdAt)}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Card>
+      ) : (
+        <p className="text-sm text-muted-foreground">No analytics databases yet.</p>
+      )}
+
+      {creating ? <CreateAnalyticsDatabaseDialog projectId={projectId} onClose={() => setCreating(false)} /> : null}
+    </div>
+  );
+}
+
+function CreateAnalyticsDatabaseDialog({ projectId, onClose }: { projectId: string; onClose: () => void }) {
+  const [name, setName] = useState('');
+  const [timezone, setTimezone] = useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
+  const [confirmed, setConfirmed] = useState(false);
+  const [zoneProblem, setZoneProblem] = useState<string | null>(null);
+  const [notEnabled, setNotEnabled] = useState<string | null>(null);
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+
+  const create = useMutation({
+    mutationFn: () => api.createAnalyticsDatabase(projectId, name.trim(), timezone.trim()),
+    onSuccess: async (database) => {
+      await queryClient.invalidateQueries({ queryKey: ['analytics-databases', projectId] });
+      onClose();
+      await navigate(`/analytics-databases/${database.id}`);
+    },
+    onError: (error) => {
+      if (error instanceof ApiError && error.code === 'analytics_not_enabled') {
+        setNotEnabled(error.message);
+        return;
+      }
+      if (error instanceof ApiError && error.code === 'timezone_invalid') {
+        // AN-002: a zone renamed after the server's timezone data was published is known to
+        // it by its former name; propose that, and ask again.
+        const former = formerTimezoneName(timezone.trim());
+        setConfirmed(false);
+        if (former) {
+          setTimezone(former);
+          setZoneProblem(`The server does not list ${timezone.trim()}. It knows the same zone as ${former}, which is filled in. Confirm it to continue.`);
+        } else {
+          setZoneProblem(`${error.message} Enter another zone, such as Europe/Paris.`);
+        }
+        return;
+      }
+      toast.error(error instanceof ApiError ? error.message : 'The analytics database could not be created.');
+    },
+  });
+
+  return (
+    <Dialog open onOpenChange={(open) => (open ? undefined : onClose())}>
+      <DialogContent>
+        {notEnabled ? (
+          <>
+            <DialogHeader>
+              <DialogTitle>Analytics is not enabled</DialogTitle>
+              <DialogDescription>{notEnabled}</DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button type="button" onClick={onClose}>
+                Close
+              </Button>
+            </DialogFooter>
+          </>
+        ) : (
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              create.mutate();
+            }}
+          >
+            <DialogHeader>
+              <DialogTitle>New analytics database</DialogTitle>
+              <DialogDescription>
+                One per product, which may ship several apps. Your project’s publishable key already
+                lets its apps send events.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="my-5 space-y-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="analytics-database-name">Name</Label>
+                <Input
+                  id="analytics-database-name"
+                  value={name}
+                  autoFocus
+                  required
+                  maxLength={200}
+                  placeholder="Checkout app"
+                  onChange={(event) => setName(event.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="analytics-database-timezone">Reporting timezone</Label>
+                <Input
+                  id="analytics-database-timezone"
+                  value={timezone}
+                  required
+                  maxLength={64}
+                  onChange={(event) => {
+                    setTimezone(event.target.value);
+                    setConfirmed(false);
+                    setZoneProblem(null);
+                  }}
+                />
+                {zoneProblem ? (
+                  <p role="alert" className="text-[13px] text-destructive">
+                    {zoneProblem}
+                  </p>
+                ) : null}
+                <div className="flex items-start gap-2 pt-1">
+                  <Checkbox
+                    id="analytics-database-timezone-confirm"
+                    checked={confirmed}
+                    onCheckedChange={(value) => setConfirmed(value === true)}
+                  />
+                  <Label htmlFor="analytics-database-timezone-confirm" className="text-[13px] leading-snug font-normal">
+                    Days, weeks and months are counted in {timezone.trim() || 'this zone'}. It cannot be
+                    changed later.
+                  </Label>
+                </div>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={create.isPending || name.trim().length === 0 || timezone.trim().length === 0 || !confirmed}>
+                {create.isPending ? 'Creating' : 'Create'}
+              </Button>
+            </DialogFooter>
+          </form>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 

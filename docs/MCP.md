@@ -214,3 +214,41 @@ reports from an application, groups them by fingerprint into **groups**, and tra
 `send_slack_test_message` and `get_deletion_impact` accept a crash database ID as their
 `databaseId`. There is no tool to edit or delete a single crash report, because the API has
 none: reports are immutable and expire under retention.
+
+## UX Analytics tools
+
+Release 8 adds a third database type. An **analytics database** (`adb_…`) counts how a
+product is used from the events its apps send. An **installation** is one install of an app
+on one device or browser profile, with a random ID the SDK creates; it is the default unit
+of every unique count, and a user ID the integrator sets after sign-in is the other. Every
+analytics answer covers the database's storage window (13 months or 500 million events by
+default) and states the range it covers, and a range preset such as `last30Days` ends today
+and includes it. The server's instructions say the same, so an agent reads it before it
+calls anything. The database tools below exist now; the query, catalog, profile, storage
+and erasure tools arrive with later pieces of Release 8 (UX Analytics PRD section 8.3).
+
+### Reading
+
+| Tool | What it does |
+| --- | --- |
+| `list_analytics_databases`, `get_analytics_database` | The analytics databases of a project; one of them with its reporting timezone, country derivation, storage settings in force, the deployment's limits, and `eventStore`, whether the event store answers now. Both work while it does not. |
+
+### Writing
+
+| Tool | What it does |
+| --- | --- |
+| `create_analytics_database` | Takes a name and a `timezone`, an IANA name such as `Europe/Paris` that can never be changed; offsets such as `UTC+2` are refused with `timezone_invalid`. Refused with `analytics_not_enabled` on a deployment without the event store, and `analytics_database_limit` when it holds its limit. The project's existing publishable key will ingest into it. |
+| `update_analytics_database` | Renames it, or switches country derivation, which applies to events received afterwards. |
+
+### Destructive
+
+| Tool | What it demands |
+| --- | --- |
+| `delete_analytics_database` | The database's exact name as `confirm`. Read `get_deletion_impact` first: it reports events, installations and user IDs (null while the event store is unreachable, which does not block deletion), funnels and cohorts. |
+
+`list_members`, `invite_member`, `set_member_role`, `remove_member`, `list_invitations`,
+`revoke_invitation`, `get_slack_notifications`, `update_slack_notifications`,
+`send_slack_test_message` and `get_deletion_impact` accept an analytics database ID as their
+`databaseId`, as they accept a crash database ID. `set_member_role` with a crash or analytics
+database ID now routes to that database; before Release 8 it always addressed a feedback
+database.

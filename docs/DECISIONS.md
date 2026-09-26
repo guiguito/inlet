@@ -3138,3 +3138,141 @@ showed answers correctly in between.
 node at 4.1 billion events, the Small host at its workload, the ingest path (it does not
 exist yet: the seed inserts a million rows per statement, where ingest inserts at most a
 hundred), and query concurrency.
+
+### 33.2 The contract and analytics databases (piece 2, September 26, 2026)
+
+**The envelope is a function, not a schema.** `validateEvent` in
+`@inlet/shared/analytics-core` implements section 9.1 with no Zod, so the SDK bundles the
+very code the API runs (AN-222) and the subpath stays free of Node imports. It never throws:
+it answers the normalised event and its warnings, or one rejection with its field. Its order
+is fixed and tested: sanitise every string, keys included, down to the two levels an event
+has and never deeper, so a nested or circular value is refused at its field rather than walked
+(recursing into 20,000 nested arrays, a 40 KB body, overflowed the stack and would have made
+ingest answer a condition of the data with a 5xx), with objects rebuilt by `Object.fromEntries`
+so that a `__proto__` key is a field (`unknown_field`, or a param key the pattern allows) and
+never a prototype that could smuggle in a `name`; refuse a field
+section 9.1 does not name, nested ones included (`app.channel` is `unknown_field`), before
+any bound, so a typo is reported first as crash ingest does; then each field in the table's
+order; then `missing_identity` after placeholder user IDs are dropped; then the 8 KiB check
+on the normalised event as it would be stored. Rejected: Zod with `strictObject`, as the crash
+envelope does, which would put Zod in the analytics bundle against FD-013 and makes the
+"truncate with a warning" rule awkward to express.
+Two readings of the table recorded here: an empty category or attribution is no value
+rather than an error (the event store stores `''` for none), and an experiment variant may be
+empty, since the table bounds it at 40 characters and says nothing else. A `country` is
+accepted in either case and stored upper case. A timestamp must be a real calendar day:
+`Date.parse` alone turns February 30 into March 2.
+
+**Query definitions are Zod, with flat filters.** A filter is one object, `field`, `key`,
+`op`, `values`, checked by a `superRefine` that reports each broken rule at its own path
+(`key`, `op`, `values`) and follows AN-062: standard fields take is, isNot, isSet, isNotSet;
+app and platform versions add startsWith; install ages take between only, two whole numbers
+in order; a param takes is, isNot, contains, isSet, isNotSet, and gt and lt with one number;
+experiments behave as standard fields with a key. Rejected: a discriminated union per field
+and operator, whose failures come back as "no union member matched" at the filter's path,
+which `invalid_query` could not turn into a useful message. Defaults are applied by the
+schemas (last 30 days by day; closed, seven days, installations), so the declared types
+in `analytics-core.ts` are the normalised definitions, and `Assert<Exact<…>>` in `analytics.ts`
+proves at compile time that each `z.infer` equals them. `Exact` answers `false`, not `never`:
+the tuple of `never` that `form.ts` and `answers.ts` use compiles whatever the types, since
+`never` satisfies every constraint, so their check has never been able to fail. Choices the PRD leaves open: a saved funnel's
+default range and view are `defaultRange` and `defaultView` in its definition, and a cohort's
+absent `defaultRange` means the last 12 periods; splits take the standard dimensions, an
+experiment or a param, not user or installation IDs (a line per ID is not a split) nor
+category; population filters are the standard dimensions, experiments and install
+attribution; a cohort run by ID may override granularity, range and population filters for
+every cohort, not only Retention; bounds the PRD does not set are 20 filters per list, 100
+values per filter, 256 characters per value and 80 per label. The hour interval's seven-day
+limit stays a run-time check, since a preset's length depends on today.
+
+**Limits are the deployment's, not a database's.** The event-name, param-key and category
+limits are not columns of `analytics_databases`; every read returns the operator's current
+values as the database's `limits`, and ingest (piece 3) applies those. PRD 9.3 listed them as
+columns, and a column would have frozen the value an operator had at creation: raising
+`INLET_ANALYTICS_EVENT_NAMES_MAX` would then help no existing database, which is the opposite
+of why FD-032 lets an operator change it. The storage settings do stay per database, because
+AN-161 lets an Admin change them; like crash retention (29.6), a read applies the stored value
+at the operator's current bounds without rewriting it, and the lateness window never exceeds
+the maximum age in force. The lateness window is stored at creation from the operator's
+default (AN-160), so a later change of that default moves only new databases.
+
+**The timezone check asks both timezone databases.** A zone is accepted when Node's ICU
+accepts it and ClickHouse's `system.time_zones` lists it verbatim (AN-002, 9.4). ICU alone
+is not enough twice over: it accepts `+02:00` and `GMT+0` as zones, and it matches names
+regardless of case and resolves aliases, so `europe/paris` would pass and then be stored in a
+form ClickHouse refuses. An explicit pattern refuses anything that starts with an optional
+`UTC`, `GMT`, `UT` or `Z` and then a sign and a digit, before either lookup, so offsets are
+refused even when an event store is unreachable. `Etc/GMT+2`, which is a real IANA name with
+POSIX's inverted sign, is accepted because both databases list it and AN-002 accepts every
+listed name. The ClickHouse lookup runs through the reader, so
+once the store has been ready an outage answers `503 analytics_unavailable`, never
+`analytics_not_enabled` (AN-005); on a deployment without a store, creation answers
+`analytics_not_enabled` before looking at the zone, since that is the step the caller must
+take first. The interface's table of renamed zones (`apps/web/src/lib/timezones.ts`) was
+checked against the IANA `backward` file on September 26, 2026: its "Alternate names" section
+and Pacific/Enderbury's link to Pacific/Kanton. Rejected: carrying a zone list in the API,
+which would drift from both ICU and ClickHouse.
+
+**The database limit is counted under a lock.** Creation takes
+`pg_advisory_xact_lock(hashtext('inlet.analytics_databases'))`, counts, and inserts the
+database and its Retention cohort in the same transaction, so two concurrent creations
+cannot both take the fiftieth place. A hard ceiling of 175 databases keeps a deployment near
+10,000 weekly partitions at 13 months, the upper end of ClickHouse's guidance (31.2).
+
+**Keys are identities; key-scoped tables have no foreign key.** `analytics_databases.key` is
+`GENERATED ALWAYS AS IDENTITY`, so a key is never reused even after its database is deleted
+while the event store still holds its rows (AN-004). The catalog, params, categories,
+dropped counts, pending erasures and removal records are keyed by it with no foreign key, so a
+deletion never cascades through them inside the request; funnels, cohorts, incidents,
+memberships and invitations are few and go by cascade. Deleting a database, or its project,
+inserts `analytics_database_removals (database_key)` in the deleting transaction; piece 9's
+worker drops the partitions and the key-scoped rows. The event-name ID is a bigint identity,
+where the event store carries a `UInt32`, and ClickHouse reads 2^32 into a `UInt32` as 0, the
+"any event" ID, without an error. The identity's sequence therefore stops at 2^32 - 1
+(`MAXVALUE 4294967295`), so an ID past the bound fails loudly in PostgreSQL instead of merging
+two names in the event store. The sequence is shared by every database and an
+`INSERT … ON CONFLICT DO NOTHING` spends a value even when it inserts nothing, so ingest
+(piece 3) looks a name up, in its cache and then in the table, before inserting it.
+
+**The deletion impact counts device installation records.** "Installations" is the number
+of installation records (`HAVING max(has_qualifying) = 1`) whose kind is `device`. A server
+installation is counted by its user ID, which the impact lists separately, and the test
+installation is a fixture a team never thinks of as one of its installations; counting either
+would make "3 installations" wrong for a backend-only product or after a test event. User IDs
+are the distinct non-empty user IDs of `installation_users`. Events are `count()` of `events`,
+which honours lightweight deletes. While the event store is unreachable, or a count exceeds
+its limit, the three are `null` with `eventStore: "unavailable"`, and deletion proceeds. The
+impact asks `EventStore.reachable()` (two seconds) before counting, so a store that hangs
+rather than refuses answers within seconds instead of after the 40-second query timeout.
+
+**Whether the event store answers is part of the database read.** `GET
+/v1/analytics-databases/{id}` adds `eventStore`, from `EventStore.reachable()`, a `SELECT 1`
+through the reader with a two-second cap, so the page can say in one sentence that the store
+is unreachable (8.1) even on panels that make no analytics call yet. Rejected: a status route
+of its own, which the PRD does not list, and reading `/v1/health`, which by design keeps
+listing `analytics` through an outage. The list route does not ask, so listing never waits.
+
+**`contentLevel` is ignored for an analytics database** (AN-190): the shared Slack settings
+route accepts and stores it, as it does for a crash database, and piece 9's renderer never
+reads it. Rejected: refusing it, which would need the shared plugin to know database types
+for one field.
+
+**Operator limits.** Every analytics row of section 14 is in `OPERATOR_LIMITS`, with defaults
+from `ANALYTICS_DEFAULTS` in the shared contract. The hard limits: databases 1 to 175 (above);
+event names 10 to 5,000 (AN-021's own ceiling); param keys to 1,000 and categories to 100 per
+name; maximum age 7 to 3,650 days, event cap 10,000 to 10^12, lateness 1 to 365 days, each
+triple checked MIN ≤ DEFAULT ≤ MAX and the default lateness within the default maximum age;
+ingest rate limits from 1,000 events per key and 10 per installation; query slots 2 to 64,
+since one slot is always kept for signed-in users (AN-205); query time to 600 s and the
+funnel trend to 3,600 s; query memory 64 MiB to 1 TiB, defaulting to 768 MiB, so that three
+concurrent queries use 2.25 GiB of the Small host's 3 GB ClickHouse and leave the rest to
+inserts and merges; the erasure bound 1 to 30 days, since the operator may only shorten it.
+Query threads default to `0`, meaning half of the event store's own `max_threads` (its cores
+by default), which the query layer of piece 4 reads from ClickHouse: the API cannot know the
+cores of a ClickHouse on another host, and a fixed number would be wrong on every host but
+one. The existing parser already handles values beyond 32 bits, as JavaScript integers up to
+2^53; the cap column is a PostgreSQL `bigint`.
+
+**The shared MCP tools route by prefix for every type.** `databasePath` sends `adb_` to
+`/analytics-databases`. `set_member_role` with a `databaseId` had always addressed
+`/feedback-databases`, so it failed for a crash database; it now uses `databasePath` too.

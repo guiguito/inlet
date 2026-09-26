@@ -8,6 +8,7 @@ import { ProjectPage } from '@/pages/project';
 import { DatabasePage } from '@/pages/database';
 import { CrashDatabasePage } from '@/pages/crash-database';
 import { CrashGroupPage } from '@/pages/crash-group';
+import { AnalyticsDatabasePage } from '@/pages/analytics-database';
 import { SubmissionPage } from '@/pages/submission';
 import { BuilderPage } from '@/pages/builder';
 import { InvitationPage } from '@/pages/invitation';
@@ -81,6 +82,8 @@ function AuthenticatedRoutes() {
       {/* Release 6: crash databases live beside feedback databases (FD-001, FD-003). */}
       <Route path="/crash-databases/:databaseId" element={<CrashDatabasePage user={user} />} />
       <Route path="/crash-databases/:databaseId/groups/:groupId" element={<CrashGroupPage user={user} />} />
+      {/* Release 8: analytics databases, the third type (FD-001, FD-003). */}
+      <Route path="/analytics-databases/:databaseId" element={<AnalyticsDatabasePage user={user} />} />
       <Route
         path="/databases/:databaseId/submissions/:submissionId"
         element={<SubmissionPage user={user} />}

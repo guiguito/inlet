@@ -16,6 +16,7 @@ import {
   slugSchema,
 } from '@inlet/shared';
 import { InletClient, InletError } from './client.js';
+import { registerAnalyticsTools } from './analytics-tools.js';
 import { registerCrashTools } from './crash-tools.js';
 
 /**
@@ -41,7 +42,7 @@ import { registerCrashTools } from './crash-tools.js';
 const projectId = z.string().describe('The project identifier, like prj_5waxfxyby3st.');
 const databaseId = z
   .string()
-  .describe('The database identifier: a feedback database like fdb_n8b3mj3axdfh, or, for members, invitations, Slack settings and deletion impact, a crash database like cdb_9rdayr4rstbv.');
+  .describe('The database identifier: a feedback database like fdb_n8b3mj3axdfh, or, for members, invitations, Slack settings and deletion impact, a crash database like cdb_9rdayr4rstbv or an analytics database like adb_4kq2m8vx7ncd.');
 const submissionId = z.string().describe('The submission identifier, like sub_bzq1whs3129d.');
 const userId = z.string().describe('The account identifier, like usr_bz33m9801wz9.');
 const roleArg = z.enum(ROLES).describe('admin, creator or viewer.');
@@ -95,14 +96,17 @@ function assertConfirmed(expected: string, given: string): void {
 
 /**
  * FD-002: the shared tools (members, invitations, Slack settings, deletion impact) take a
- * database of either type. The ID prefix says which routes serve it.
+ * database of any type. The ID prefix says which routes serve it.
  */
 function databasePath(id: string): string {
-  return id.startsWith('cdb_') ? `/v1/crash-databases/${id}` : `/v1/feedback-databases/${id}`;
+  if (id.startsWith('cdb_')) return `/v1/crash-databases/${id}`;
+  if (id.startsWith('adb_')) return `/v1/analytics-databases/${id}`;
+  return `/v1/feedback-databases/${id}`;
 }
 
 export function registerTools(server: McpServer, client: InletClient): void {
   registerCrashTools(server, client);
+  registerAnalyticsTools(server, client);
 
   // --- Reading ------------------------------------------------------------
 
@@ -313,9 +317,9 @@ export function registerTools(server: McpServer, client: InletClient): void {
   server.registerTool(
     'get_deletion_impact',
     {
-      title: 'Check what deleting a feedback database would destroy',
+      title: 'Check what deleting a database would destroy',
       description:
-        'How many responses and screenshots would go. Read this before delete_feedback_database.',
+        'In the type’s own units: responses and screenshots for a feedback database, groups and reports for a crash database, events, installations, user IDs, funnels and cohorts for an analytics database (null counts mean its event store is unreachable, which does not block deletion). Read this before any delete tool.',
       inputSchema: { databaseId },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -387,7 +391,7 @@ export function registerTools(server: McpServer, client: InletClient): void {
       title: 'Change someone’s role',
       description: [
         'With projectId, changes their project role. Downgrading the last Admin is refused (FR-014).',
-        'With databaseId, assigns a role on that feedback database only, overriding their project role (FR-071). Refused for a project Admin, whose access cannot be narrowed (FR-071A).',
+        'With databaseId, assigns a role on that database only (feedback, crash or analytics), overriding their project role (FR-071). Refused for a project Admin, whose access cannot be narrowed (FR-071A).',
       ].join('\n'),
       inputSchema: {
         userId,
@@ -406,7 +410,7 @@ export function registerTools(server: McpServer, client: InletClient): void {
         }
         if (database) {
           return json(
-            await client.request('PUT', `/v1/feedback-databases/${database}/members/${user}`, {
+            await client.request('PUT', `${databasePath(database)}/members/${user}`, {
               role,
             }),
           );

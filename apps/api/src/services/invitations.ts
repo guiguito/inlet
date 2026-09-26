@@ -12,6 +12,8 @@ import {
   type InvitationRow,
   crashDatabaseMemberships,
   crashDatabases,
+  analyticsDatabaseMemberships,
+  analyticsDatabases,
 } from '../db/schema.js';
 import { apiError, errors } from '../lib/errors.js';
 import { hashPassword, randomToken, sha256 } from '../lib/crypto.js';
@@ -33,12 +35,15 @@ export type InvitationScope =
   | { kind: 'project'; projectId: string }
   | { kind: 'feedbackDatabase'; feedbackDatabaseId: string }
   /** FD-007: the third scope, Release 6. */
-  | { kind: 'crashDatabase'; crashDatabaseId: string };
+  | { kind: 'crashDatabase'; crashDatabaseId: string }
+  /** FD-007: the fourth scope, Release 8. */
+  | { kind: 'analyticsDatabase'; analyticsDatabaseId: string };
 
-export type InvitationScopeName = 'project' | 'feedback_database' | 'crash_database';
+export type InvitationScopeName = 'project' | 'feedback_database' | 'crash_database' | 'analytics_database';
 
 function scopeOfRow(row: InvitationRow): InvitationScopeName {
   if (row.projectId) return 'project';
+  if (row.analyticsDatabaseId) return 'analytics_database';
   return row.crashDatabaseId ? 'crash_database' : 'feedback_database';
 }
 
@@ -49,6 +54,7 @@ export type InvitationView = {
   projectId: string | null;
   feedbackDatabaseId: string | null;
   crashDatabaseId: string | null;
+  analyticsDatabaseId: string | null;
   /** What the invitation grants access to, for a listing that reads without a join. */
   scopeName: string;
   status: 'pending' | 'redeemed' | 'revoked' | 'expired';
@@ -89,6 +95,11 @@ async function assertAssignable(db: Db, scope: InvitationScope, role: Role): Pro
     if (!rows[0]) throw apiError('crash_database_not_found', 'That crash database does not exist.');
     return;
   }
+  if (scope.kind === 'analyticsDatabase') {
+    const rows = await db.select({ id: analyticsDatabases.id }).from(analyticsDatabases).where(eq(analyticsDatabases.id, scope.analyticsDatabaseId)).limit(1);
+    if (!rows[0]) throw apiError('analytics_database_not_found', 'That analytics database does not exist.');
+    return;
+  }
   const rows = await db
     .select({ projectId: feedbackDatabases.projectId })
     .from(feedbackDatabases)
@@ -120,7 +131,9 @@ export async function createInvitation(
         ? { projectId: scope.projectId }
         : scope.kind === 'crashDatabase'
           ? { crashDatabaseId: scope.crashDatabaseId }
-          : { feedbackDatabaseId: scope.feedbackDatabaseId }),
+          : scope.kind === 'analyticsDatabase'
+            ? { analyticsDatabaseId: scope.analyticsDatabaseId }
+            : { feedbackDatabaseId: scope.feedbackDatabaseId }),
     })
     .returning();
 
@@ -198,6 +211,7 @@ export type RedeemResult = {
   projectId: string;
   feedbackDatabaseId: string | null;
   crashDatabaseId: string | null;
+  analyticsDatabaseId: string | null;
 };
 
 /**
@@ -273,7 +287,7 @@ async function grantRole(
   tx: Db,
   row: InvitationRow,
   userId: string,
-): Promise<{ projectId: string; feedbackDatabaseId: string | null; crashDatabaseId: string | null }> {
+): Promise<{ projectId: string; feedbackDatabaseId: string | null; crashDatabaseId: string | null; analyticsDatabaseId: string | null }> {
   if (row.projectId) {
     await tx
       .insert(projectMemberships)
@@ -282,7 +296,7 @@ async function grantRole(
         target: [projectMemberships.projectId, projectMemberships.userId],
         set: { role: row.role, updatedAt: new Date() },
       });
-    return { projectId: row.projectId, feedbackDatabaseId: null, crashDatabaseId: null };
+    return { projectId: row.projectId, feedbackDatabaseId: null, crashDatabaseId: null, analyticsDatabaseId: null };
   }
 
   if (row.crashDatabaseId) {
@@ -296,7 +310,21 @@ async function grantRole(
         target: [crashDatabaseMemberships.crashDatabaseId, crashDatabaseMemberships.userId],
         set: { role: row.role, updatedAt: new Date() },
       });
-    return { projectId, feedbackDatabaseId: null, crashDatabaseId: row.crashDatabaseId };
+    return { projectId, feedbackDatabaseId: null, crashDatabaseId: row.crashDatabaseId, analyticsDatabaseId: null };
+  }
+
+  if (row.analyticsDatabaseId) {
+    const analyticsRows = await tx.select({ projectId: analyticsDatabases.projectId }).from(analyticsDatabases).where(eq(analyticsDatabases.id, row.analyticsDatabaseId)).limit(1);
+    const projectId = analyticsRows[0]?.projectId;
+    if (!projectId) throw apiError('analytics_database_not_found', 'That analytics database no longer exists.');
+    await tx
+      .insert(analyticsDatabaseMemberships)
+      .values({ analyticsDatabaseId: row.analyticsDatabaseId, userId, role: row.role })
+      .onConflictDoUpdate({
+        target: [analyticsDatabaseMemberships.analyticsDatabaseId, analyticsDatabaseMemberships.userId],
+        set: { role: row.role, updatedAt: new Date() },
+      });
+    return { projectId, feedbackDatabaseId: null, crashDatabaseId: null, analyticsDatabaseId: row.analyticsDatabaseId };
   }
 
   if (!row.feedbackDatabaseId) {
@@ -322,7 +350,7 @@ async function grantRole(
       set: { role: row.role, updatedAt: new Date() },
     });
 
-  return { projectId, feedbackDatabaseId: row.feedbackDatabaseId, crashDatabaseId: null };
+  return { projectId, feedbackDatabaseId: row.feedbackDatabaseId, crashDatabaseId: null, analyticsDatabaseId: null };
 }
 
 async function requireRedeemable(db: Db, token: string): Promise<InvitationRow> {
@@ -355,9 +383,15 @@ function assertRedeemable(row: InvitationRow | undefined): asserts row is Invita
 
 function scopeCondition(scope: InvitationScope) {
   if (scope.kind === 'project') {
-    return and(eq(invitations.projectId, scope.projectId), isNull(invitations.feedbackDatabaseId), isNull(invitations.crashDatabaseId));
+    return and(
+      eq(invitations.projectId, scope.projectId),
+      isNull(invitations.feedbackDatabaseId),
+      isNull(invitations.crashDatabaseId),
+      isNull(invitations.analyticsDatabaseId),
+    );
   }
   if (scope.kind === 'crashDatabase') return eq(invitations.crashDatabaseId, scope.crashDatabaseId);
+  if (scope.kind === 'analyticsDatabase') return eq(invitations.analyticsDatabaseId, scope.analyticsDatabaseId);
   return eq(invitations.feedbackDatabaseId, scope.feedbackDatabaseId);
 }
 
@@ -383,6 +417,16 @@ async function scopeNames(
       .where(eq(crashDatabases.id, row.crashDatabaseId))
       .limit(1);
     return { scopeName: crashRows[0]?.database ?? 'a crash database', projectName: crashRows[0]?.project ?? 'a project' };
+  }
+
+  if (row.analyticsDatabaseId) {
+    const analyticsRows = await db
+      .select({ database: analyticsDatabases.name, project: projects.name })
+      .from(analyticsDatabases)
+      .innerJoin(projects, eq(projects.id, analyticsDatabases.projectId))
+      .where(eq(analyticsDatabases.id, row.analyticsDatabaseId))
+      .limit(1);
+    return { scopeName: analyticsRows[0]?.database ?? 'an analytics database', projectName: analyticsRows[0]?.project ?? 'a project' };
   }
 
   const rows = await db
@@ -414,6 +458,7 @@ async function toView(db: Db, row: InvitationRow): Promise<InvitationView> {
     projectId: row.projectId,
     feedbackDatabaseId: row.feedbackDatabaseId,
     crashDatabaseId: row.crashDatabaseId,
+    analyticsDatabaseId: row.analyticsDatabaseId,
     scopeName: named.scopeName,
     status: invitationStatus(row),
     createdAt: row.createdAt,

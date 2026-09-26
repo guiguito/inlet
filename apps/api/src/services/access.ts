@@ -2,6 +2,8 @@ import { and, eq, isNull } from 'drizzle-orm';
 import { effectiveRole, roleAtLeast, type Role } from '@inlet/shared';
 import type { Db } from '../db/index.js';
 import {
+  analyticsDatabaseMemberships,
+  analyticsDatabases,
   crashDatabaseMemberships,
   crashDatabases,
   feedbackDatabaseMemberships,
@@ -9,6 +11,7 @@ import {
   projectCredentials,
   projectMemberships,
   projects,
+  type AnalyticsDatabaseRow,
   type CrashDatabaseRow,
   type FeedbackDatabaseRow,
   type ProjectCredentialRow,
@@ -283,6 +286,84 @@ export async function listAccessibleCrashDatabaseIds(db: Db, principal: Principa
     .select({ id: crashDatabaseMemberships.crashDatabaseId })
     .from(crashDatabaseMemberships)
     .where(eq(crashDatabaseMemberships.userId, principal.userId));
+  return [...new Set([...viaProject, ...viaDatabase].map((row) => row.id))];
+}
+
+// --- Analytics databases (Release 8): the fourth scope (FD-007) ----------------------
+//
+// The same questions again, asked of the analytics tables, for the reason given above.
+
+export type AnalyticsDatabaseAccess = { database: AnalyticsDatabaseRow; project: ProjectRow; role: Role };
+
+const analyticsDatabaseNotFound = () => apiError('analytics_database_not_found', 'That analytics database does not exist.');
+
+/** FD-007: project Admin wins, then the analytics-database assignment, then the project role. */
+export async function analyticsDatabaseRoleOf(db: Db, principal: Principal, database: AnalyticsDatabaseRow): Promise<Role | null> {
+  const projectRole = await projectRoleOf(db, principal, database.projectId);
+  if (principal.kind === 'credential') return projectRole;
+  if (projectRole === 'admin') return 'admin';
+
+  const rows = await db
+    .select({ role: analyticsDatabaseMemberships.role })
+    .from(analyticsDatabaseMemberships)
+    .where(and(eq(analyticsDatabaseMemberships.analyticsDatabaseId, database.id), eq(analyticsDatabaseMemberships.userId, principal.userId)))
+    .limit(1);
+  return effectiveRole(projectRole, rows[0]?.role ?? null);
+}
+
+/**
+ * UX Analytics 7.3: reading needs Viewer, creating and editing Creator, deletion, country
+ * derivation and storage Admin. PostgreSQL only, so it answers while the event store is down.
+ */
+export async function requireAnalyticsDatabase(db: Db, principal: Principal, databaseId: string, required: Role): Promise<AnalyticsDatabaseAccess> {
+  const [found] = await db
+    .select({ database: analyticsDatabases, project: projects })
+    .from(analyticsDatabases)
+    .innerJoin(projects, eq(projects.id, analyticsDatabases.projectId))
+    .where(eq(analyticsDatabases.id, databaseId))
+    .limit(1);
+  if (!found) throw analyticsDatabaseNotFound();
+
+  const role = await analyticsDatabaseRoleOf(db, principal, found.database);
+  if (role === null) throw analyticsDatabaseNotFound();
+  if (!roleAtLeast(role, required)) {
+    throw errors.forbidden(`This action needs the ${required} role on this analytics database.`);
+  }
+  return { database: found.database, project: found.project, role };
+}
+
+/**
+ * AN-010, AN-023: ingest takes any project credential, publishable or secret, for an
+ * analytics database of that credential's project, and nothing else does.
+ */
+export async function requireClientAnalyticsDatabase(db: Db, credential: ProjectCredentialRow, databaseId: string): Promise<AnalyticsDatabaseRow> {
+  const [database] = await db
+    .select()
+    .from(analyticsDatabases)
+    .where(and(eq(analyticsDatabases.id, databaseId), eq(analyticsDatabases.projectId, credential.projectId)))
+    .limit(1);
+  if (!database) {
+    throw apiError('analytics_database_inaccessible', 'That analytics database does not belong to this API key’s project.');
+  }
+  return database;
+}
+
+/** Analytics databases the principal can at least view, for listing endpoints. */
+export async function listAccessibleAnalyticsDatabaseIds(db: Db, principal: Principal): Promise<string[]> {
+  if (principal.kind === 'credential') {
+    if (principal.credential.type !== 'secret') return [];
+    const rows = await db.select({ id: analyticsDatabases.id }).from(analyticsDatabases).where(eq(analyticsDatabases.projectId, principal.credential.projectId));
+    return rows.map((row) => row.id);
+  }
+  const viaProject = await db
+    .select({ id: analyticsDatabases.id })
+    .from(analyticsDatabases)
+    .innerJoin(projectMemberships, eq(projectMemberships.projectId, analyticsDatabases.projectId))
+    .where(eq(projectMemberships.userId, principal.userId));
+  const viaDatabase = await db
+    .select({ id: analyticsDatabaseMemberships.analyticsDatabaseId })
+    .from(analyticsDatabaseMemberships)
+    .where(eq(analyticsDatabaseMemberships.userId, principal.userId));
   return [...new Set([...viaProject, ...viaDatabase].map((row) => row.id))];
 }
 

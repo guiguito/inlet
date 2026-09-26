@@ -18,6 +18,7 @@ Everything is under `/v1`. Requests and responses are JSON unless stated otherwi
 - [Slack notifications](#slack-notifications)
 - [Access: members and invitations](#access-members-and-invitations)
 - [Crash reports](#crash-reports)
+- [Analytics databases](#analytics-databases)
 - [Errors](#errors)
 - [Limits](#limits)
 - [MCP over HTTP](#mcp-over-http)
@@ -1080,6 +1081,88 @@ settings as a feedback database. A crash database announces `crash_group_opened`
 message is `kind · type · top frame or module · release`, the count, first seen, affected
 users and a link. The error message text is never sent.
 
+## Analytics databases
+
+An analytics database counts how a product is used, from the events its apps send
+(UX Analytics PRD). It needs the analytics event store, ClickHouse, which a deployment
+enables with `docker compose --profile analytics up -d` or `INLET_CLICKHOUSE_URL` (see
+[DEPLOYMENT.md](DEPLOYMENT.md)). Everything below is available now; ingest, queries and
+the rest arrive with later pieces of Release 8.
+
+```
+POST /v1/projects/prj_5waxfxyby3st/analytics-databases
+Cookie: inlet_session=…
+
+{ "name": "Checkout app", "timezone": "Europe/Paris" }
+```
+
+```json
+{
+  "id": "adb_4kq2m8vx7ncd",
+  "projectId": "prj_5waxfxyby3st",
+  "name": "Checkout app",
+  "type": "analytics",
+  "timezone": "Europe/Paris",
+  "countryDerivation": true,
+  "storage": { "maxAgeDays": 395, "maxEvents": 500000000, "latenessDays": 30 },
+  "limits": { "eventNames": 500, "newEventNamesPerHour": 50, "paramKeysPerEventName": 100, "categoriesPerEventName": 10 },
+  "createdAt": "2026-09-26T10:00:00.000Z",
+  "updatedAt": "2026-09-26T10:00:00.000Z"
+}
+```
+
+### The reporting timezone
+
+`timezone` is required and never changes: every day, week, month and year the database
+reports is counted in it, and each stored event carries its day in it. It must be an IANA
+name that both the API's timezone data and the event store's `system.time_zones` list.
+Aliases are accepted and stored exactly as given (`Europe/Kiev`, `US/Eastern`); the name's
+case must match. Offsets are refused, including `UTC+2` (which POSIX reads as two hours
+west of UTC), `GMT-3` and `+02:00`. A missing or unlisted zone is `400 timezone_invalid`
+with `details[0].path` = `timezone`. A zone renamed after the server's timezone data was
+published is known to it by its former name; the interface proposes that name.
+
+### Routes
+
+```
+GET    /v1/projects/{projectId}/analytics-databases     the ones you can read
+POST   /v1/projects/{projectId}/analytics-databases     {name, timezone}
+GET    /v1/analytics-databases/{id}                     plus eventStore: available | unavailable
+PATCH  /v1/analytics-databases/{id}                     {name?, countryDerivation?}
+GET    /v1/analytics-databases/{id}/deletion-impact     → {events, installations, users, eventStore, funnels, cohorts, notice}
+DELETE /v1/analytics-databases/{id}
+GET|PUT|DELETE /v1/analytics-databases/{id}/members[/{userId}]
+GET|POST       /v1/analytics-databases/{id}/invitations, …/invitations/{invitationId}/revoke
+GET|PATCH      /v1/analytics-databases/{id}/slack-notifications, POST …/slack-notifications/test
+```
+
+- **Creation** needs Creator or Admin and the event store. A deployment without one answers
+  `409 analytics_not_enabled`, whose message names the step that enables it; once the
+  event store has been ready, an outage answers `503 analytics_unavailable` with
+  `Retry-After`. A deployment holds at most 50 analytics databases unless its operator
+  changed that (`409 analytics_database_limit`). Storage starts at the operator's defaults,
+  country derivation on, and the database gets its standard Retention cohort.
+- **Reading** returns the storage settings in force, the stored values applied at the
+  operator's current bounds, and the deployment's event-name, param-key and category
+  limits, which are the same for every analytics database. It never returns the database's
+  installation secret. `eventStore` says whether the event store answers now.
+- **Renaming** needs Creator or Admin. **`countryDerivation`** needs a database or project
+  Admin; it applies to events received afterwards and leaves stored countries as they are.
+- **Deletion** needs Admin. It answers as fast for millions of events as for none: the
+  database's row goes, with its funnels, cohorts, incidents, memberships, invitations,
+  notification settings and queued deliveries, in one transaction, and its events become
+  unreadable at once; a background worker then removes them from the event store.
+  Deleting a project does the same for each of its analytics databases. The deletion impact
+  reports the events, device installation records and distinct user IDs the event store
+  holds, as `null` with `eventStore: "unavailable"` while it cannot be reached, which never
+  prevents the deletion.
+- **Reads, renames and deletion work while the event store is down.** Only creation needs it.
+- **Slack settings** are the shared ones. An analytics database announces data-health
+  incidents only (AN-190), so `contentLevel` is accepted, stored and never read for it, as
+  for a crash database.
+- **A publishable key reads and changes nothing here** (`403 insufficient_scope`); it will
+  only ingest events.
+
 ## Errors
 
 Every failure returns the same shape:
@@ -1133,6 +1216,18 @@ The codes you are most likely to handle:
 | `last_admin_removal` | 409 | A project must keep at least one Admin. |
 | `malware_detected` | 400 | The malware scanner rejected the upload. Retrying the same bytes will not help. |
 | `slack_delivery_failed` | 502 | Slack refused the message. Its own error string is in the message and details. |
+| `analytics_database_not_found`, `analytics_database_inaccessible` | 404, 403 | No such analytics database, or it belongs to another project. |
+| `analytics_not_enabled` | 409 | Creating an analytics database on a deployment without the event store. The message names the step that enables it. |
+| `analytics_unavailable` | 503 | The event store is unreachable or refused the call. Retry after `Retry-After`. |
+| `analytics_database_limit` | 409 | The deployment already holds its limit of analytics databases (50 unless the operator changed it). |
+| `timezone_invalid` | 400 | A missing reporting timezone, an offset, or a zone the API's or the event store's timezone data does not list. |
+| `confirmation_mismatch` | 400 | A destructive action whose echoed name or ID does not match. |
+| `analytics_busy`, `query_limit_exceeded` | 503 | No analytics query slot within ten seconds, or a query over its time or memory limit. |
+| `invalid_query` | 400 | An analytics query definition outside the contract; `details` carries the path. |
+| `event_not_found`, `funnel_not_found`, `cohort_not_found`, `profile_not_found` | 404 | No such event name, funnel, cohort or profile in this analytics database. |
+| `standard_cohort_immutable`, `standard_event_undeletable` | 409 | The Retention cohort cannot be edited or deleted; a standard event cannot be deleted or blocked. |
+| `storage_setting_out_of_bounds` | 400 | A storage setting outside the deployment's bounds, which the message names. |
+| `batch_too_large`, `too_many_events` | 413, 400 | An analytics batch over 256 KiB, or of more than 100 events. |
 
 ## Limits
 
@@ -1163,7 +1258,8 @@ Security rate limits also apply, and no user of the platform can configure them:
 submission-intent creation, uploads and finalization are all throttled. The public hosted
 form routes carry their own limits, applied per requesting address and per slug. A
 throttled request returns `429 rate_limit_exceeded`. The deployment operator may move the
-limits of the collection routes, and the crash retention bounds, within hard limits (see
+limits of the collection routes, the crash retention bounds and the analytics limits and
+storage settings, within hard limits (see
 "Operator limits" in [DEPLOYMENT.md](DEPLOYMENT.md)).
 
 ## MCP over HTTP
@@ -1220,4 +1316,10 @@ cross-origin request are all refused.
 | Create, rename a crash database | No | Yes | Creator or Admin |
 | Delete a crash database | No | Yes | Admin |
 | Edit or delete one crash report | No | No | Not supported |
+| List and read analytics databases | No | Yes | Viewer or above |
+| Create, rename an analytics database | No | Yes | Creator or Admin |
+| Switch an analytics database's country derivation | No | Yes | Database or project Admin |
+| Read an analytics database's deletion impact, delete it | No | Yes | Admin |
+| Ingest analytics events (Release 8, to come) | Yes | Yes | Not applicable |
+| Edit or delete one analytics event | No | No | Not supported |
 | Connect an MCP client to `/v1/mcp` | No | Yes | No |

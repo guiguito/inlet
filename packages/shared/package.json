@@ -17,6 +17,10 @@
     "./feedback-core": {
       "types": "./dist/feedback-core.d.ts",
       "default": "./dist/feedback-core.js"
+    },
+    "./analytics-core": {
+      "types": "./dist/analytics-core.d.ts",
+      "default": "./dist/analytics-core.js"
     }
   },
   "scripts": {

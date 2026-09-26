@@ -105,6 +105,15 @@ export function InvitationPage() {
   );
 }
 
+
+/** Every scope an invitation can have (FD-007). */
+const SCOPE_LABEL: Record<InvitationPreview['scope'], string> = {
+  project: 'project',
+  feedback_database: 'feedback database',
+  crash_database: 'crash database',
+  analytics_database: 'analytics database',
+};
+
 function RedeemCard({
   preview,
   email,
@@ -128,7 +137,7 @@ function RedeemCard({
   error: string | null;
   onSubmit: () => void;
 }) {
-  const scope = preview.scope === 'project' ? 'project' : 'feedback database';
+  const scope = SCOPE_LABEL[preview.scope];
 
   return (
     <Card>
@@ -140,7 +149,7 @@ function RedeemCard({
             <span>
               on the {scope} <strong className="font-medium text-foreground">{preview.scopeName}</strong>
             </span>
-            {preview.scope === 'feedback_database' &&
+            {preview.scope !== 'project' &&
             preview.projectName !== preview.scopeName ? (
               <span>in {preview.projectName}</span>
             ) : null}

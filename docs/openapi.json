@@ -474,6 +474,21 @@
                   "analytics_unavailable",
                   "analytics_busy",
                   "query_limit_exceeded",
+                  "analytics_database_not_found",
+                  "analytics_database_inaccessible",
+                  "analytics_database_limit",
+                  "timezone_invalid",
+                  "invalid_query",
+                  "event_not_found",
+                  "funnel_not_found",
+                  "cohort_not_found",
+                  "profile_not_found",
+                  "standard_cohort_immutable",
+                  "standard_event_undeletable",
+                  "storage_setting_out_of_bounds",
+                  "batch_too_large",
+                  "too_many_events",
+                  "confirmation_mismatch",
                   "slack_delivery_failed",
                   "rate_limit_exceeded",
                   "internal_error"
@@ -1437,7 +1452,8 @@
             "enum": [
               "project",
               "feedback_database",
-              "crash_database"
+              "crash_database",
+              "analytics_database"
             ]
           },
           "projectId": {
@@ -1453,6 +1469,12 @@
             ]
           },
           "crashDatabaseId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "analyticsDatabaseId": {
             "type": [
               "string",
               "null"
@@ -1503,6 +1525,7 @@
           "projectId",
           "feedbackDatabaseId",
           "crashDatabaseId",
+          "analyticsDatabaseId",
           "scopeName",
           "status",
           "createdAt",
@@ -1528,7 +1551,8 @@
             "enum": [
               "project",
               "feedback_database",
-              "crash_database"
+              "crash_database",
+              "analytics_database"
             ]
           },
           "scopeName": {
@@ -2450,6 +2474,21 @@
                   "analytics_unavailable",
                   "analytics_busy",
                   "query_limit_exceeded",
+                  "analytics_database_not_found",
+                  "analytics_database_inaccessible",
+                  "analytics_database_limit",
+                  "timezone_invalid",
+                  "invalid_query",
+                  "event_not_found",
+                  "funnel_not_found",
+                  "cohort_not_found",
+                  "profile_not_found",
+                  "standard_cohort_immutable",
+                  "standard_event_undeletable",
+                  "storage_setting_out_of_bounds",
+                  "batch_too_large",
+                  "too_many_events",
+                  "confirmation_mismatch",
                   "slack_delivery_failed",
                   "rate_limit_exceeded",
                   "internal_error"
@@ -3496,7 +3535,8 @@
             "enum": [
               "project",
               "feedback_database",
-              "crash_database"
+              "crash_database",
+              "analytics_database"
             ]
           },
           "projectId": {
@@ -3512,6 +3552,12 @@
             ]
           },
           "crashDatabaseId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "analyticsDatabaseId": {
             "type": [
               "string",
               "null"
@@ -3574,6 +3620,7 @@
           "projectId",
           "feedbackDatabaseId",
           "crashDatabaseId",
+          "analyticsDatabaseId",
           "scopeName",
           "status",
           "createdAt",
@@ -3600,7 +3647,8 @@
             "enum": [
               "project",
               "feedback_database",
-              "crash_database"
+              "crash_database",
+              "analytics_database"
             ]
           },
           "scopeName": {
@@ -9217,7 +9265,8 @@
                       "enum": [
                         "project",
                         "feedback_database",
-                        "crash_database"
+                        "crash_database",
+                        "analytics_database"
                       ]
                     },
                     "projectId": {
@@ -9233,6 +9282,12 @@
                       ]
                     },
                     "crashDatabaseId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "analyticsDatabaseId": {
                       "type": [
                         "string",
                         "null"
@@ -9303,6 +9358,7 @@
                     "projectId",
                     "feedbackDatabaseId",
                     "crashDatabaseId",
+                    "analyticsDatabaseId",
                     "scopeName",
                     "status",
                     "createdAt",
@@ -9568,7 +9624,8 @@
                       "enum": [
                         "project",
                         "feedback_database",
-                        "crash_database"
+                        "crash_database",
+                        "analytics_database"
                       ]
                     },
                     "projectId": {
@@ -9584,6 +9641,12 @@
                       ]
                     },
                     "crashDatabaseId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "analyticsDatabaseId": {
                       "type": [
                         "string",
                         "null"
@@ -9654,6 +9717,7 @@
                     "projectId",
                     "feedbackDatabaseId",
                     "crashDatabaseId",
+                    "analyticsDatabaseId",
                     "scopeName",
                     "status",
                     "createdAt",
@@ -10165,7 +10229,8 @@
                       "enum": [
                         "project",
                         "feedback_database",
-                        "crash_database"
+                        "crash_database",
+                        "analytics_database"
                       ]
                     },
                     "projectId": {
@@ -10181,6 +10246,12 @@
                       ]
                     },
                     "crashDatabaseId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "analyticsDatabaseId": {
                       "type": [
                         "string",
                         "null"
@@ -10251,6 +10322,7 @@
                     "projectId",
                     "feedbackDatabaseId",
                     "crashDatabaseId",
+                    "analyticsDatabaseId",
                     "scopeName",
                     "status",
                     "createdAt",
@@ -10312,6 +10384,611 @@
     "/v1/crash-databases/{databaseId}/invitations/{invitationId}/revoke": {
       "post": {
         "summary": "Revoke an unredeemed crash-database invitation",
+        "tags": [
+          "Access"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "invitationId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invitation"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/analytics-databases/{databaseId}/members": {
+      "get": {
+        "summary": "List who can reach one analytics database",
+        "tags": [
+          "Access"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Member"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/analytics-databases/{databaseId}/members/{userId}": {
+      "put": {
+        "summary": "Assign a role on one analytics database",
+        "tags": [
+          "Access"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "admin",
+                      "creator",
+                      "viewer"
+                    ]
+                  }
+                },
+                "required": [
+                  "role"
+                ]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "userId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Member"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Clear an analytics-database assignment",
+        "tags": [
+          "Access"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "userId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/analytics-databases/{databaseId}/invitations": {
+      "get": {
+        "summary": "List an analytics database’s invitations",
+        "tags": [
+          "Access"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Invitation"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Invite someone to one analytics database",
+        "tags": [
+          "Access"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "admin",
+                      "creator",
+                      "viewer"
+                    ]
+                  }
+                },
+                "required": [
+                  "role"
+                ]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "role": {
+                      "type": "string",
+                      "enum": [
+                        "admin",
+                        "creator",
+                        "viewer"
+                      ]
+                    },
+                    "scope": {
+                      "type": "string",
+                      "enum": [
+                        "project",
+                        "feedback_database",
+                        "crash_database",
+                        "analytics_database"
+                      ]
+                    },
+                    "projectId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "feedbackDatabaseId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "crashDatabaseId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "analyticsDatabaseId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "scopeName": {
+                      "type": "string",
+                      "description": "The name of what the invitation grants access to."
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "redeemed",
+                        "revoked",
+                        "expired"
+                      ]
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "expiresAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "redeemedAt": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "redeemedByEmail": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "revokedAt": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "token": {
+                      "type": "string",
+                      "description": "The single-use token. Returned once, at creation."
+                    },
+                    "url": {
+                      "type": "string",
+                      "description": "The link to send. Built from INLET_PUBLIC_URL."
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "role",
+                    "scope",
+                    "projectId",
+                    "feedbackDatabaseId",
+                    "crashDatabaseId",
+                    "analyticsDatabaseId",
+                    "scopeName",
+                    "status",
+                    "createdAt",
+                    "expiresAt",
+                    "redeemedAt",
+                    "redeemedByEmail",
+                    "revokedAt",
+                    "token",
+                    "url"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/analytics-databases/{databaseId}/invitations/{invitationId}/revoke": {
+      "post": {
+        "summary": "Revoke an unredeemed analytics-database invitation",
         "tags": [
           "Access"
         ],
@@ -14960,6 +15637,1303 @@
       }
     },
     "/v1/crash-databases/{databaseId}/slack-notifications/test": {
+      "post": {
+        "summary": "Send a test message to Slack",
+        "tags": [
+          "Slack notifications"
+        ],
+        "description": "Delivers a sample message immediately using the saved settings and reports what Slack said. The content is placeholder text, never a real response, so testing an integration never exposes a respondent.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "delivered": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    }
+                  },
+                  "required": [
+                    "delivered"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{projectId}/analytics-databases": {
+      "get": {
+        "summary": "List the analytics databases of a project",
+        "tags": [
+          "Analytics databases"
+        ],
+        "description": "The ones the caller can read. Works while the event store is unreachable.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "description": "Stable public identifier, prefixed adb_ (AN-001)."
+                      },
+                      "projectId": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "type": "string",
+                        "description": "Foundations FD-001: the database type, fixed at creation.",
+                        "enum": [
+                          "analytics"
+                        ]
+                      },
+                      "timezone": {
+                        "type": "string",
+                        "description": "AN-002: the reporting timezone, as given at creation. Never changes."
+                      },
+                      "countryDerivation": {
+                        "type": "boolean",
+                        "description": "AN-003: whether events received from now on get a country from the request."
+                      },
+                      "storage": {
+                        "type": "object",
+                        "properties": {
+                          "maxAgeDays": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "maxEvents": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "latenessDays": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "maxAgeDays",
+                          "maxEvents",
+                          "latenessDays"
+                        ],
+                        "additionalProperties": false,
+                        "description": "AN-160: the storage settings in force, the stored values applied at the deployment’s current bounds."
+                      },
+                      "limits": {
+                        "type": "object",
+                        "properties": {
+                          "eventNames": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "newEventNamesPerHour": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "paramKeysPerEventName": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "categoriesPerEventName": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "eventNames",
+                          "newEventNamesPerHour",
+                          "paramKeysPerEventName",
+                          "categoriesPerEventName"
+                        ],
+                        "additionalProperties": false,
+                        "description": "AN-003, AN-021, AN-022: the deployment’s limits, which apply to every analytics database."
+                      },
+                      "createdAt": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "updatedAt": {
+                        "type": "string",
+                        "format": "date-time"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "projectId",
+                      "name",
+                      "type",
+                      "timezone",
+                      "countryDerivation",
+                      "storage",
+                      "limits",
+                      "createdAt",
+                      "updatedAt"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create an analytics database",
+        "tags": [
+          "Analytics databases"
+        ],
+        "description": "AN-001 to AN-005. Needs the event store: without one, `409 analytics_not_enabled` names the step that enables it; while a ready one is unreachable, `503 analytics_unavailable`.\n\n`timezone` is required: an IANA name both the API’s and the event store’s timezone data list, stored exactly as given and never changed. Offsets such as `UTC+2` are refused with `timezone_invalid`.\n\nStorage starts at the deployment’s defaults (13 months, 500 million events, 30 days of lateness unless the operator changed them), country derivation on, and the standard Retention cohort (AN-107). A deployment holds at most 50 analytics databases unless its operator changed that (`analytics_database_limit`).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "timezone": {
+                    "description": "Required. An IANA timezone name, such as Europe/Paris, stored exactly as given and never changed (AN-002).",
+                    "type": "string",
+                    "maxLength": 64
+                  }
+                },
+                "required": [
+                  "name"
+                ]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "description": "Stable public identifier, prefixed adb_ (AN-001)."
+                    },
+                    "projectId": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string",
+                      "description": "Foundations FD-001: the database type, fixed at creation.",
+                      "enum": [
+                        "analytics"
+                      ]
+                    },
+                    "timezone": {
+                      "type": "string",
+                      "description": "AN-002: the reporting timezone, as given at creation. Never changes."
+                    },
+                    "countryDerivation": {
+                      "type": "boolean",
+                      "description": "AN-003: whether events received from now on get a country from the request."
+                    },
+                    "storage": {
+                      "type": "object",
+                      "properties": {
+                        "maxAgeDays": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "maxEvents": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "latenessDays": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "maxAgeDays",
+                        "maxEvents",
+                        "latenessDays"
+                      ],
+                      "additionalProperties": false,
+                      "description": "AN-160: the storage settings in force, the stored values applied at the deployment’s current bounds."
+                    },
+                    "limits": {
+                      "type": "object",
+                      "properties": {
+                        "eventNames": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "newEventNamesPerHour": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "paramKeysPerEventName": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "categoriesPerEventName": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "eventNames",
+                        "newEventNamesPerHour",
+                        "paramKeysPerEventName",
+                        "categoriesPerEventName"
+                      ],
+                      "additionalProperties": false,
+                      "description": "AN-003, AN-021, AN-022: the deployment’s limits, which apply to every analytics database."
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "projectId",
+                    "name",
+                    "type",
+                    "timezone",
+                    "countryDerivation",
+                    "storage",
+                    "limits",
+                    "createdAt",
+                    "updatedAt"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/analytics-databases/{databaseId}": {
+      "get": {
+        "summary": "Read an analytics database",
+        "tags": [
+          "Analytics databases"
+        ],
+        "description": "Its reporting timezone, country derivation, storage settings in force and the deployment’s limits. Never its installation secret. Works while the event store is unreachable, and says whether it answers.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "description": "Stable public identifier, prefixed adb_ (AN-001)."
+                    },
+                    "projectId": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string",
+                      "description": "Foundations FD-001: the database type, fixed at creation.",
+                      "enum": [
+                        "analytics"
+                      ]
+                    },
+                    "timezone": {
+                      "type": "string",
+                      "description": "AN-002: the reporting timezone, as given at creation. Never changes."
+                    },
+                    "countryDerivation": {
+                      "type": "boolean",
+                      "description": "AN-003: whether events received from now on get a country from the request."
+                    },
+                    "storage": {
+                      "type": "object",
+                      "properties": {
+                        "maxAgeDays": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "maxEvents": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "latenessDays": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "maxAgeDays",
+                        "maxEvents",
+                        "latenessDays"
+                      ],
+                      "additionalProperties": false,
+                      "description": "AN-160: the storage settings in force, the stored values applied at the deployment’s current bounds."
+                    },
+                    "limits": {
+                      "type": "object",
+                      "properties": {
+                        "eventNames": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "newEventNamesPerHour": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "paramKeysPerEventName": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "categoriesPerEventName": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "eventNames",
+                        "newEventNamesPerHour",
+                        "paramKeysPerEventName",
+                        "categoriesPerEventName"
+                      ],
+                      "additionalProperties": false,
+                      "description": "AN-003, AN-021, AN-022: the deployment’s limits, which apply to every analytics database."
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "eventStore": {
+                      "type": "string",
+                      "enum": [
+                        "available",
+                        "unavailable"
+                      ],
+                      "description": "Whether the event store answers now (UX Analytics 8.1). The database’s records are readable either way."
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "projectId",
+                    "name",
+                    "type",
+                    "timezone",
+                    "countryDerivation",
+                    "storage",
+                    "limits",
+                    "createdAt",
+                    "updatedAt",
+                    "eventStore"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Rename an analytics database or switch its country derivation",
+        "tags": [
+          "Analytics databases"
+        ],
+        "description": "Renaming needs Creator or Admin. Switching `countryDerivation` needs a database or project Admin (AN-003); it applies to events received afterwards and leaves stored countries unchanged. The reporting timezone cannot be changed.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "description": "Creator or Admin.",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "countryDerivation": {
+                    "description": "Database or project Admin only (AN-003). Applies to events received afterwards.",
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "description": "Stable public identifier, prefixed adb_ (AN-001)."
+                    },
+                    "projectId": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string",
+                      "description": "Foundations FD-001: the database type, fixed at creation.",
+                      "enum": [
+                        "analytics"
+                      ]
+                    },
+                    "timezone": {
+                      "type": "string",
+                      "description": "AN-002: the reporting timezone, as given at creation. Never changes."
+                    },
+                    "countryDerivation": {
+                      "type": "boolean",
+                      "description": "AN-003: whether events received from now on get a country from the request."
+                    },
+                    "storage": {
+                      "type": "object",
+                      "properties": {
+                        "maxAgeDays": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "maxEvents": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "latenessDays": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "maxAgeDays",
+                        "maxEvents",
+                        "latenessDays"
+                      ],
+                      "additionalProperties": false,
+                      "description": "AN-160: the storage settings in force, the stored values applied at the deployment’s current bounds."
+                    },
+                    "limits": {
+                      "type": "object",
+                      "properties": {
+                        "eventNames": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "newEventNamesPerHour": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "paramKeysPerEventName": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "categoriesPerEventName": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "eventNames",
+                        "newEventNamesPerHour",
+                        "paramKeysPerEventName",
+                        "categoriesPerEventName"
+                      ],
+                      "additionalProperties": false,
+                      "description": "AN-003, AN-021, AN-022: the deployment’s limits, which apply to every analytics database."
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "projectId",
+                    "name",
+                    "type",
+                    "timezone",
+                    "countryDerivation",
+                    "storage",
+                    "limits",
+                    "createdAt",
+                    "updatedAt"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Permanently delete an analytics database",
+        "tags": [
+          "Analytics databases"
+        ],
+        "description": "AN-004. Its data is unreadable when this answers, whatever its size, and whether or not the event store is reachable; the background worker then removes its events from the event store.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "deleted": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    }
+                  },
+                  "required": [
+                    "deleted"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/analytics-databases/{databaseId}/deletion-impact": {
+      "get": {
+        "summary": "What deleting this analytics database would remove",
+        "tags": [
+          "Analytics databases"
+        ],
+        "description": "FD-008, AN-004: retained events, installation records and user IDs from the event store, null while it is unreachable (which does not prevent deletion), and funnels and cohorts.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "events": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Stored events; null while the event store cannot be reached."
+                    },
+                    "installations": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Device installation records; null while the event store cannot be reached."
+                    },
+                    "users": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Distinct user IDs; null while the event store cannot be reached."
+                    },
+                    "eventStore": {
+                      "type": "string",
+                      "enum": [
+                        "available",
+                        "unavailable"
+                      ]
+                    },
+                    "funnels": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "cohorts": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "notice": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "events",
+                    "installations",
+                    "users",
+                    "eventStore",
+                    "funnels",
+                    "cohorts",
+                    "notice"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/analytics-databases/{databaseId}/slack-notifications": {
+      "get": {
+        "summary": "Read the Slack notification settings",
+        "tags": [
+          "Slack notifications"
+        ],
+        "description": "The webhook URL is never returned. `webhookUrlMasked` carries the host and last four characters so an operator can confirm which webhook is saved.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackNotifications"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Change the Slack notification settings",
+        "tags": [
+          "Slack notifications"
+        ],
+        "description": "Every field is optional; only what is sent changes. Setting `webhookUrl` requires a signed-in session rather than an API key. Sending `webhookUrl: null` clears it and switches notifications off.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "description": "Cannot be true without a webhook URL.",
+                    "type": "boolean"
+                  },
+                  "webhookUrl": {
+                    "description": "Write-only. Null clears it and switches notifications off. Never returned by any endpoint.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "contentLevel": {
+                    "description": "How much of a response the message carries. \"link_only\" sends no answer content at all; \"answers\" includes the answers but withholds a collected email address; \"answers_with_email\" includes it. Slack keeps its own copy of whatever is sent.",
+                    "type": "string",
+                    "enum": [
+                      "link_only",
+                      "answers",
+                      "answers_with_email"
+                    ]
+                  },
+                  "messageTitle": {
+                    "description": "Replaces the default heading. May contain Slack mention syntax.",
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 120
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "channel": {
+                    "description": "Legacy custom integration webhooks only; Slack app webhooks ignore it.",
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 80,
+                        "pattern": "^[#@][^\\s<>|]+$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "username": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 80
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "iconEmoji": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 60,
+                        "pattern": "^:[a-z0-9_+-]+:$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackNotifications"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/analytics-databases/{databaseId}/slack-notifications/test": {
       "post": {
         "summary": "Send a test message to Slack",
         "tags": [

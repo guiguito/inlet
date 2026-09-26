@@ -175,6 +175,12 @@ test.describe('the MCP server', () => {
           'send_crash_test_report',
           'update_crash_group_state',
           'update_crash_retention',
+          // UX Analytics (UX Analytics PRD section 8.3), the database tools of Release 8's piece 2.
+          'create_analytics_database',
+          'delete_analytics_database',
+          'get_analytics_database',
+          'list_analytics_databases',
+          'update_analytics_database',
         ].sort(),
       );
 

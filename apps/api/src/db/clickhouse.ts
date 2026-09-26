@@ -169,6 +169,22 @@ export class EventStore {
   }
 
   /**
+   * Whether the store answers now, within `timeoutMs` (UX Analytics 8.1, "event store
+   * unreachable"). For a screen that says so, never for a guard: a route that needs the
+   * store calls it and lets `mapEventStoreError` answer. Never throws.
+   */
+  async reachable(timeoutMs = 2_000): Promise<boolean> {
+    if (!this.readySinceStart) return false;
+    try {
+      const result = await this.reader.query({ query: 'SELECT 1', format: 'JSONEachRow', abort_signal: AbortSignal.timeout(timeoutMs) });
+      await result.json();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * One attempt at readiness: the database exists, the store answers, and the migrations
    * are applied (or, with migrations off, already recorded). Throws the underlying error,
    * unmapped, so the caller can say what went wrong.

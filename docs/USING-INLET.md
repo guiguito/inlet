@@ -294,6 +294,44 @@ nothing about the device or the person, and turned off with `identity: false`. E
 the envelope your code built; `context` is whatever you put there, and the interface says
 so wherever it shows it.
 
+## Analytics databases
+
+An **analytics database** counts how a product is used: which installations are active,
+which versions they run, how they move through a funnel and how many come back. It is built
+from events your apps send, and it lives in its own store, ClickHouse, which the operator
+turns on with the compose profile `analytics` (see [DEPLOYMENT.md](DEPLOYMENT.md)). A
+deployment without it runs everything else unchanged, and creating an analytics database
+there tells you the one step that enables it.
+
+**Project → Databases → New analytics database.** Give it a name, one per product, which
+may ship several apps. The form proposes your browser's timezone as the **reporting
+timezone**; check the box to confirm it, then create.
+
+The reporting timezone decides where every day, week, month and year begins, for every
+chart, funnel, cohort and install age the database will show. It cannot be changed
+afterwards, because each event is stored with its day in that zone, and recounting a year
+of events in another zone would silently move numbers you have already read and shared.
+Choose the zone your team reads its reports in, not necessarily where your users are. If
+you pick the wrong one, create another analytics database. When the server does not know
+your browser's zone, which happens with a zone renamed recently such as `Europe/Kyiv`, the
+form proposes its former name (`Europe/Kiev`), which counts exactly the same hours.
+
+The database opens on **Insights → Overview**, with four groups: **Insights** (Overview,
+Events, Funnels, Cohorts), **Users**, **Collect** and **Settings**. For now **Settings** is
+where the work is:
+
+- **General**: rename it; read the reporting timezone; switch **country derivation**, on by
+  default, which gives each event received afterwards the country its request came from and
+  never stores the address (only an Admin can change it); and delete the database, typing
+  its name. Deletion states how many events, installations, user IDs, funnels and cohorts go
+  with it, and takes effect at once whatever the size.
+- **Notifications**: the shared Slack panel. An analytics database will announce
+  data-health incidents only, so there is no content level to choose.
+- **Access**: members and invitations for this database alone, as for any other.
+
+When the event store is unreachable, the database's page says so in one sentence; its
+settings still open, and the rest of Inlet works as usual.
+
 ## Sharing access
 
 **Settings → Access**, or the project's own Access tab. Invitations are single-use links

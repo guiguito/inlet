@@ -90,6 +90,7 @@ export const errorResponses = {
   429: errorResponseSchema,
   500: errorResponseSchema,
   502: errorResponseSchema,
+  503: errorResponseSchema,
 } as const;
 
 /** Subsets, so a route only documents the statuses it can actually return. */
@@ -262,10 +263,11 @@ export const createInvitationBodySchema = z.object({ role: z.enum(ROLES) });
 export const invitationSchema = z.object({
   id: z.string(),
   role: z.enum(ROLES),
-  scope: z.enum(['project', 'feedback_database', 'crash_database']),
+  scope: z.enum(['project', 'feedback_database', 'crash_database', 'analytics_database']),
   projectId: z.string().nullable(),
   feedbackDatabaseId: z.string().nullable(),
   crashDatabaseId: z.string().nullable(),
+  analyticsDatabaseId: z.string().nullable(),
   scopeName: z.string().describe('The name of what the invitation grants access to.'),
   status: z.enum(['pending', 'redeemed', 'revoked', 'expired']),
   createdAt: z.date(),
@@ -282,7 +284,7 @@ export const invitationWithLinkSchema = invitationSchema.extend({
 
 export const invitationPreviewSchema = z.object({
   role: z.enum(ROLES),
-  scope: z.enum(['project', 'feedback_database', 'crash_database']),
+  scope: z.enum(['project', 'feedback_database', 'crash_database', 'analytics_database']),
   scopeName: z.string(),
   projectName: z.string(),
   expiresAt: z.date(),
