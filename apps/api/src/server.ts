@@ -1,6 +1,7 @@
 import { pino } from 'pino';
 import { buildApp } from './app.js';
 import type { AppContext } from './context.js';
+import { createEventStore } from './db/clickhouse.js';
 import { createDb } from './db/index.js';
 import { runMigrations } from './db/migrate.js';
 import { loadEnv } from './env.js';
@@ -35,12 +36,17 @@ const log = pino({
 const { db, pool } = createDb(env.INLET_DATABASE_URL);
 const storage = new Storage(env);
 const scanner = new MalwareScanner(env);
-const ctx: AppContext = { env, db, storage, scanner, log };
+const eventStore = createEventStore(env, log);
+const ctx: AppContext = { env, db, eventStore, storage, scanner, log };
 
 if (env.INLET_MIGRATE_ON_START) {
   await runMigrations(db);
   log.info('database schema is up to date');
 }
+
+// In the background: nothing in Inlet waits on the analytics event store (FD-009). It
+// becomes ready, and /v1/health lists `analytics`, once it answers and is migrated.
+eventStore?.start();
 
 await storage.ensureBucket(env.INLET_S3_CREATE_BUCKET);
 if (!(await storage.ensureLifecycleRule())) {
@@ -77,6 +83,7 @@ const shutdown = async (signal: string): Promise<void> => {
   await stopNotificationWorker();
   await app.close();
   storage.destroy();
+  await eventStore?.close();
   await pool.end();
   process.exit(0);
 };

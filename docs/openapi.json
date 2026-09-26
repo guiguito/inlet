@@ -470,6 +470,10 @@
                   "unknown_field",
                   "envelope_too_large",
                   "invalid_envelope",
+                  "analytics_not_enabled",
+                  "analytics_unavailable",
+                  "analytics_busy",
+                  "query_limit_exceeded",
                   "slack_delivery_failed",
                   "rate_limit_exceeded",
                   "internal_error"
@@ -2442,6 +2446,10 @@
                   "unknown_field",
                   "envelope_too_large",
                   "invalid_envelope",
+                  "analytics_not_enabled",
+                  "analytics_unavailable",
+                  "analytics_busy",
+                  "query_limit_exceeded",
                   "slack_delivery_failed",
                   "rate_limit_exceeded",
                   "internal_error"

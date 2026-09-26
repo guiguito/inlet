@@ -1,9 +1,9 @@
 # Every check a contributor runs locally, on every push and pull request.
 #
 # No service containers: the integration suite and the end-to-end server start their own
-# PostgreSQL (the `embedded-postgres` binaries) and RustFS (its release binary, downloaded
-# once into .dev/ and checksummed) through scripts/local-services.mjs, exactly as they do on a laptop, so
-# CI tests the same setup CONTRIBUTING.md describes.
+# PostgreSQL (the `embedded-postgres` binaries), RustFS and ClickHouse (their release binaries,
+# downloaded once into .dev/ and checksummed) through scripts/local-services.mjs, exactly as they
+# do on a laptop, so CI tests the same setup CONTRIBUTING.md describes.
 name: CI
 
 on:
@@ -40,6 +40,13 @@ jobs:
         with:
           path: .dev/bin/rustfs
           key: rustfs-1.0.0-${{ runner.os }}-${{ runner.arch }}
+
+      # The same for ClickHouse, about 200 MB compressed: CLICKHOUSE_VERSION in that script.
+      - name: Cache the ClickHouse binary
+        uses: actions/cache@v4
+        with:
+          path: .dev/bin/clickhouse
+          key: clickhouse-26.8.12.53-${{ runner.os }}-${{ runner.arch }}
 
       - run: npm run typecheck
 

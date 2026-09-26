@@ -1,8 +1,9 @@
 # The bundled deployment (PRD section 12.6).
 #
 # Data lives in named volumes, so restarts and upgrades preserve it. Pointing at an
-# external PostgreSQL or S3-compatible provider is a configuration change: set the
-# INLET_DATABASE_URL or INLET_S3_* variables and remove the service you no longer need.
+# external PostgreSQL, S3-compatible provider or ClickHouse is a configuration change: set
+# the INLET_DATABASE_URL, INLET_S3_* or INLET_CLICKHOUSE_* variables and remove the service
+# you no longer need.
 services:
   postgres:
     image: postgres:18-alpine
@@ -64,6 +65,42 @@ services:
       retries: 10
       start_period: 300s
 
+  # The analytics event store (UX Analytics 9.4), optional. Start it with
+  # `docker compose --profile analytics up -d`: that one step enables analytics, because the
+  # inlet service below already points at it and lists `analytics` in /v1/health once it
+  # answers and Inlet has applied its migrations. Without the profile, Inlet runs every
+  # other feature unchanged (FD-009). Sized for the Small host of UX Analytics 9.5 (4 vCPU
+  # and 8 GB for the whole stack); raise the INLET_CLICKHOUSE_* values on a larger one.
+  clickhouse:
+    # Pinned to a patch release of the 26.8 LTS line, as scripts/local-services.mjs is.
+    image: clickhouse/clickhouse-server:26.8.12.53
+    restart: unless-stopped
+    profiles: ['analytics']
+    environment:
+      INLET_CLICKHOUSE_PASSWORD: ${INLET_CLICKHOUSE_PASSWORD:-inletanalytics}
+      INLET_CLICKHOUSE_READER_PASSWORD: ${INLET_CLICKHOUSE_READER_PASSWORD:-inletanalyticsreader}
+      # Bytes. About 3 GB of the Small host's 8 GB, beside PostgreSQL, RustFS and Inlet.
+      INLET_CLICKHOUSE_MAX_SERVER_MEMORY: ${INLET_CLICKHOUSE_MAX_SERVER_MEMORY:-3221225472}
+      INLET_CLICKHOUSE_MARK_CACHE: ${INLET_CLICKHOUSE_MARK_CACHE:-268435456}
+      INLET_CLICKHOUSE_BACKGROUND_POOL: ${INLET_CLICKHOUSE_BACKGROUND_POOL:-4}
+    volumes:
+      - clickhousedata:/var/lib/clickhouse
+      # deploy/clickhouse holds the server settings and the two users Inlet connects as.
+      - ./deploy/clickhouse/config.xml:/etc/clickhouse-server/config.d/inlet.xml:ro
+      - ./deploy/clickhouse/users.xml:/etc/clickhouse-server/users.d/inlet.xml:ro
+    # ClickHouse opens many files at once, beyond Docker's default limit.
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    # No port is published: Inlet reaches it on the compose network only.
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:8123/ping || exit 1']
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
   inlet:
     build: .
     restart: unless-stopped
@@ -114,7 +151,17 @@ services:
       INLET_CLAMAV_PORT: ${INLET_CLAMAV_PORT:-3310}
       INLET_MALWARE_SCAN_REQUIRED: ${INLET_MALWARE_SCAN_REQUIRED:-false}
 
+      # The analytics event store: the clickhouse service above by default, with no
+      # depends_on, so Inlet never waits for it. Without the profile nothing answers here,
+      # Inlet says so once at startup and keeps analytics off; set INLET_CLICKHOUSE_URL to
+      # empty in .env to turn that off, or to a ClickHouse of your own. A password with
+      # characters such as @ : / must be percent-encoded in these URLs.
+      INLET_CLICKHOUSE_URL: ${INLET_CLICKHOUSE_URL-http://inlet:${INLET_CLICKHOUSE_PASSWORD:-inletanalytics}@clickhouse:8123}
+      INLET_CLICKHOUSE_READ_URL: ${INLET_CLICKHOUSE_READ_URL-http://inlet_reader:${INLET_CLICKHOUSE_READER_PASSWORD:-inletanalyticsreader}@clickhouse:8123}
+      INLET_CLICKHOUSE_DATABASE: ${INLET_CLICKHOUSE_DATABASE:-inlet}
+
 volumes:
   pgdata:
   storagedata:
   clamavdb:
+  clickhousedata:

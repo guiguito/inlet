@@ -7,6 +7,8 @@
  */
 export const TEST_DATABASE = 'inlet_test';
 export const TEST_BUCKET = 'inlet-test';
+/** The ClickHouse database, on the local server scripts/local-services.mjs runs. */
+export const TEST_CLICKHOUSE_DATABASE = 'inlet_test';
 
 export const ADMIN_EMAIL = 'admin@inlet.test';
 export const ADMIN_PASSWORD = 'inlet-test-password';
@@ -33,6 +35,10 @@ export const TEST_ENV = {
   INLET_INTENT_TTL_MINUTES: '30',
   INLET_PENDING_UPLOAD_EXPIRY_DAYS: '1',
   INLET_WEB_DIST: '',
+  // The writer and the read-only user of scripts/local-services.mjs.
+  INLET_CLICKHOUSE_URL: 'http://inlet:inlet@127.0.0.1:8124',
+  INLET_CLICKHOUSE_READ_URL: 'http://inlet_reader:inlet_reader@127.0.0.1:8124',
+  INLET_CLICKHOUSE_DATABASE: TEST_CLICKHOUSE_DATABASE,
   // FR-088's limits are real and non-configurable in production; the suite turns them
   // off so hundreds of assertions in one minute do not trip them. One test re-enables
   // them to prove they work.

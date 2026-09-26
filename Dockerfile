@@ -49,6 +49,8 @@ COPY --from=build /app/packages/shared/dist packages/shared/dist
 COPY --from=build /app/apps/api/package.json apps/api/package.json
 COPY --from=build /app/apps/api/dist apps/api/dist
 COPY --from=build /app/apps/api/drizzle apps/api/drizzle
+# The event store's migrations, which the API applies at start when ClickHouse is configured.
+COPY --from=build /app/apps/api/clickhouse apps/api/clickhouse
 COPY --from=build /app/apps/mcp/package.json apps/mcp/package.json
 COPY --from=build /app/apps/mcp/dist apps/mcp/dist
 COPY --from=build /app/apps/web/dist apps/web/dist

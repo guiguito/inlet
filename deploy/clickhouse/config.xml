@@ -1,0 +1,72 @@
+<!--
+  Server settings for the bundled ClickHouse (compose profile `analytics`), mounted into
+  /etc/clickhouse-server/config.d/. UX Analytics 9.5: on the Small host (4 vCPU and 8 GB for
+  the whole stack) its memory is capped at about 3 GB, its caches and background pools are
+  reduced and its own log tables are off, as ClickHouse's guidance for machines under 16 GB
+  says. The values that matter for sizing come from environment variables that
+  docker-compose.yml sets, with defaults for the Small host; raise them on a larger one
+  (docs/DEPLOYMENT.md, "Analytics").
+-->
+<clickhouse>
+    <max_server_memory_usage from_env="INLET_CLICKHOUSE_MAX_SERVER_MEMORY"/>
+    <mark_cache_size from_env="INLET_CLICKHOUSE_MARK_CACHE"/>
+    <index_mark_cache_size>67108864</index_mark_cache_size>
+    <primary_index_cache_size>134217728</primary_index_cache_size>
+    <uncompressed_cache_size>0</uncompressed_cache_size>
+
+    <background_pool_size from_env="INLET_CLICKHOUSE_BACKGROUND_POOL"/>
+    <!-- Pool size times this ratio must be at least 25, the largest default free-slot
+         threshold of MergeTree (mutations need 20). A table with projections is checked
+         against the built-in defaults whatever <merge_tree> says, so with a pool of 4 the
+         ratio is raised rather than the thresholds lowered (DECISIONS 33.1). -->
+    <background_merges_mutations_concurrency_ratio>8</background_merges_mutations_concurrency_ratio>
+    <background_schedule_pool_size>16</background_schedule_pool_size>
+    <background_common_pool_size>4</background_common_pool_size>
+    <background_move_pool_size>2</background_move_pool_size>
+    <background_fetches_pool_size>2</background_fetches_pool_size>
+    <background_buffer_flush_schedule_pool_size>2</background_buffer_flush_schedule_pool_size>
+    <background_distributed_schedule_pool_size>2</background_distributed_schedule_pool_size>
+    <background_message_broker_schedule_pool_size>2</background_message_broker_schedule_pool_size>
+
+    <!-- Where `BACKUP DATABASE ... TO File('...')` may write: inside the data volume, from
+         which `docker compose cp` copies a backup out (docs/DEPLOYMENT.md, "Backups"). -->
+    <backups>
+        <allowed_path>/var/lib/clickhouse/backups/</allowed_path>
+    </backups>
+
+    <!-- Its own logs to the console at warning level, so `docker compose logs clickhouse`
+         shows them and nothing grows inside the container. -->
+    <logger>
+        <level>warning</level>
+        <console>1</console>
+        <log remove="1"/>
+        <errorlog remove="1"/>
+    </logger>
+
+    <!-- The system log tables: most of an idle server's writes and a steady share of its
+         memory, and nothing Inlet reads. -->
+    <aggregated_zookeeper_log remove="1"/>
+    <asynchronous_insert_log remove="1"/>
+    <asynchronous_metric_log remove="1"/>
+    <background_schedule_pool_log remove="1"/>
+    <backup_log remove="1"/>
+    <blob_storage_log remove="1"/>
+    <crash_log remove="1"/>
+    <delta_lake_metadata_log remove="1"/>
+    <error_log remove="1"/>
+    <iceberg_metadata_log remove="1"/>
+    <metric_log remove="1"/>
+    <opentelemetry_span_log remove="1"/>
+    <part_log remove="1"/>
+    <processors_profile_log remove="1"/>
+    <query_log remove="1"/>
+    <query_metric_log remove="1"/>
+    <query_thread_log remove="1"/>
+    <query_views_log remove="1"/>
+    <s3queue_log remove="1"/>
+    <session_log remove="1"/>
+    <text_log remove="1"/>
+    <trace_log remove="1"/>
+    <zookeeper_connection_log remove="1"/>
+    <zookeeper_log remove="1"/>
+</clickhouse>

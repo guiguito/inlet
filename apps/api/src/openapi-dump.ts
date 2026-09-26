@@ -22,7 +22,7 @@ const env = loadEnv({
 const { db, pool } = createDb(env.INLET_DATABASE_URL);
 const storage = new Storage(env);
 const scanner = new MalwareScanner(env);
-const ctx: AppContext = { env, db, storage, scanner, log: pino({ level: 'silent' }) };
+const ctx: AppContext = { env, db, eventStore: null, storage, scanner, log: pino({ level: 'silent' }) };
 
 const app = await buildApp(ctx);
 await app.ready();

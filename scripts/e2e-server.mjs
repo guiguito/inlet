@@ -9,7 +9,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from 'pg';
-import { startLocalServices } from './local-services.mjs';
+import { clickhouseReadUrl, clickhouseUrl, startLocalServices } from './local-services.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DATABASE = 'inlet_e2e';
@@ -26,6 +26,18 @@ await admin.query(
 await admin.query(`drop database if exists ${DATABASE}`);
 await admin.query(`create database ${DATABASE}`);
 await admin.end();
+
+// The same for the analytics event store. The server migrates it at start, as it does
+// PostgreSQL, and lists `analytics` once it has.
+for (const statement of [`DROP DATABASE IF EXISTS ${DATABASE}`, `CREATE DATABASE ${DATABASE}`]) {
+  const writer = new URL(clickhouseUrl());
+  const response = await fetch(`${writer.origin}/`, {
+    method: 'POST',
+    body: statement,
+    headers: { 'X-ClickHouse-User': decodeURIComponent(writer.username), 'X-ClickHouse-Key': decodeURIComponent(writer.password) },
+  });
+  if (!response.ok) throw new Error(`ClickHouse refused "${statement}": ${await response.text()}`);
+}
 
 // Build what the server actually serves, so the suite tests the shipped artefacts.
 execFileSync('npm', ['run', 'build'], { cwd: repoRoot, stdio: 'inherit' });
@@ -53,6 +65,9 @@ const child = spawn('node', ['apps/api/dist/server.js'], {
     INLET_S3_ACCESS_KEY_ID: 'inletdev',
     INLET_S3_SECRET_ACCESS_KEY: 'inletdevsecret',
     INLET_S3_FORCE_PATH_STYLE: 'true',
+    INLET_CLICKHOUSE_URL: clickhouseUrl(),
+    INLET_CLICKHOUSE_READ_URL: clickhouseReadUrl(),
+    INLET_CLICKHOUSE_DATABASE: DATABASE,
     INLET_INTENT_TTL_MINUTES: '30',
     INLET_WEB_DIST: path.join(repoRoot, 'apps/web/dist'),
     // The fake Slack the suite starts. Kept in step with e2e/env.ts by hand.

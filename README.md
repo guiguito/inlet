@@ -107,6 +107,11 @@ docker compose logs -f inlet     # wait for "Inlet is listening"
 Open <http://localhost:3000>, sign in, and follow
 [Your first form in five minutes](docs/USING-INLET.md#your-first-form-in-five-minutes).
 
+Analytics is optional and needs one more service, ClickHouse, which the same compose file
+ships behind a profile: `docker compose --profile analytics up -d --build` starts it and
+turns analytics on. Without it, everything else runs as before. See
+[Analytics](docs/DEPLOYMENT.md#analytics) for the host it needs and its backups.
+
 Before pointing real people at it, read the
 [security checklist](docs/DEPLOYMENT.md#security-checklist) — it is nine lines and it
 matters.
@@ -188,18 +193,19 @@ confirmation. See [docs/MCP.md](docs/MCP.md).
 
 ## Running it for development
 
-Needs Node.js 22+. PostgreSQL and RustFS run as local binaries, no Docker required.
+Needs Node.js 22+. PostgreSQL, RustFS and ClickHouse run as local binaries, no Docker
+required.
 
 ```bash
 npm install
-npm run services:up      # local PostgreSQL and RustFS
+npm run services:up      # local PostgreSQL, RustFS and ClickHouse
 cp .env.example .env
 npm run dev              # API on :3000, web on :5173
 ```
 
 ```bash
 npm run test:unit         # pure logic: validation, hashing, CSV, images
-npm run test:integration  # the API against real PostgreSQL and real RustFS
+npm run test:integration  # the API against real PostgreSQL, RustFS and ClickHouse
 npm run test:e2e          # the HTTP contract and the interface in a browser
 npm run test:all
 ```
@@ -217,19 +223,20 @@ image ships, so what is tested is what is deployed.
 | --- | --- |
 | `packages/shared` | Form definitions, answer validation, the crash envelope and its fingerprint, limits, error codes. Shared by the API, the web app and the SDK so the contract cannot drift. |
 | `packages/sdk` | `inlet-sdk`, the client SDK. `feedback` and `crash`, each with Node, browser, Electron, React and React Native entries. |
-| `apps/api` | Fastify server, Drizzle schema and migrations, services, routes, tests. |
+| `apps/api` | Fastify server, Drizzle schema and migrations, the ClickHouse migrations (`apps/api/clickhouse`), services, routes, tests. |
 | `apps/web` | React management interface, form builder, hosted form page, reference renderer. |
 | `apps/mcp` | `inlet-mcp`, a thin layer over the HTTP API. Runs as a stdio process, and the API serves the same tools at `/v1/mcp`. |
 | `e2e` | Playwright suites: the HTTP contract, the SDK in Node and in a real browser, and the interface in a browser. |
 | `docs` | PRD, API guide, MCP guide, deployment guide, technical decisions, generated OpenAPI. |
-| `scripts` | Local PostgreSQL and RustFS, and the end-to-end server. |
+| `scripts` | Local PostgreSQL, RustFS and ClickHouse, the end-to-end server, and the analytics storage measurement (`analytics-seed.mjs`). |
+| `deploy` | Configuration files the bundled services mount, such as ClickHouse's settings and users. |
 
 ## Documentation
 
 | | |
 | --- | --- |
 | [USING-INLET.md](docs/USING-INLET.md) | For the person collecting feedback. |
-| [DEPLOYMENT.md](docs/DEPLOYMENT.md) | Configuration, reverse proxies, managed PostgreSQL and S3, backups, upgrades. |
+| [DEPLOYMENT.md](docs/DEPLOYMENT.md) | Configuration, reverse proxies, managed PostgreSQL and S3, the optional analytics event store, backups, upgrades. |
 | [API.md](docs/API.md) | The integration guide, with the retry contract in full. |
 | [MCP.md](docs/MCP.md) | Every MCP tool and what it may do. |
 | [packages/sdk](packages/sdk/README.md) | `inlet-sdk` for integrators: collecting feedback, capturing crashes, what is sent and what never is. |

@@ -2677,7 +2677,8 @@ from them.
   qualifying events — not background, or a server installation — so it is the effective
   time of the first event *received*, which never moves, as AN-031 requires; a naive
   `min(effective time)` would move it when a late event arrives. The latest user ID is the
-  one last seen, derived at read time, so an erasure corrects it for free.
+  one last seen, derived at read time, so an erasure corrects it for free. (Built as `minIf` of a
+  tuple led by the ordering times rather than `argMinIf` keyed on the event ID: 33.1.)
 - **Partitions per database and ISO week.** About 57 per database at 13 months: 2,850 at
   the default 50 databases, inside ClickHouse's guidance of partition-key cardinality
   below 1,000 to 10,000. Age, cap and database deletion are `DROP PARTITION`, and
@@ -2943,3 +2944,197 @@ measured yet: the 9.1 load test must confirm the fetch budget of PRD section 9.4
 - **A lenient fetch context.** Ingest envelopes are strict because they store what they
   accept; a fetch stores nothing, and refusing one would leave an application on stale
   values because a newer SDK added a field.
+
+## 33. Release 8: how it was built
+
+Section 31 is the design written before any code; this section records what building it
+decided and found, piece by piece (`docs/plans/ux-analytics-release-8.md`). Where it
+departs from 31, it says so.
+
+### 33.1 The event store, and the 8.1 spike (piece 1, September 26, 2026)
+
+**Version.** ClickHouse `v26.8.12.53-lts`, published September 26, 2026, a patch later
+than the `v26.8.11.7-lts` section 31 names. It is pinned in four places that move together:
+`CLICKHOUSE_VERSION` in `scripts/local-services.mjs`, the image tag in `docker-compose.yml`
+and `docker-compose.dev.yml`, and the CI cache key. The local binary is checked against a
+SHA-256 pinned per platform, computed from the downloads themselves: ClickHouse publishes
+no checksum for its macOS binaries and only `.sha512` files for the Linux archives. All four
+matched the digest GitHub reports for each release asset, and the two Linux archives their
+`.sha512` files.
+
+**Client.** `@clickhouse/client` 1.23, a dependency of `@inlet/api` alone, over HTTP. It is
+ClickHouse's own client, has no dependency, types `ClickHouseError` with the server's code,
+and binds server-side query parameters. Rejected: the native TCP protocol (the Node clients
+for it are community-maintained, and HTTP is what a managed ClickHouse and a reverse proxy
+expose), and a query builder (nothing it would build is not a plain parameterised string).
+
+**What `apps/api/src/db/clickhouse.ts` does.**
+
+- Two clients: a writer, and a reader that is a separate read-only user where the operator
+  names one, and otherwise the writer with `readonly=2` sent on every read. `2` rather than
+  `1`, because `1` also forbids a query from setting its own `max_execution_time`,
+  `max_memory_usage` and `max_threads`, which the query layer must (31.4). Both behaviours
+  are tested against the real server.
+- A read waits for its own `max_execution_time` plus 10 seconds before the client gives up,
+  so ClickHouse answers TIMEOUT_EXCEEDED first. The client's default, 30 seconds without a
+  byte, cut a read under a 120 s limit at 30 s and reported it as an outage (found in
+  verification). The reader also sets `output_format_json_quote_64bit_integers = 1`: 26.8
+  sends 64-bit integers as bare JSON numbers by default, which `JSON.parse` rounds above 2^53.
+- Readiness in the background, as 31.6 designed: the first failure logs one warning with the
+  fix, retries run 5 s doubling to a minute, quietly, for ever; the state becomes `ready`
+  once the migrations are applied and never reverts. So adding the `analytics` profile to a
+  running deployment turns analytics on within a minute, without a restart.
+- Errors map in one place, applied by every helper: TIMEOUT_EXCEEDED and
+  MEMORY_LIMIT_EXCEEDED are `query_limit_exceeded`; no answer, a proxy's error page, or a
+  ClickHouse code that means "not now" (too many parts, no space, unknown database,
+  authentication failed, …) is `503 analytics_unavailable` with `Retry-After: 30`; anything
+  else — a syntax error, an unknown column — stays an internal error, because it is a defect
+  a client must not retry for ever. `ApiError` gained `retryAfterSeconds`, sent as the
+  header by the error handler, so no route sets it by hand as the crash route still does.
+- The migration runner: numbered files, split on `;` outside quotes and comments, applied in
+  order and recorded in `inlet_migrations`. With `INLET_MIGRATE_ON_START=false` the store
+  becomes ready only once every file is recorded, so a deployment that migrates by hand
+  never lists `analytics` over a missing table.
+- The database is created only when `system.databases` lacks it, so a managed ClickHouse
+  whose writer may not create databases works once its operator has made one. The URLs must
+  not carry a path; `INLET_CLICKHOUSE_DATABASE` names the database, one identifier.
+
+**Found on the way.** A MergeTree table *with a projection* is checked at `CREATE` against
+the built-in `number_of_free_entries_in_pool_to_execute_mutation` (20) and
+`…_to_execute_optimize_entire_partition` (25), ignoring any `<merge_tree>` override in the
+server configuration, against `background_pool_size × background_merges_mutations_concurrency_ratio`.
+A background pool of 4, as a small host wants, therefore refuses `CREATE TABLE events`.
+Both configurations raise the ratio to 8 instead (4 × 8 = 32).
+
+**The installation-scoped states changed from 31.2.** 31.2 planned `argMinIf(value,
+(received time, effective time, event ID))`. Measured, that stored a random 16-byte event ID
+in every state, and `installations` came to 142 bytes a row against a budget of 100.
+Dropping the event ID from the key made an exact tie (two qualifying events of one
+installation received in the same batch with the same millisecond) resolve by whichever
+part a read met first, which can differ between two reads until the parts merge. The
+schema instead keeps `minIf`/`maxIf` (and `min`, as a `SimpleAggregateFunction`) of a named
+tuple that starts with the ordering times and carries the values after them: `install` is
+`min((received, time, day, dimensions…))` over qualifying events, `latest` is `max((time,
+received, dimensions…))`, a first occurrence `min((day, received, time, dimensions…))`. A
+tie then falls to the values themselves, deterministically; a replay is the same tuple and
+changes nothing; and the times are stored once instead of in a key beside the value. On the
+seeded data it derived exactly the values the `argMin` form did for all 279,995
+installations, at 79 bytes a row, and 35 for a first occurrence where `argMin` took 63.
+The state columns are `ZSTD(3)`, since they are mostly dimension strings that repeat. The
+latest dimensions come from the latest *qualifying* event, which for a device installation
+is the latest non-background event and for a server installation, all of whose events are
+background, its latest event (AN-031 does not say "non-background" for them).
+
+**The spike: method.** `scripts/analytics-seed.mjs` creates a scratch database with the
+migration, then inserts into `events_ingest` with `INSERT … SELECT FROM numbers()`, a million
+events per statement, so every row passes through the same views and projections the API's
+inserts will. The shape follows the reference workload of PRD 9.5: 100,000 active
+installations a day out of 300,000 (a fifteenth replaced daily), 100 events per installation
+a day, so 10 million a day; about 15 distinct names per installation per day out of 60,
+weighted towards the low IDs; 2% background events; UUIDv7 event IDs whose time is the
+event's; 60% of installations with a user ID; realistic dimension cardinalities (5
+platforms, 15 platform versions, 6 to 9 app versions over the month, 12 locales, 40
+countries, 10 attributions, two experiments on half the installations); one or two params on
+two thirds of the events; about three sessions per installation a day. After seeding it
+merges every partition (`OPTIMIZE … FINAL`, the state a long-lived deployment's parts
+reach), then measures from `system.parts` and `system.projection_parts`, times each query as
+the median of five runs at `max_threads = 4` (half the reference node's cores, as 9.5
+assumes), reads each plan with `EXPLAIN`, and runs the deletes.
+
+**Machine.** A laptop: Apple M5, 10 cores, 24 GB, macOS, ClickHouse from the local services.
+Its 4 GB memory ceiling was raised to 12 GB for the measurement run, for the reason under
+"Erasure" below. **The reference node (8 vCPU, 32 GB, 4.1 billion events) and the Small host
+were not measured**; PRD 15 "8.1" asks for both before the migration merges, and they need
+those machines.
+
+**Storage**, at 300 million events over 30 days (the first run, at 100 million over 10 days,
+gave 45.3 bytes an event and the same per-row figures to within a byte):
+
+| Table | Rows | Bytes on disk a row | Budget |
+| --- | --- | --- | --- |
+| `events`, projections and skipping indexes included | 300,000,000 | **44.4** | 50 |
+| of which projection `by_event_day` | 42,502,193 | 5.0 an event | |
+| of which projection `by_day` | 5,601,096 | 0.5 an event | |
+| `installations` | 300,000 | **79.3** | 100 |
+| `installation_users` | 179,564 | 33.4 | 100 |
+| `installation_first` | 15,489,433 | 36.0 | 100 |
+| `user_first` | 8,480,646 | 24.2 | 100 |
+
+The event ID is the largest column at 15 bytes an event (ZSTD saves one byte of sixteen;
+the 74 random bits of a UUIDv7 are the floor), then the session ID (6), the two times (3.5
+each) and the installation ID (2.3); every dimension column is under half a byte.
+Extrapolated to the reference workload: 4.1 billion events × 44.4 bytes is about 180 GB
+(PRD 9.5 planned 205 GB at 50 bytes). The installation-scoped tables grow with installations
+and with the names each sends, not with events: at 300,000 installations and 60 names they
+hold 0.8 GB here; five million installations over 13 months, each sending most of 60 names,
+would hold about 13 GB, somewhat above the 5 to 10 GB PRD 9.5 states, which depends on how
+many installations a reference product accumulates.
+
+**Queries**, at 300 million events and 30 days (the funnel over its last 14), the two-level
+shapes reading the rollups:
+
+| Query | Time | Reads | Without projections |
+| --- | --- | --- | --- |
+| Trend, one event, by day, unique installations (two levels) | 85 ms | `by_event_day` | 168 ms |
+| The same with `uniqExact(installation_id)` in one level | 109 ms | `events` | |
+| Trend, one event, by day, events | 10 ms | `by_event_day` | |
+| Trend, one event, by week, unique installations | 47 ms | `by_event_day` | 152 ms |
+| Trend split by app version, by day | 135 ms | `by_event_day` | 303 ms |
+| Active installations a day, any event (DAU) | 89 ms | `by_day` | 1,540 ms |
+| Trend with a param filter (`params['plan'] = 'pro'`) | 368 ms | `events` | |
+| Funnel of three steps over 14 days, steps view | 884 ms | `events` | |
+| Weekly cohorts from `installations`, returns from the rollup | 197 ms | `by_event_day` + `installations` | |
+
+Scaled by the rows each reads to 90 days and 13 months at the reference workload, on four
+threads: a one-series trend over 90 days by day about 0.3 s (budget 0.5 s), by week over 13
+months about 0.6 s (2 s), split by app version about 0.4 s (1.5 s), a param filter over 13
+months about 5 s (20 s), the funnel's steps over 14 days about 1 s (3 s), 12 weekly cohorts
+about 0.5 s (2 s). A laptop core is faster than a typical server vCPU, so these are
+optimistic by a factor the reference node must measure. The same queries run at the
+laptop's 4 GB ceiling, straight after seeding, took 1.1 to 3.9 times as long (the funnel
+2.1 s, the cohorts 0.8 s).
+
+**Whether the optimizer uses the rollups.** Yes, for the shapes 31.4 needs, and only
+when written for them: an aggregate projection answers a query only with the aggregates it
+stores, so `uniqExact(installation_id)` in one level reads the events, whereas the same
+count written as an inner `SELECT …, installation_id, count() … GROUP BY …, installation_id`
+and an outer `count()` reads `by_event_day`. Filters and splits on any dimension, the
+install ages, `toMonday(local_day)` periods and the `platform`/`installation_kind` conditions
+of "active" all stay on the projection. Its answers equal the events' exactly
+(`optimize_use_projections = 0` gives identical output), before and after the deletes.
+
+**Erasure.** A lightweight `DELETE` of one installation from `events`, with
+`lightweight_mutation_projection_mode = 'rebuild'`, took 93 s, and of one user ID 73 s, each
+rewriting the projections of every part holding one of its rows (five weekly parts here;
+parts without a match are left alone). The installation-scoped tables took 9 to 110 ms. At
+the laptop's 4 GB ceiling the rebuild of one 70-million-row part ran out of memory and the
+mutation retried until killed: rebuilding a projection aggregates the whole part at once,
+where inserts and merges build it incrementally. With `drop` instead, the same delete took
+2.0 s, the touched parts answer from their events meanwhile (still exactly), and
+`MATERIALIZE PROJECTION` of both afterwards took 81 s — the same work, deferred.
+`APPLY DELETED MASK` over the whole table took 115 s.
+
+Extrapolated: rebuilding costs about 0.3 s per million rows touched on this machine, so an
+installation active over all 13 months of a reference database (4.1 billion events) costs
+about 20 minutes of background merging per `DELETE` statement, and one active for a month
+about 1.5 minutes; the cost is per statement and per part, not per ID. Memory: a reference
+week is a 70-million-row part, whose rebuild fits the reference node's 24 GB but not 4 GB;
+a Small-host week is 7 million rows, a tenth of it.
+
+**Decision.** Projections as the internal rollups, as 31.2 planned: they keep 13-month
+trends and the Overview inside their budgets for 12% more disk, cannot drift from the
+events, and survive erasure exactly. Not the fallback of view-fed rollup tables, which would
+need the reconciliation this avoids; and not "no rollups", which AN-035 allows but which the
+DAU figure (1.5 s at 30 days, so seconds at 90) rules out for the Overview. The mode stays
+`rebuild`, as 31.5 decided, so that no read ever pays for a projection a delete dropped.
+What the measurement adds for the erasure worker (piece 10): delete many IDs in one
+statement, `WHERE installation_id IN (…)`, since the cost is per statement and part; run
+the deletes where the memory allows, the reference node's settings having room and the
+Small host's parts being small; and if either proves too slow on the reference node, switch
+to `drop` followed by a scheduled `MATERIALIZE PROJECTION … IN PARTITION`, which the spike
+showed answers correctly in between.
+
+**Not measured here**, and owed before the migration merges (PRD 15 "8.1"): the reference
+node at 4.1 billion events, the Small host at its workload, the ingest path (it does not
+exist yet: the seed inserts a million rows per statement, where ingest inserts at most a
+hundred), and query concurrency.

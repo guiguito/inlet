@@ -18,6 +18,23 @@ const bool = z
   .string()
   .transform((value) => ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase()));
 
+/**
+ * A ClickHouse address (UX Analytics 9.4, Foundations FD-009): unset or empty means none.
+ * The database is INLET_CLICKHOUSE_DATABASE, never the URL's path, so one address can serve
+ * the test and end-to-end databases and there is one place that names it.
+ */
+// URL.parse, not `new URL`: the refinements run even when `.url()` has already failed, and
+// the TypeError `new URL` throws would crash startup printing the whole URL, password included.
+const clickhouseUrl = z.preprocess(
+  (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+  z
+    .string()
+    .url()
+    .refine((value) => ['http:', 'https:'].includes(URL.parse(value)?.protocol ?? ''), 'must be an http or https URL')
+    .refine((value) => ['', '/'].includes(URL.parse(value)?.pathname ?? ''), 'must not name a database; set INLET_CLICKHOUSE_DATABASE instead')
+    .optional(),
+);
+
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   INLET_LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
@@ -99,6 +116,25 @@ const envSchema = z.object({
    * made to send a request.
    */
   INLET_SLACK_WEBHOOK_ORIGINS: z.string().default(DEFAULT_SLACK_WEBHOOK_ORIGIN),
+
+  /**
+   * The analytics event store (UX Analytics 9.4). Unset means none: analytics is off and
+   * everything else runs unchanged (FD-009). The URL carries the credentials of the user
+   * that writes — inserts, deletes and the migrations' DDL — as
+   * `http://user:password@host:8123`.
+   */
+  INLET_CLICKHOUSE_URL: clickhouseUrl,
+  /**
+   * A read-only user for analytics queries (UX Analytics 9.5, "reading as a read-only user
+   * and writing as another"). Unset, reads use the writer's credentials with `readonly = 2`
+   * sent on every read, which the server enforces just the same, and startup says so.
+   */
+  INLET_CLICKHOUSE_READ_URL: clickhouseUrl,
+  /** Created by the migrations when missing. */
+  INLET_CLICKHOUSE_DATABASE: z
+    .string()
+    .regex(/^[A-Za-z_][A-Za-z0-9_]{0,63}$/, 'must be a plain identifier')
+    .default('inlet'),
 
   /** Directory holding the built management interface. Empty disables SPA serving. */
   INLET_WEB_DIST: z.string().default(''),

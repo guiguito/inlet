@@ -103,7 +103,12 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
         // can tell a deployment that serves MCP from one that only ships the binary.
         // 'identity' says this deployment accepts the SDK identity fields of FD-016 on crash
         // reports and submissions; an SDK leaves them out for a deployment that does not.
-        return { status: 'ok', capabilities: ['feedback', 'crash', CROSS_ORIGIN_FEEDBACK, 'mcp', 'identity'] };
+        // 'analytics' once the event store has been ready since start (FD-015, UX Analytics
+        // 9.4), and still through a later outage: failing or shrinking the probe then would
+        // restart the container, or make an SDK think the deployment lost the capability.
+        const capabilities = ['feedback', 'crash', CROSS_ORIGIN_FEEDBACK, 'mcp', 'identity'];
+        if (ctx.eventStore?.readySinceStart) capabilities.push('analytics');
+        return { status: 'ok', capabilities };
       });
 
       await v1.register(authRoutes(ctx), { prefix: '/auth' });
@@ -259,6 +264,7 @@ function registerErrorHandler(app: FastifyInstance): void {
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof ApiError) {
       if (error.status >= 500) request.log.error({ err: error }, 'request failed');
+      if (error.retryAfterSeconds !== undefined) reply.header('retry-after', String(error.retryAfterSeconds));
       return reply.code(error.status).send(error.toBody());
     }
 

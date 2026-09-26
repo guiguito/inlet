@@ -2,6 +2,8 @@
 
 Inlet is one container plus PostgreSQL and an S3-compatible object store. There is no
 build step to run on the server, no queue broker, and no separate worker process.
+Analytics, which is optional, adds one more service: ClickHouse, the event store
+(see [Analytics](#analytics)).
 
 - [What you need](#what-you-need)
 - [The fastest path: Docker Compose](#the-fastest-path-docker-compose)
@@ -10,6 +12,7 @@ build step to run on the server, no queue broker, and no separate worker process
 - [Using managed PostgreSQL and S3](#using-managed-postgresql-and-s3)
 - [The first account](#the-first-account)
 - [Malware scanning](#malware-scanning)
+- [Analytics](#analytics)
 - [Slack notifications](#slack-notifications)
 - [Upgrading](#upgrading)
 - [Backups and what is where](#backups-and-what-is-where)
@@ -23,6 +26,7 @@ build step to run on the server, no queue broker, and no separate worker process
 | --- | --- |
 | PostgreSQL | 14 or newer. Developed and tested against 18. |
 | Object storage | Any S3-compatible store that supports object tagging and lifecycle rules filtered by tag: AWS S3, RustFS, and most others. The bundled deployment includes RustFS. |
+| ClickHouse | Only for analytics: 26.8 LTS or newer. The bundled deployment includes it behind the `analytics` profile. |
 | A container runtime | Or Node.js 22+ if you would rather run it directly. |
 | TLS | Terminate it in front of Inlet. Inlet speaks plain HTTP. |
 
@@ -174,6 +178,21 @@ cap or age now falls outside them is enforced at the nearest bound, and its rete
 read reports that effective value, until someone sets it again. The analytics limits of
 the same requirement arrive with the analytics capability.
 
+### Analytics event store
+
+Only for analytics; see [Analytics](#analytics) for what each one does.
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `INLET_CLICKHOUSE_URL` | *(unset; the compose file sets the bundled service)* | The writing user's address: `http://user:password@host:8123`, percent-encoding the password. Unset or empty means no event store, and analytics is off. |
+| `INLET_CLICKHOUSE_READ_URL` | *(unset; the compose file sets the bundled reader)* | The read-only user's address. Unset, reads use the writing user with `readonly=2` enforced on every read, and startup says so. |
+| `INLET_CLICKHOUSE_DATABASE` | `inlet` | Created at start when missing. The URLs must not name a database. |
+| `INLET_CLICKHOUSE_PASSWORD` | `inletanalytics` | Bundled service only: the writing user's password, used by both the service and the default `INLET_CLICKHOUSE_URL`. |
+| `INLET_CLICKHOUSE_READER_PASSWORD` | `inletanalyticsreader` | Bundled service only: the read-only user's password. |
+| `INLET_CLICKHOUSE_MAX_SERVER_MEMORY` | `3221225472` (3 GB) | Bundled service only: ClickHouse's memory ceiling, in bytes. |
+| `INLET_CLICKHOUSE_MARK_CACHE` | `268435456` (256 MB) | Bundled service only: its mark cache, in bytes. |
+| `INLET_CLICKHOUSE_BACKGROUND_POOL` | `4` | Bundled service only: threads for merges and deletions. |
+
 ### Malware scanning
 
 | Variable | Default | Notes |
@@ -298,6 +317,146 @@ An infected upload is refused with `malware_detected` and never stored. If the s
 is unreachable, the default is to accept the upload and record `scanStatus: "error"` on
 it; set `INLET_MALWARE_SCAN_REQUIRED=true` to refuse instead.
 
+## Analytics
+
+UX Analytics — the SDK's usage events, charts, funnels and cohorts — keeps its events in
+ClickHouse, a database built for counting billions of rows. Everything else stays in
+PostgreSQL. ClickHouse is optional: without it Inlet collects feedback and crash reports
+exactly as before, and only analytics is off.
+
+### Turning it on
+
+With the bundled deployment, one command:
+
+```bash
+docker compose --profile analytics up -d --build
+```
+
+The `analytics` profile starts the `clickhouse` service next to the others. The `inlet`
+service already points at it, so there is nothing to set: Inlet connects in the
+background, creates its tables, logs `the analytics event store is ready`, and from then
+on `/v1/health` lists `analytics` in its `capabilities`. If you add the profile to a
+deployment that is already running, Inlet notices within a minute; no restart is needed.
+
+Keep using `--profile analytics` on every later `docker compose up`, or put
+`COMPOSE_PROFILES=analytics` in `.env` so that a plain `docker compose up -d` includes it.
+
+### Without it
+
+Inlet starts, and runs every feature but analytics. `/v1/health` does not list
+`analytics`, and creating an analytics database is refused with `analytics_not_enabled`
+and a message naming the command above. Because the compose file points Inlet at the
+bundled service by default, the log says once at startup that the event store is not
+ready, and Inlet keeps looking for it quietly, once a minute. To silence that on a
+deployment that will never use analytics, set `INLET_CLICKHOUSE_URL=` (empty) in `.env`;
+the log then says analytics is off.
+
+Inlet never waits for ClickHouse. If it goes down after it was ready, `/v1/health` still
+answers 200 and still lists `analytics`, feedback and crash reports carry on, analytics
+requests answer `503 analytics_unavailable` with `Retry-After`, and the SDK keeps its
+events queued until they are accepted.
+
+### The host it needs
+
+ClickHouse wants memory. These are the hosts the analytics design is sized for, from the
+UX Analytics PRD (section 9.5); a deployment without the profile needs nothing more than
+before, 2 vCPU and 4 GB.
+
+| Workload | Events a day | Host for the whole stack | Disk for the events |
+| --- | --- | --- | --- |
+| Small | 1 million | 4 vCPU and 8 GB | About 20 GB for 13 months |
+| Reference | 10 million | 8 vCPU and 32 GB, SSD | About 25 GB at the default cap of 500 million events (43 to 50 days); about 205 GB for 13 months |
+| Heavy, the whole deployment | 50 million | 16 to 32 vCPU and 64 to 128 GB | About 1 TB for 13 months |
+
+The bundled service's defaults suit the Small host: a 3 GB memory ceiling, small caches, a
+background pool of four threads, and ClickHouse's own log tables turned off. On a larger
+host, raise them in `.env`:
+
+| Host | `INLET_CLICKHOUSE_MAX_SERVER_MEMORY` | `INLET_CLICKHOUSE_MARK_CACHE` | `INLET_CLICKHOUSE_BACKGROUND_POOL` |
+| --- | --- | --- | --- |
+| Small, 8 GB | `3221225472` (3 GB, the default) | `268435456` (256 MB) | `4` |
+| Reference, 32 GB | `25769803776` (24 GB) | `2147483648` (2 GB) | `8` |
+
+The server settings themselves are in `deploy/clickhouse/config.xml`, mounted into the
+container, if you need to change anything else.
+
+### The two users
+
+Inlet connects to ClickHouse as two users, defined in `deploy/clickhouse/users.xml`:
+
+- **`inlet`** writes: it inserts events, deletes them, and creates the tables when Inlet
+  starts. Its password is `INLET_CLICKHOUSE_PASSWORD`.
+- **`inlet_reader`** answers the charts. It is held to `readonly=2`: it can read and set a
+  query's own limits, and can write nothing. Its password is
+  `INLET_CLICKHOUSE_READER_PASSWORD`.
+
+Set both passwords in `.env` before the first start; the defaults are public. The service
+publishes no port, so only containers on the compose network can reach it.
+
+### Using your own ClickHouse
+
+Leave the profile off, and point Inlet at your server, 26.8 LTS or newer, one node:
+
+```dotenv
+INLET_CLICKHOUSE_URL=https://inlet:<password>@clickhouse.example.com:8443
+INLET_CLICKHOUSE_READ_URL=https://inlet_reader:<password>@clickhouse.example.com:8443
+INLET_CLICKHOUSE_DATABASE=inlet
+```
+
+The writing user needs to create tables and views, read, insert, delete and alter in that
+database, and to create the database itself unless you create it first. The reading user
+needs `SELECT` on it and a profile with `readonly = 2` (not `1`, which would stop Inlet
+setting each query's time and memory limits). Leave out the read URL and Inlet reads as the
+writing user, with `readonly=2` on every read. Inlet sets `max_partitions_per_insert_block`
+to 1000 on its own inserts, since one insert can span several weeks and databases.
+
+Pointing Inlet at a different ClickHouse is not a move: analytics databases then read as
+empty, unless you restore a backup of the first one into it.
+
+### Backups
+
+ClickHouse holds the analytics events and what derives from them; PostgreSQL holds the
+analytics databases themselves, their event names, funnels and cohorts. Back up both.
+
+ClickHouse backs itself up with `BACKUP DATABASE`. Into the bundled RustFS, under a prefix
+of the bucket Inlet already uses (its lifecycle rule only touches pending uploads):
+
+```bash
+docker compose exec clickhouse clickhouse-client --query "
+  BACKUP DATABASE inlet
+  TO S3('http://storage:9000/inlet/clickhouse-backups/2026-09-26', '<INLET_S3_ACCESS_KEY_ID>', '<INLET_S3_SECRET_ACCESS_KEY>')"
+```
+
+Later backups can be incremental, storing only what changed since a base:
+
+```bash
+  ... TO S3('http://storage:9000/inlet/clickhouse-backups/2026-09-27', '<key>', '<secret>')
+      SETTINGS base_backup = S3('http://storage:9000/inlet/clickhouse-backups/2026-09-26', '<key>', '<secret>')
+```
+
+Or to a file in ClickHouse's volume, then out of the container:
+
+```bash
+docker compose exec clickhouse clickhouse-client --query \
+  "BACKUP DATABASE inlet TO File('/var/lib/clickhouse/backups/inlet-2026-09-26.zip')"
+docker compose cp clickhouse:/var/lib/clickhouse/backups/inlet-2026-09-26.zip .
+```
+
+The two backups are not taken at the same instant. **Restore PostgreSQL first, then
+ClickHouse**, with Inlet stopped:
+
+```bash
+docker compose stop inlet
+# 1. restore PostgreSQL as in "Backups and what is where" below
+docker compose exec clickhouse clickhouse-client --query "DROP DATABASE IF EXISTS inlet SYNC"
+docker compose exec clickhouse clickhouse-client --query \
+  "RESTORE DATABASE inlet FROM S3('http://storage:9000/inlet/clickhouse-backups/2026-09-26', '<key>', '<secret>')"
+docker compose start inlet
+```
+
+Events of a database the PostgreSQL backup does not know are unreadable in Inlet, and events
+missing from the ClickHouse backup are simply gone from the charts.
+
 ## Slack notifications
 
 Configured per feedback database in the interface, under **Settings → Notifications**.
@@ -332,12 +491,14 @@ From the baseline on, migrations are additive: read the release notes before upg
 
 ## Backups and what is where
 
-Three things hold state, and losing any one of them loses something different.
+Three things hold state, four with analytics, and losing any one of them loses something
+different.
 
 | | Holds | Lose it and |
 | --- | --- | --- |
 | PostgreSQL | Accounts, projects, forms and every version, responses, API key hashes, settings | Everything is gone |
 | Object storage | Screenshot files and hosted form logos | Responses survive with broken screenshot links |
+| ClickHouse, with analytics | Analytics events and the installation records derived from them | Charts, funnels and cohorts start again from empty; everything else is untouched. See [Analytics → Backups](#backups) |
 | `INLET_SESSION_SECRET` | Nothing, but it signs sessions | Everyone is signed out |
 
 Back up PostgreSQL with `pg_dump`:
@@ -365,7 +526,9 @@ GET /v1/health
 ```
 
 Returns 200 when the process is up and can reach PostgreSQL. Use it as your container
-health check and your load balancer probe.
+health check and your load balancer probe. Its `capabilities` list includes `analytics`
+once the analytics event store has answered and been migrated since Inlet started, and
+keeps it through a later ClickHouse outage, which never fails the probe.
 
 Logs are structured JSON on stdout (pino). Ship them wherever you ship logs. Webhook
 URLs, passwords and tokens are redacted before anything is written. A request is logged

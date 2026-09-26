@@ -91,6 +91,20 @@ export const ERROR_STATUS = {
   /** CR-011: a named field is out of bounds or of the wrong shape. The detail path names it. */
   invalid_envelope: 400,
 
+  // --- UX Analytics (Release 8, UX Analytics PRD section 7.4) ---------------
+  /**
+   * AN-005: creating an analytics database on a deployment without its event store: none
+   * configured, or the configured one not yet answered and migrated since the API started.
+   * A conflict with the deployment's state, not a fault, so a client does not retry it.
+   */
+  analytics_not_enabled: 409,
+  /** AN-018, UX Analytics 9.4: the event store is unreachable or refused the call. With `Retry-After`. */
+  analytics_unavailable: 503,
+  /** AN-205: no analytics query slot free for the caller within ten seconds. With `Retry-After`. */
+  analytics_busy: 503,
+  /** UX Analytics 9.5: a query exceeded the event store's time or memory limit. */
+  query_limit_exceeded: 503,
+
   // --- Notifications -------------------------------------------------------
   /**
    * Slack refused a message. The Slack error string travels in the message and the
