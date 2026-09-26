@@ -102,7 +102,7 @@ describe('analytics databases', () => {
 
   describe('the reporting timezone (AN-002)', () => {
     it('refuses a missing zone, an offset and an unknown zone with timezone_invalid', async () => {
-      for (const body of [{ name: 'X' }, { name: 'X', timezone: '' }, { name: 'X', timezone: 'UTC+2' }, { name: 'X', timezone: 'GMT-3' }, { name: 'X', timezone: '+02:00' }, { name: 'X', timezone: 'GMT+0' }, { name: 'X', timezone: 'Mars/Olympus_Mons' }, { name: 'X', timezone: 'europe/paris' }]) {
+      for (const body of [{ name: 'X' }, { name: 'X', timezone: '' }, { name: 'X', timezone: 'UTC+2' }, { name: 'X', timezone: 'GMT-3' }, { name: 'X', timezone: '+02:00' }, { name: 'X', timezone: 'GMT+0' }, { name: 'X', timezone: 'GMT-0' }, { name: 'X', timezone: 'Etc/GMT+2' }, { name: 'X', timezone: 'Etc/GMT-14' }, { name: 'X', timezone: 'Mars/Olympus_Mons' }, { name: 'X', timezone: 'europe/paris' }]) {
         const response = await create(body);
         expect(response.statusCode, JSON.stringify(body)).toBe(400);
         expect(errorCode(response), JSON.stringify(body)).toBe('timezone_invalid');
@@ -115,6 +115,7 @@ describe('analytics databases', () => {
       expect((await createOk('Kyiv', 'Europe/Kiev')).timezone).toBe('Europe/Kiev');
       expect((await createOk('US', 'US/Eastern')).timezone).toBe('US/Eastern');
       expect((await createOk('UTC', 'UTC')).timezone).toBe('UTC');
+      expect((await createOk('Etc/UTC', 'Etc/UTC')).timezone).toBe('Etc/UTC');
     });
 
     it('refuses a name only one of the two timezone databases lists', async () => {
@@ -455,6 +456,27 @@ describe('analytics databases', () => {
       const started = Date.now();
       const impact = await asAdmin(h, 'GET', `/v1/analytics-databases/${id}/deletion-impact`);
       expect(impact.json()).toMatchObject({ events: null, installations: null, users: null, eventStore: 'unavailable', cohorts: 1 });
+      expect(Date.now() - started).toBeLessThan(5_000);
+    } finally {
+      h.ctx.eventStore = ready;
+      await hung.close();
+      silent.close();
+    }
+  }, 60_000);
+
+  it('answers creation with 503 within seconds when the event store hangs (AN-005)', async () => {
+    // The timezone lookup waits for reachable()'s two seconds, not the reader's 40.
+    const silent = net.createServer(() => {});
+    await new Promise<void>((resolve) => silent.listen(0, '127.0.0.1', resolve));
+    const ready = h.ctx.eventStore;
+    const hung = new EventStore({ url: `http://inlet:inlet@127.0.0.1:${(silent.address() as net.AddressInfo).port}`, database: 'inlet_test', migrate: false, log: pino({ level: 'silent' }) });
+    Object.defineProperty(hung, 'readySinceStart', { value: true });
+    h.ctx.eventStore = hung;
+    try {
+      const started = Date.now();
+      const refused = await create({ name: 'Hung', timezone: 'Europe/Paris' });
+      expect(refused.statusCode).toBe(503);
+      expect(errorCode(refused)).toBe('analytics_unavailable');
       expect(Date.now() - started).toBeLessThan(5_000);
     } finally {
       h.ctx.eventStore = ready;

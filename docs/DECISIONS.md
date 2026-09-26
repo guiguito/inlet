@@ -3276,3 +3276,325 @@ one. The existing parser already handles values beyond 32 bits, as JavaScript in
 **The shared MCP tools route by prefix for every type.** `databasePath` sends `adb_` to
 `/analytics-databases`. `set_member_role` with a `databaseId` had always addressed
 `/feedback-databases`, so it failed for a crash database; it now uses `databasePath` too.
+
+### 33.11a The analytics SDK core, browser and Node (piece 11a, September 27, 2026)
+
+Numbered after its piece rather than in sequence, because piece 3 is being written at the same
+time; renumber when both are committed. The seams are in `docs/plans/ux-analytics-release-8.md`
+under "From piece 11a".
+
+**Two installation IDs, on purpose.** The persisted ID lives only in storage, under
+`installation-id`, the one key a config module reads and writes too. `Identity.installationId`,
+the field the crash and feedback modules attach, is filled by an enabled analytics client and
+nothing else, and the modules of this version decide by `Identity.analyticsEnabled` rather than
+by that field being set (RC-119). A published 0.2.x crash module, which attaches the field
+whenever it is set, therefore never sees a config-created ID. Rejected: one slot with a flag
+beside it, which is exactly what 0.2.x would misread.
+
+**Storage keys rather than one identity record.** Separate keys — installation, opt-out,
+state, session, crash flags — so that the browser's session, rewritten at most every 30
+seconds by every tab, never races a write of the installation or a crash flag, and so that a
+config module touches one key and nothing else. Identity storage is synchronous
+(`localStorage`, a `FileStore`'s `getSync`/`setSync`), because the crash module writes its flag
+from the fatal path; an asynchronous store (React Native) is read into memory before `init`
+finishes and written through.
+
+**The cross-tab session is decided synchronously and confirmed under the lock.** The crash
+module needs a session ID now, on a fatal path that cannot await a Web Lock. So a tab that
+finds the stored session expired writes a new one at once and returns it; its `app_started`
+is built then — keeping its place ahead of the event that caused the rotation — and committed
+only inside `navigator.locks.request('inlet-sdk.analytics.session')` if the stored session is
+still that one and not yet announced. A tab that lost the race adopts the winner's session and
+sends nothing. The residual window (two tabs reading the same expired record within the same
+microseconds) can orphan a handful of events on a session no `app_started` names, which
+AN-043 counts nowhere. Without Web Locks the derived ID converges instead, and a duplicate
+`app_started` for one session ID counts once. Rejected: rotating inside the lock, which makes
+the session ID asynchronous for every module.
+
+**Sampling moves after `beforeSendSync` only while analytics is enabled.** AN-150 raises the
+flag after the synchronous hook and before sampling; for an application without analytics the
+crash module keeps its order exactly, so its hooks see what they saw in 0.2.0.
+
+**A flag is removed once its `session_crashed` is written to the queue**, not when it is sent,
+so a process that dies in between finds it again; a flag and its already-queued event can then
+both be sent, which AN-044 counts once per session.
+
+**The keepalive send does not wait for the flush lock**, since a page being hidden cannot await
+one; nothing is removed until the server answers, so a page that dies first leaves its events
+for the next page and the server's idempotency absorbs the second send. What does not fit in
+60 KiB stays queued.
+
+**The health probe gained `refresh`.** An answer is cached per origin for the page (FD-016), so
+the ten-minute re-read while `analytics` is not listed (AN-241) has to bypass the cache; the new
+answer replaces it for every module.
+
+**Size: 15.1 KB minified and gzipped** for `inlet-sdk/analytics/browser`, the shared envelope
+validator included. The build measures a minified bundle with gzip, as CDNs and bundle
+analysers report; brotli would be smaller and so a laxer limit.
+
+**Server mode keeps no identity at all**, not even in memory beyond the call: the shared user ID
+is still attached if the application set one, and every event must name an installation or a
+user ID. Its events carry `platform: 'server'`, which the server treats as background events.
+
+**From the verification of piece 11a.** Six changes, each with a test in
+`packages/sdk/test/analytics-verify.test.ts` that fails without it:
+
+- *Keepalive sends only after a health answer listed `analytics`*, and an event is in at most
+  one keepalive request at a time. A page closed before the first probe answered would
+  otherwise post to a deployment without the batch route, whose `404` drops every event as
+  refused; and a close fires both `visibilitychange` and `pagehide`, whose second call resent
+  the first one's events and spent the 60 KiB on duplicates. The queue is written first on
+  every hide, sent or not, because no debounce timer runs after an unload.
+- *An identity an older version left on `globalThis` is upgraded in place.* An application can
+  bundle two versions of the package; a 0.2.x crash module initialised first left an
+  `Identity` without this version's methods, and `init` of the analytics module threw a
+  `TypeError` into the application. Upgraded rather than replaced, so the older module keeps
+  sharing the session, the user ID and the attached installation ID.
+- *A previous-run flag's `crashedAt` is when the run was last seen*: the sentinel's last touch
+  (its mtime, within a minute of the death), no longer the next launch's time, which could be
+  weeks later (AN-230). Without a sentinel time, the report's time as before.
+- *Deleting a key that holds nothing writes nothing.* `FileStore` has no delete, so `forget`
+  wrote an empty file for each of the installation, state, session and flags keys, and the
+  first enable an empty opt-out file, even on a device where analytics was never enabled.
+- *An inline script counts toward `crashReporting` only when it runs.* A CDN-served page with
+  an inline JSON-LD block or an import map reported `crashReporting: true` although no frame
+  of it can ever be in-app (AN-150).
+- *A tab being hidden never overwrites the shared session with a stale record.* A background
+  tab closed after another tab rotated wrote its own, expired session back, and the active
+  tab's next event started a third session (AN-229). It now writes only later activity of the
+  session that is stored.
+
+### 33.11b The analytics SDK for Electron and React Native (piece 11b, September 27, 2026)
+
+The seams are in `docs/plans/ux-analytics-release-8.md` under "From piece 11b".
+
+**Electron: one client in main, windows send messages.** `installElectronMain`
+(`inlet-sdk/analytics/electron`) initialises the one analytics client with a `FileStore` under
+`<userData>/inlet`, the app version and ID from `app.getVersion()` and `app.getName()`, and the
+operating system version from `process.getSystemVersion()` passed to `nodeContext` as the
+release, so macOS reports 15.1 rather than the kernel's 24.1.0. It returns that client with an
+`uninstall()` added, because the Collect snippet writes `const analytics = await
+installElectronMain(…)` and calls `setEnabled` on the result; the crash and feedback
+installers return `{ client, uninstall }`, and that shape was rejected here to keep the
+snippet true. `createElectronRenderer` (`/electron-renderer`, browser-safe) sends one-way
+messages over `ipcRenderer.send('inlet:analytics')` through a preload bridge
+`window.inletAnalytics`, as the crash renderer does, rather than `ipcMain.handle`: nothing a
+window calls needs an answer, and `track` must not be asynchronous. Main pushes
+`{ installationId, sessionId }` on `inlet:analytics:ids` to every `webContents` whenever the
+identity's `watch` fires and the pair changed, and answers a window's `hello` at creation, so
+a window opened later has the IDs at once.
+
+**The IPC channel is a trust boundary (CR-111).** Main reads a window's event name, category,
+params (primitives only, at most 25, keys and values truncated) and timestamp, and nothing
+else; the installation and session IDs, user ID, context and app version are main's. A
+window's `track` of a standard event name is ignored — `app_started` or `session_crashed`
+from a window would forge sessions and crash-free rates — and `screen` has its own message.
+Identity and consent calls are applied unless `acceptRendererIdentity: false`; they are one
+switch because the PRD names them together.
+
+**React Native: the identity under `inlet-sdk:` keys, the queue under `inlet-analytics:`.**
+Two `ReactNativeStore`s over the injected store: the identity keys match the browser's
+`localStorage` names, so a config module finds the installation ID under the same key on
+every platform (FD-016), and the queue is one event per key. The budget (`maxStoreBytes`,
+1 MB) is the queue's ceiling plus a fixed 8 KiB reserve for the identity keys, and the store's
+ceiling now counts each item's entry in the index, which the crash and feedback queues
+inherit (a queue keeps a little under its ceiling rather than a little over). Standard events
+are dropped from the store last, as AN-231 drops them from the queue. The `AppState` listener
+calls `flush` on `background` and `foreground` on `active`, on whichever client is current.
+
+**Crash flags on React Native live in the crash module's store (AN-151).** The crash adapter
+hands the identity a flag storage over its own store (`useFlagStorage`), synchronous when the
+store is, so the flag raised on the fatal path is on the device before the previous handler
+runs. The analytics module reads flags from there at its next start, whichever module
+initialises first: if analytics attached first, `useFlagStorage` sends them. Elsewhere flags
+stay in the identity storage. Rejected: writing the flag through the analytics identity
+storage, which is an asynchronous write-through whenever the analytics store is AsyncStorage,
+even with an MMKV crash store.
+
+**From piece 11a's review, as decided.**
+
+- *`ephemeral` means the identity could not persist.* A browser without IndexedDB keeps the
+  queue in memory and says so, without marking events.
+- *A refused installation-ID write marks events `ephemeral`* on Node device mode and in the
+  Electron main process: the ID is read back after it is written at the first enable, so no
+  write happens while disabled.
+- *A crashing report dropped by the bounds check still flags its session*, after
+  `beforeSendSync` runs on it for that decision alone; `onDrop` still says `bounds` and the
+  report is not sent.
+- *`close` marks the client closed before awaiting its store* and `detach` takes off only the
+  hooks this client installed, so two quick `init` calls leave the second client owning the
+  identity. Reproduced with a first store slower than the second.
+- *`forget` where analytics never ran* checks `indexedDB.databases()` first and creates no
+  `inlet-analytics` database.
+- *`setAttribution` and `setExperiment` before an asynchronous store loads* wait with `track`
+  and apply after the stored values.
+
+**A defect of piece 11a found on the way.** With an asynchronous store, any call made before
+it loaded (`track` included) queued itself again while the queue was being drained, because
+`ready` was cleared after the drain: an infinite loop that exhausted the heap. `ready` is now
+cleared first. It never showed in 11a's suite, which used synchronous stores only.
+
+**The build checks moved to `build-checks.mjs`** so `test/build-checks.test.ts` proves each
+fires on an entry that breaks it; the React Native load check's message now quotes the error
+rather than the trap's own source line.
+
+**Size: 15.4 KB minified and gzipped** for `inlet-sdk/analytics/browser` (15.1 KB in 11a; this
+piece's changes to the client, the identity and the IndexedDB queue).
+
+### 33.3 Ingest and Collect (piece 3, September 27, 2026)
+
+**One pass per batch, in this order**, in `apps/api/src/services/analytics-ingest.ts`: the
+event store's readiness and the two-second warm-up; the credential's limits on the whole
+batch; per event the envelope (`validateEvent`), the effective time, the acceptance floor, the
+installation (a server installation for a user ID alone) and the installation's limit; the
+catalog in PostgreSQL; local days and each event's key; install records; duplicates; install
+ages; one insert. The pure arithmetic is `analytics-derive.ts`, the timers `analytics-worker.ts`.
+Section 31.3's order, with the rate limits split around validation: the per-credential limit
+needs only the batch's length, the per-installation one needs the installation, which only a
+valid event names.
+
+**Duplicates: a map of keys in flight, then one read.** An event's key is its whole sort key
+(database, name ID, local day, installation, effective time, event ID). A batch waits for any
+key another batch holds, then registers its own with no `await` between the last check and
+the registration, so two batches never both hold one key. Then one query reads the batch's
+keys from `events` with `(…) IN {keys:Array(Tuple(UInt32, Date, UUID, DateTime64(3, 'UTC'),
+UUID))}` beside `event_name_id IN` and `local_day IN`, which is what lets the primary key prune;
+`TupleParam` of `@clickhouse/client` binds the tuples, so nothing is interpolated. A key whose
+insert failed is blocked for ten seconds, and a batch holding one answers
+`503 analytics_unavailable` with the seconds left as `Retry-After`: the only answer that cannot
+store an event twice while its buffered row may still land. The check runs again after every
+wait, since another batch's insert may fail while this one waits on a third (verification). A batch that failed before its
+insert was sent blocks nothing; its waiters answer 503 and retry. Two copies within one batch
+count as one event and one duplicate. Rejected: a unique table in PostgreSQL per event (a
+write per event at 2,000 a second, and a second store to keep in step); ClickHouse's
+`insert_deduplication_token` (per block, not per event, and forgotten after a window).
+
+**A replay carries what was stored.** The lookup returns each stored copy's received time, and
+the replay row uses it (piece 1's contract), as does a copy that waited on another batch in
+flight: it takes the received time that batch stored, or found stored when it was itself a
+replay (verification found waiters taking the replaying batch's own time, which moved
+`latest` on a tie).
+
+**The received time a row carries is taken once the batch's installation locks are held, and
+never goes backwards.** The installation views call "first" the event received first; the
+install ages a batch stamps come from the install time it saw. A batch that arrived earlier
+than the one creating an installation, but looked it up after, would otherwise carry an
+earlier received time and become the installation's first event after the fact, moving the
+install time other rows were stamped with. `rowsReceivedTime` gives each batch a time later
+than every earlier batch's, at least a millisecond apart; it runs ahead of the wall clock only
+above a thousand batches a second. The clock correction and the future clamp still use the
+time the batch arrived, which may be a few milliseconds earlier. Departure from 31.3, which
+did not name when the received time is taken.
+
+**Install times.** An LRU of 100,000 (database key, installation) → install time or "no record"
+answers most batches with no read; a miss reads `installations` with piece 1's expression for
+the batch's missing IDs at once. Installations the batch may create are locked in process, in
+sorted order (no deadlock: a batch waits for keys in flight only after taking all its locks),
+evicted from the cache and read again under the lock, so the second of two batches creating
+one installation finds the first's record and stamps the same ages. A new installation's
+install time is its first qualifying event in the batch by (received time, effective time),
+the view's order, replays included.
+
+**Catalog: read the cache, write under a lock, look a name up before inserting it.** A batch
+that brings nothing new decides everything from an LRU of 5,000 (database, name) entries —
+ID, blocked, param keys with their observed types, categories — and touches no table. One that
+brings a name, key, type or category takes `pg_advisory_xact_lock(hashtext('inlet.analytics_catalog'),
+key)`, reads the batch's entries and the database's name counts again, decides again, and
+inserts; so two batches cannot both take the last slot, and a name is inserted only after the
+locked read did not find it, which spends no identity value on a name that exists (the one
+sequence is capped at 2^32 − 1, DECISIONS 33.2). Rejected: `INSERT … ON CONFLICT DO NOTHING
+RETURNING` on every new-looking name, which spends a value per attempt. `test_event` is exempt
+from the limit and from the hourly allowance, and is left out of both counts, so it never
+takes a slot (AN-025). Standard names are inserted `standard`. **AN-034 says ingest never
+updates an entry**; the exception is a param key seen with a new value type, whose
+`observed_types` are rewritten to the union read under the lock: at most twice per key ever,
+since there are three types. The catalog ID is guarded on the way to the event store's
+`UInt32` (`eventNameIdFor`): an ID it cannot hold refuses the batch with a logged 500.
+
+**The acceptance floor is read from the database row every batch already loads**, plus the
+floors retention raised in memory (`raiseAcceptanceFloor`). The brief proposed floors loaded
+from PostgreSQL and refreshed on an interval or a signal; ingest already reads the row to
+authenticate the key, so the stored `kept_from` is never staler than the request, and the
+in-memory raise is what makes a floor take effect before the retention pass writes it
+(AN-163). The lateness window is `effectiveStorage`'s; `kept_from` is compared with the local
+day, since weeks are partitioned by local day.
+
+**Rate limits in bucketed counters** (`lib/buckets.ts`): per key and bucket of one minute, a
+slot per bucket, so a read or an add costs a pass over the buckets whatever was counted. Per
+credential: sixty one-minute buckets, read as five for the five-minute window and all sixty
+for the hour; a batch that would pass either is refused whole, and a refused batch is not
+counted, so a client in a 429 loop does not extend its own penalty (as crash ingest, 24.3).
+Per installation: five buckets, counted one event at a time, only the excess rejected. Each
+structure holds at most 100,000 keys: past that, keys idle for the whole window go first, then
+the least recently counted, which can make one installation's limit forget part of its count
+but never grows the process (about 60 MB and 20 MB at worst). The per-installation limit is a
+noise control, not a security control (AN-020). The route sets `config: { rateLimit: false }`,
+so the platform's per-key ceiling of 1,000 requests a minute does not apply to it.
+
+**The per-address ceiling** (`lib/address-ceiling.ts`, neutral, for Remote Config's fetch too)
+counts requests in six ten-second buckets for at most 100,000 addresses, only when
+`INLET_TRUSTED_PROXIES` is set; without it, startup logs once that it is off. It runs after the
+key and the database are known, so its refusals are counted as `rate_limit_exceeded` on that
+database; the address is a key in memory for a minute and nothing else.
+
+**Country** (`lib/country.ts`, neutral). The header named by `INLET_COUNTRY_HEADER` is believed
+only when the request's address was resolved through a trusted proxy, which is when Fastify's
+`request.ip` differs from the socket's peer: it resolves `X-Forwarded-For` only from a peer
+`INLET_TRUSTED_PROXIES` trusts. `XX` and `T1` record no country without asking the database,
+since the proxy has said it does not know (or that the client is a Tor exit, which a database
+would place in the exit's country). Otherwise the bundled **DB-IP Lite country database**
+(CC BY 4.0, which allows bundling with attribution; MaxMind's GeoLite licence does not), read
+with **`mmdb-lib` 3.0.3** (MIT, no dependencies, the reader under `node-maxmind`): one `Reader`
+per file per process, loaded at startup from a buffer (8 MB). Rejected: `maxmind` (the same
+reader plus file watching and an LRU we do not need) and `@maxmind/geoip2-node` (MaxMind's own
+models, heavier). The file is pinned to one dated month and the SHA-256 of its download in
+`scripts/ip-country-db.mjs`, which the Dockerfile runs at build and `startLocalServices` runs for
+development and tests, into `apps/api/ip-country/` (git-ignored); the script says how to move
+the pin. The tests look up 193.51.24.1, in RENATER's 193.48.0.0/14, which the pinned file maps
+to France, rather than a committed fixture: a fixture would need a MaxMind DB writer this
+repository does not carry, and the real file is what production reads. A missing file logs
+once and derives nothing.
+
+**The body limit.** `AN-010`'s 256 KiB is the route's: a declared `content-length` above it is
+refused in `preParsing` before the body is read, and a body without one (chunked) is counted in
+`preParsing` as it arrives and refused once read, rather than mid-stream, which a client can see
+as a reset instead of the `413`. The route's Fastify `bodyLimit` is 1 MiB, so only a chunked body
+past that gets Fastify's generic `payload_too_large`. Verification replaced measuring the parsed
+body re-serialized, as crash ingest measures an envelope (24.3): `JSON.stringify` overflows the
+stack on a value some thousands of arrays deep, which a 256 KiB body holds, and answered `500`.
+
+**Clock correction rounds half a minute away from zero**, so clocks 90 s ahead and 90 s behind
+move by the same two minutes; `Math.round` alone rounds −1.5 to −1.
+
+**Counters** (AN-006) accumulate per database, hour and reason in memory and are written by
+the analytics worker every ten seconds with one additive upsert; a failed write puts them back
+for the next pass, and stopping the worker writes them one last time, so only a crash loses
+the last interval. `analytics_dropped_counts` gained `clock_corrected` (migration `0002`), the
+one warning without a column: warnings count per value (two truncated params are two), a
+refused batch counts each of its events. The worker is a list of passes, each with its own
+interval and a running guard, so pieces 4, 9 and 10 add theirs without a second timer loop.
+
+**The live feed** keeps the last 500 accepted events per database, oldest first, each with a
+sequence number; its cursor is the process's random epoch and the last sequence read, so a
+cursor from before a restart starts again from the new (empty) feed instead of skipping events
+whose sequence numbers restarted. A read with a cursor takes at most `limit` new events, the
+oldest first, and shows them newest first, so a client paging with the cursor sees each once;
+a read without one takes the `limit` most recent (AN-058).
+
+**The test event** is `test_event`, category `test`, environment `development`, platform
+`other`, app version `test`, SDK `inlet`/`test-event`, installation ID
+`HMAC-SHA256(installation_secret, "test-installation")` as a version-8 UUID, kind `test`, sent
+through `ingestAnalyticsBatch` with the caller's credential or `user:<id>` as its rate key.
+A server installation is the same HMAC over `user:<userId>`, so no user ID can collide with the
+test installation. **Later queries exclude the test installation** from every unique, active,
+new-installation, session and cohort figure by `installation_kind = 'device'` (and sessions by
+counting `app_started` of device installations only).
+
+**Warm-up.** `EventStore.readyAt` records when the store became ready in this process; ingest
+answers 503 until two seconds after it. The harness sets `analyticsIngestTimings.warmupMs` to 0,
+because its store is ready the moment it connects; one test sets it back.
+
+**Measured.** A 50-event batch through the route on this laptop (Apple Silicon, local
+PostgreSQL 18 and ClickHouse 26.8, 60 batches, the first ten ignored): median 80 ms, 95th
+percentile 92 ms, against the 300 ms budget of 9.5; most of it is the asynchronous insert's
+adaptive flush timeout. A batch of 50 duplicates answers in about the same time.

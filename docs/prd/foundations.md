@@ -1,11 +1,11 @@
 # Inlet — Foundations PRD
 
 ## Document Status
-**Status:** Baseline for every Inlet capability — Feedback Collection shipped (Releases 1–5), Crash Reports shipped (Release 6), SDK shipped (Release 7), UX Analytics specified (Release 8, not yet built; FD-016 and FD-032 built for the crash and feedback modules on September 24, 2026, their analytics parts waiting for the analytics module; analytics events moved to an optional ClickHouse event store on September 26, 2026), Remote Config specified (Release 9, not yet built, to ship before Release 8)
+**Status:** Baseline for every Inlet capability — Feedback Collection shipped (Releases 1–5), Crash Reports shipped (Release 6), SDK shipped (Release 7), UX Analytics specified (Release 8, not yet built; FD-016 and FD-032 built for the crash and feedback modules on September 24, 2026, their analytics parts waiting for the analytics module; analytics events moved to an optional ClickHouse event store on September 26, 2026), Remote Config specified (Release 9, not yet built; specified to ship before Release 8, which is built first since September 27, 2026, at the owner's request)
 **Product:** Inlet, the self-hosted place your applications report to
 **Language:** English
 **Notion page:** https://app.notion.com/p/3ddd33dfffca813c87daf018eec9aeb4
-**Last revised:** September 26, 2026 (Release 9 — Remote Config: FR-082, FR-088, FD-001, FD-002, FD-004, FD-010, FD-012, FD-014, FD-015, FD-016, FD-030, FD-032, FD-033 and sections 1, 6, 9, 10.6, 11, 12.1, 12.2, 15, 17, 20.2, 23 and 28 amended). Earlier the same day (Release 8 — analytics events stored in ClickHouse, an optional bundled service: FD-033 added; FD-005, FD-009, FD-015, FD-032, FR-027 and sections 1, 3, 4, 6, 9.6, 11, 12.3, 12.6, 13, 14, 15, 16, 17, 18 and 28 amended). Previously September 24, 2026 (Release 8 — UX Analytics: FD-016 and FD-032 added; FR-082, FR-087, FR-088, FR-171, FD-002, FD-010, FD-012, FD-014, FD-015, FD-030 and sections 1, 6, 9, 11, 12.1, 12.2, 12.3, 13, 15, 17, 18, 20.2, 20.5, 23 and 28 amended for the analytics capability and the shared SDK identity)
+**Last revised:** September 27, 2026 (Release 8 built before Release 9 at the owner's request: the status line and sections 17 and 28 amended). Earlier, on September 26, 2026 (Release 9 — Remote Config: FR-082, FR-088, FD-001, FD-002, FD-004, FD-010, FD-012, FD-014, FD-015, FD-016, FD-030, FD-032, FD-033 and sections 1, 6, 9, 10.6, 11, 12.1, 12.2, 15, 17, 20.2, 23 and 28 amended). Earlier the same day (Release 8 — analytics events stored in ClickHouse, an optional bundled service: FD-033 added; FD-005, FD-009, FD-015, FD-032, FR-027 and sections 1, 3, 4, 6, 9.6, 11, 12.3, 12.6, 13, 14, 15, 16, 17, 18 and 28 amended). Previously September 24, 2026 (Release 8 — UX Analytics: FD-016 and FD-032 added; FR-082, FR-087, FR-088, FR-171, FD-002, FD-010, FD-012, FD-014, FD-015, FD-030 and sections 1, 6, 9, 11, 12.1, 12.2, 12.3, 13, 15, 17, 18, 20.2, 20.5, 23 and 28 amended for the analytics capability and the shared SDK identity)
 **Capability PRDs:** Feedback Collection · Crash Reports · UX Analytics · Remote Config — subpages of this page
 **Repository mirror:** `docs/prd/foundations.md`
 
@@ -344,7 +344,7 @@ Inlet is successful as a platform when a second capability ships without a new c
 - A config database is a fourth database type. A publishable key may fetch the values its active version resolves to for a context, and nothing else; the template, the draft and the versions stay behind a secret key or a signed-in role (FR-082).
 - An environment is a project, for every capability. No database keeps environments of its own; a team runs one project per environment and moves configuration between them by export and import. The environment label of crash reports and analytics events stays a label on data, not a boundary for configuration.
 - The config module may create the shared installation ID and persists it, superseding the line of September 24 that only the analytics module creates it; the crash and feedback modules still attach it only while analytics is enabled, and a config fetch never stores it (FD-016).
-- Release 9 ships before Release 8, and builds the IP-to-country derivation that Release 8 reuses. Release numbers name capabilities, not dates.
+- Release 9 ships before Release 8, and builds the IP-to-country derivation that Release 8 reuses. Release numbers name capabilities, not dates. (Changed September 27, 2026, at the owner's request: Release 8 is built first and builds the IP-to-country derivation, which Release 9 reuses.)
 
 ## 18. Technical Constraints
 - Backend runtime: Node.js.
@@ -531,7 +531,7 @@ Beyond Release 4: notification destinations other than Slack, a digest instead o
 | 8 — UX Analytics | Analytics + Foundations + Crash + Feedback | Analytics databases, ingest, Overview, Events, Funnels, Cohorts, Users, data health, MCP; `inlet-sdk/analytics` with browser, node, electron and react-native entries; the shared SDK identity (FD-016); React Native adapters for crash and feedback; the ClickHouse event store behind the compose profile `analytics`. See the UX Analytics PRD | Specified September 24, 2026, and amended September 26, 2026 to store analytics events in ClickHouse; the shared identity, the React Native adapters for crash and feedback and the operator overrides of FD-032 for crash and feedback built the same day (`docs/DECISIONS.md` section 29); analytics not started |
 | 9 — Remote Config | Config + Foundations | Config databases, parameters and conditions, draft, publish, rollback and history, preview, the fetch route, splits, country derivation, MCP; `inlet-sdk/config` with browser, node, electron and react-native entries. See the Remote Config PRD | Specified September 26, 2026; to ship before Release 8 |
 
-Release 9 ships before Release 8: release numbers name capabilities, not dates, so that the Release 8 work already built keeps its name.
+Release 9 was specified to ship before Release 8; since September 27, 2026, at the owner's request, Release 8 is built first. Release numbers name capabilities, not dates, so neither is renumbered.
 
 Release 5 — Reviewed (the response as the row, per-reader read markers, four-tab navigation, database switcher) shipped in September 2026 between Releases 4 and 6 and is specified in section 24 of the Feedback Collection PRD.
 

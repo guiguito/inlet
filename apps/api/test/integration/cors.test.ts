@@ -14,8 +14,8 @@ import {
  * The cross-origin collection surface (FD-015).
  *
  * The browser adapters of `inlet-sdk` run on the integrator's own origin, so the health
- * probe, crash ingest and the four feedback collection routes answer cross-origin, and
- * everything else does not. What is worth pinning here is the boundary, in both
+ * probe, crash ingest, the four feedback collection routes and analytics ingest (for POST
+ * only) answer cross-origin, and everything else does not. What is worth pinning here is the boundary, in both
  * directions: the paths that must work from a browser, and a list of near neighbours —
  * including the route that returns collected responses — that must not.
  *
@@ -30,6 +30,7 @@ describe('cross-origin collection', () => {
   let crashDatabaseId: string;
   let publishable: string;
   let feedback: Awaited<ReturnType<typeof setupPublishedForm>>;
+  let analyticsDatabaseId: string;
 
   beforeAll(async () => {
     h = await createHarness();
@@ -44,6 +45,7 @@ describe('cross-origin collection', () => {
     crashDatabaseId = (await asAdmin(h, 'POST', `/v1/projects/${projectId}/crash-databases`, { name: 'Desktop app' })).json().id;
     publishable = (await createCredential(h, projectId, 'publishable')).secret;
     feedback = await setupPublishedForm(h, referenceDefinition(ids()));
+    analyticsDatabaseId = (await asAdmin(h, 'POST', `/v1/projects/${projectId}/analytics-databases`, { name: 'Web app', timezone: 'UTC' })).json().id;
   });
 
   const envelope = () => ({
@@ -138,6 +140,60 @@ describe('cross-origin collection', () => {
     expect(health.headers['access-control-allow-origin']).toBe('*');
     // FR-210: and it has to say that this deployment answers feedback cross-origin.
     expect(health.json().capabilities).toContain('feedback-cross-origin');
+  });
+
+  /**
+   * FD-015, UX Analytics 7.1: analytics ingest is open for POST and its preflight only, matched
+   * by method as well as path, and no other analytics route answers cross-origin, the catalog
+   * least of all.
+   */
+  it('answers the analytics ingest preflight for POST, and nothing else under /analytics-databases', async () => {
+    const batch = `/v1/analytics-databases/${analyticsDatabaseId}/batch`;
+    const open = await preflight(batch, 'POST');
+    expect(open.statusCode).toBe(204);
+    expect(open.headers['access-control-allow-origin']).toBe('*');
+    expect(open.headers['access-control-allow-methods']).toBe('POST, OPTIONS');
+    expect(open.headers['access-control-allow-headers']).toContain('authorization');
+    expect(open.headers['access-control-allow-headers']).toContain('content-type');
+    expect(open.headers['access-control-allow-credentials']).toBeUndefined();
+
+    // The same path for another method stays shut.
+    for (const method of ['GET', 'PUT', 'DELETE']) {
+      const shut = await preflight(batch, method);
+      expect(shut.statusCode, method).toBe(404);
+      expect(shut.headers['access-control-allow-origin'], method).toBeUndefined();
+    }
+    const read = await h.app.inject({ method: 'GET', url: batch, headers: { origin: 'https://app.example.com' } });
+    expect(read.headers['access-control-allow-origin']).toBeUndefined();
+
+    const closed: [string, string][] = [
+      [`/v1/analytics-databases/${analyticsDatabaseId}/events`, 'GET'],
+      [`/v1/analytics-databases/${analyticsDatabaseId}/live`, 'GET'],
+      [`/v1/analytics-databases/${analyticsDatabaseId}/test-event`, 'POST'],
+      [`/v1/analytics-databases/${analyticsDatabaseId}`, 'GET'],
+      [`/v1/analytics-databases/${analyticsDatabaseId}`, 'PATCH'],
+      [`/v1/analytics-databases/${analyticsDatabaseId}/deletion-impact`, 'GET'],
+      [`/v1/analytics-databases/${analyticsDatabaseId}/batch/extra`, 'POST'],
+      [`/v1/analytics-databases/${analyticsDatabaseId}/members`, 'GET'],
+      [`/v1/projects/${projectId}/analytics-databases`, 'GET'],
+    ];
+    for (const [url, method] of closed) {
+      const response = await preflight(url, method);
+      expect(response.statusCode, `${method} ${url}`).toBe(404);
+      expect(response.headers['access-control-allow-origin'], url).toBeUndefined();
+    }
+
+    // The answer itself, accepted or refused, carries the origin and exposes Retry-After.
+    const sent = await withKey(h.app, publishable, 'POST', batch, {
+      sentAt: new Date().toISOString(),
+      events: [{ eventId: crypto.randomUUID(), timestamp: new Date().toISOString(), name: 'page_opened', installationId: crypto.randomUUID(), app: { version: '1.0.0' }, sdk: { name: 'inlet-sdk', version: '0.3.0' } }],
+    });
+    expect(sent.statusCode, sent.body).toBe(200);
+    expect(sent.headers['access-control-allow-origin']).toBe('*');
+    expect(sent.headers['access-control-expose-headers']).toContain('retry-after');
+    const refused = await withKey(h.app, 'ipk_not_a_real_key', 'POST', batch, { sentAt: new Date().toISOString(), events: [] });
+    expect(refused.statusCode).toBe(401);
+    expect(refused.headers['access-control-allow-origin']).toBe('*');
   });
 
   it('leaves every other route same-origin', async () => {

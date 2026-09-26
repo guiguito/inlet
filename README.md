@@ -72,7 +72,7 @@ hands it back as JSON or CSV whenever you ask.
   redacted before they leave and client-side dedupe so a crash loop sends once. Each has a
   Node, browser, Electron, React and React Native entry; both have zero runtime dependencies and a queue
   that survives restarts, and together they take one configuration.
-- **It talks to AI agents.** An MCP server with 55 tools, at a URL or as a local process,
+- **It talks to AI agents.** An MCP server with 62 tools, at a URL or as a local process,
   so Claude can summarise your week's feedback, or triage a crash group and resolve it in
   the release that fixes it.
 - **Every choice is written down.** [DECISIONS.md](docs/DECISIONS.md) records what was

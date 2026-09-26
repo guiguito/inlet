@@ -12,6 +12,7 @@ import { bootstrapAdmin } from './services/bootstrap.js';
 import { startPurgeWorker } from './services/purge.js';
 import { startNotificationWorker } from './services/notifications.js';
 import { startCrashRetentionWorker } from './services/crashes.js';
+import { startAnalyticsWorker } from './services/analytics-worker.js';
 
 /** Process entry point for the bundled deployment. */
 const env = loadEnv();
@@ -72,6 +73,8 @@ const app = await buildApp(ctx);
 const stopPurgeWorker = startPurgeWorker(ctx);
 const stopNotificationWorker = startNotificationWorker(ctx);
 const stopCrashRetentionWorker = startCrashRetentionWorker(ctx);
+// UX Analytics 11: counters (AN-006) now; later pieces add their passes to this worker.
+const stopAnalyticsWorker = startAnalyticsWorker(ctx);
 
 const shutdown = async (signal: string): Promise<void> => {
   log.info({ signal }, 'shutting down');
@@ -82,6 +85,8 @@ const shutdown = async (signal: string): Promise<void> => {
   // delivered a second time. That makes an ordinary deploy the likeliest duplicate.
   await stopNotificationWorker();
   await app.close();
+  // After the app, so the last batches' counters are in memory when it writes them.
+  await stopAnalyticsWorker();
   storage.destroy();
   await eventStore?.close();
   await pool.end();

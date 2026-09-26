@@ -57,6 +57,24 @@ describe('analytics tools', () => {
     ]);
   });
 
+  it('sends the test event and reads the live feed with its cursor (AN-025, AN-058, AN-204)', async () => {
+    const calls: Call[] = [];
+    const { handlers, configs } = register(calls);
+    await handlers.get('send_analytics_test_event')!({ analyticsDatabaseId: 'adb_1' });
+    await handlers.get('get_analytics_live_events')!({ analyticsDatabaseId: 'adb_1' });
+    await handlers.get('get_analytics_live_events')!({ analyticsDatabaseId: 'adb_1', after: 'abc', limit: 20 });
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([
+      'POST /v1/analytics-databases/adb_1/test-event',
+      'GET /v1/analytics-databases/adb_1/live',
+      'GET /v1/analytics-databases/adb_1/live?after=abc&limit=20',
+    ]);
+    // AN-201: the semantics an agent needs, in the descriptions.
+    expect(configs.get('send_analytics_test_event')!.description).toContain('counts in no unique, active, new-installation, session or cohort figure');
+    expect(configs.get('get_analytics_live_events')!.description).toContain('newest first');
+    expect(configs.get('get_analytics_live_events')!.description).toContain('`cursor`');
+    expect(configs.get('get_analytics_live_events')!.description).toContain('empty after a restart');
+  });
+
   it('refuses deletion without the exact name (FD-022)', async () => {
     const calls: Call[] = [];
     const { handlers } = register(calls, { '/v1/analytics-databases/adb_1': { name: 'Checkout app' } });

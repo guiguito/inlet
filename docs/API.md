@@ -1086,8 +1086,8 @@ users and a link. The error message text is never sent.
 An analytics database counts how a product is used, from the events its apps send
 (UX Analytics PRD). It needs the analytics event store, ClickHouse, which a deployment
 enables with `docker compose --profile analytics up -d` or `INLET_CLICKHOUSE_URL` (see
-[DEPLOYMENT.md](DEPLOYMENT.md)). Everything below is available now; ingest, queries and
-the rest arrive with later pieces of Release 8.
+[DEPLOYMENT.md](DEPLOYMENT.md)). Databases, [ingest](#analytics-ingest), the test event and
+the live feed are available now; queries and the rest arrive with later pieces of Release 8.
 
 ```
 POST /v1/projects/prj_5waxfxyby3st/analytics-databases
@@ -1118,7 +1118,9 @@ reports is counted in it, and each stored event carries its day in it. It must b
 name that both the API's timezone data and the event store's `system.time_zones` list.
 Aliases are accepted and stored exactly as given (`Europe/Kiev`, `US/Eastern`); the name's
 case must match. Offsets are refused, including `UTC+2` (which POSIX reads as two hours
-west of UTC), `GMT-3` and `+02:00`. A missing or unlisted zone is `400 timezone_invalid`
+west of UTC), `GMT-3` and `+02:00`, and so are IANA names that carry the same inverted sign,
+such as `Etc/GMT+2` and `GMT+0`: any `+` or `-` followed by a digit. `UTC` and `Etc/UTC` are
+accepted. A missing or unlisted zone is `400 timezone_invalid`
 with `details[0].path` = `timezone`. A zone renamed after the server's timezone data was
 published is known to it by its former name; the interface proposes that name.
 
@@ -1160,8 +1162,193 @@ GET|PATCH      /v1/analytics-databases/{id}/slack-notifications, POST …/slack-
 - **Slack settings** are the shared ones. An analytics database announces data-health
   incidents only (AN-190), so `contentLevel` is accepted, stored and never read for it, as
   for a crash database.
-- **A publishable key reads and changes nothing here** (`403 insufficient_scope`); it will
-  only ingest events.
+- **A publishable key reads and changes nothing here** (`403 insufficient_scope`); it only
+  ingests events.
+
+### Analytics ingest
+
+```
+POST /v1/analytics-databases/{databaseId}/batch
+Authorization: Bearer ipk_…
+Content-Type: application/json
+
+{
+  "sentAt": "2026-09-26T10:00:05.120Z",
+  "events": [
+    {
+      "eventId": "0192f5a0-7c1e-7000-8000-00000000a001",
+      "timestamp": "2026-09-26T10:00:04.870Z",
+      "name": "checkout_completed",
+      "installationId": "0192f5a0-0000-7000-8000-0000000000aa",
+      "sessionId": "0192f5a0-0001-7000-8000-0000000000bb",
+      "params": { "plan": "pro", "items": 3 },
+      "platform": "web",
+      "app": { "version": "1.4.0" },
+      "sdk": { "name": "inlet-sdk", "version": "0.3.0" }
+    }
+  ]
+}
+```
+
+```json
+{ "accepted": 1, "duplicates": 0, "rejected": [], "warnings": [] }
+```
+
+Authenticated with a publishable or secret key of the project that owns the database; a
+key of another project gets `403 analytics_database_inaccessible`. Events arrive in batches
+only: `sentAt`, the client's clock when it sent the batch, and `events`, 1 to 100 events, at
+most 256 KiB as UTF-8. A single event is a batch of one. `inlet-sdk/analytics` does all of
+this for you; the route is for any other client.
+
+**The answer is per event.** Every valid event is stored even when others in the batch are
+not. `accepted` counts the events stored by this request, `duplicates` those already stored
+(see below), and `rejected` and `warnings` list each event concerned by its `index` in
+`events`, with a `code` and, where one applies, the `field`:
+
+```json
+{
+  "accepted": 98,
+  "duplicates": 0,
+  "rejected": [
+    { "index": 17, "code": "unknown_field", "field": "channel" },
+    { "index": 64, "code": "invalid_event", "field": "name" }
+  ],
+  "warnings": [{ "index": 3, "code": "truncated", "field": "params.note" }]
+}
+```
+
+| Rejected with | When |
+| --- | --- |
+| `unknown_field` | The event carries a field the envelope does not name, nested ones included (`app.channel`). |
+| `invalid_event` | A field is missing, of the wrong type or out of its bounds; `field` is its path. |
+| `event_too_large` | Over 8 KiB serialized as UTF-8, after truncation. |
+| `missing_identity` | Neither `installationId` nor `userId`, once placeholder user IDs are dropped. |
+| `event_too_old` | Its effective time is before the acceptance floor: older than the lateness window (30 days by default), or in a week retention has already dropped. |
+| `event_name_limit` | A new name, and the database already holds its limit of names (500 by default). |
+| `event_name_rate` | A new name beyond the 50 new names an hour the database accepts. |
+| `event_blocked` | A name an Admin blocked. |
+| `installation_rate_limited` | That installation sent more than 1,000 events in five minutes; only its excess is refused. |
+
+| Warned with | What was stored |
+| --- | --- |
+| `truncated` | A string param (256 characters), an attribution (128) or a category (32) cut to its bound, never through a surrogate pair. |
+| `placeholder_user_id` | A user ID such as `""`, `null`, `undefined`, `anonymous`, `0` or the all-zero UUID, dropped. |
+| `param_key_limit` | A new param key beyond the 100 an event name may have, dropped; `field` names it. |
+| `category_limit` | A new category beyond the 10 an event name may have: the event is stored without one. |
+| `clock_corrected` | The timestamp was moved, see below. |
+
+A condition of the data never answers `5xx`. The batch as a whole is refused only for
+these: `400 malformed_json` (not JSON, or not `{sentAt, events}` with an RFC 3339 `sentAt`),
+`400 too_many_events` (more than 100), `413 batch_too_large` (over 256 KiB),
+`401`/`403` for the key, `429 rate_limit_exceeded`, and `503 analytics_unavailable` while the
+event store is unreachable or refuses the write; the last two carry `Retry-After` in seconds.
+
+#### The envelope
+
+Each event holds exactly these fields. Strings have their lone surrogates replaced with
+U+FFFD and their U+0000 characters removed before anything is checked. A JSON `null` in an
+optional field is read as the field's absence; a param value may not be `null`.
+
+| Field | Required | Bounds | Notes |
+| --- | --- | --- | --- |
+| `eventId` | yes | UUID | Client-generated, UUIDv7 recommended; the idempotency key |
+| `timestamp` | yes | RFC 3339 with an offset | The client's clock; see clock correction |
+| `name` | yes | `^[A-Za-z][A-Za-z0-9_.:-]{0,63}$` | Case-sensitive; counts toward the event-name limit |
+| `category` | no | 32 characters, truncated; 10 per event name | `standard` for standard events, `test` for the test event |
+| `installationId` | unless `userId` | UUID | |
+| `userId` | unless `installationId` | 128 characters | Placeholders dropped |
+| `sessionId` | no | UUID | |
+| `attribution` | no | 128 characters, truncated | The acquisition source |
+| `experiments` | no | 5 entries; key `^[A-Za-z0-9_.-]{1,40}$`; variant 40 characters | Experiment to variant |
+| `params` | no | 25 entries; key `^[A-Za-z_][A-Za-z0-9_.]{0,39}$`; a string of 256 characters (truncated), a finite number or a boolean | No nesting, arrays or null |
+| `app` | yes | `version` 64, `build` 64, `id` 64 | `id` tells apart the apps of one product |
+| `platform` | no | `web`, `ios`, `android`, `macos`, `windows`, `linux`, `server`, `other` | Defaults to `other`; `server` marks a background event |
+| `os` | no | `name` 32, `version` 64 | |
+| `runtime` | no | `name` 32, `version` 32 | |
+| `locale` | no | BCP 47 with hyphens, 35 characters | `en-GB`, not `en_GB` |
+| `country` | no | ISO 3166-1 alpha-2 | Overrides the derived country |
+| `environment` | no | 32 characters | Defaults to `production` |
+| `ephemeral` | no | boolean | Set when the client could not persist its identity |
+| `sdk` | yes | `name` 64, `version` 32 | |
+
+UUIDs are accepted in any letter case, with or without dashes, and stored and returned
+lowercase with dashes. Standard events (`app_installed`, `app_updated`, `app_started`,
+`session_crashed`, `screen_viewed`) are ordinary events with the names and params the
+PRD gives them; any client may send them.
+
+#### Idempotency and clock correction
+
+- **Retry freely.** An event is identified by its database, `eventId`, name, installation
+  and effective time. Sent again, it is answered as a duplicate, stored once and counted
+  once, whether the copies arrive one after the other, at the same moment, or after the
+  server restarted. An `eventId` reused for another name or installation is another event.
+  When a batch is refused with `503`, any of its events the event store did store are
+  answered as duplicates when you send it again.
+- **Clock correction.** The server records when it received the batch. When `sentAt` differs
+  from that by more than 60 seconds, every event's timestamp moves by the difference rounded
+  to the whole minute, with the warning `clock_corrected`; so a device whose clock is three
+  hours behind stores its events three hours later. A time more than five minutes in the
+  future becomes the received time, with the same warning. The result is the event's
+  **effective time**, which queries use. A client whose skew changes between two attempts may
+  store a retried event twice; keep `sentAt` accurate.
+- **A user ID alone** belongs to that user's server installation, derived from the user ID
+  under a secret of the database: the same user always has the same one in a database, and
+  another in the next. Server installations are counted by user ID, never as installations.
+- **Country.** Unless the event carries `country`, the database has derivation off, or the
+  platform is `server`, the country is derived from the request: from the trusted proxy's
+  country header when the deployment configures one, else from the bundled DB-IP database.
+  The address is used for the lookup and stored and logged nowhere.
+
+#### Rate limits
+
+Counted in events, not requests, and exempt from the platform's per-key request ceiling,
+because every installation of an application shares one publishable key:
+
+- per key, 200,000 events in five minutes and 2,000,000 an hour: a batch that would go past
+  either is refused whole with `429 rate_limit_exceeded` and `Retry-After`;
+- per installation, 1,000 events in five minutes: only that installation's excess events are
+  rejected, one by one, with `installation_rate_limited`;
+- per address, 6,000 requests a minute, only where the deployment names a trusted proxy.
+
+The operator may move each (see [DEPLOYMENT.md](DEPLOYMENT.md)).
+
+#### Cross-origin
+
+`POST /v1/analytics-databases/{databaseId}/batch` and its preflight answer cross-origin, with
+a wildcard origin, no credentials and `Retry-After` exposed, so the browser module can send
+from your own site. It is opened for that method only: nothing else under
+`/v1/analytics-databases`, the catalog and the live feed included, answers a preflight.
+
+### The test event and the live feed
+
+```
+POST /v1/analytics-databases/{databaseId}/test-event          Creator or Admin
+GET  /v1/analytics-databases/{databaseId}/live?after=<cursor>  Viewer or above
+```
+
+The **test event** sends one `test_event`, category `test`, environment `development`,
+through the ingest path, attributed to the database's test installation. It answers like a
+batch, plus the `eventId` it sent. The test installation counts in no unique, active,
+new-installation, session or cohort figure, the event takes no slot of the event-name limit,
+and it appears in the live feed. A publishable key cannot send it.
+
+The **live feed** returns the last events the database accepted, newest first, each with
+`name`, `time` (the effective time), `installationId`, `platform` and `appVersion`, and a
+`cursor`:
+
+```json
+{
+  "events": [
+    { "name": "test_event", "time": "2026-09-26T10:00:05.120Z", "installationId": "5d1c…", "platform": "other", "appVersion": "test" }
+  ],
+  "cursor": "YjNmMGE5YzE6MTI"
+}
+```
+
+Pass `cursor` back as `after` to get only the events accepted since, so a client polling
+every few seconds sees each event once; `limit` (1 to 500) takes the most recent events
+without `after`, and with it pages through a backlog, oldest first taken. The feed holds the last 500 events per database in the server's memory: it is
+empty after a restart, and a duplicate never appears twice. It takes no query slot.
 
 ## Errors
 
@@ -1228,6 +1415,7 @@ The codes you are most likely to handle:
 | `standard_cohort_immutable`, `standard_event_undeletable` | 409 | The Retention cohort cannot be edited or deleted; a standard event cannot be deleted or blocked. |
 | `storage_setting_out_of_bounds` | 400 | A storage setting outside the deployment's bounds, which the message names. |
 | `batch_too_large`, `too_many_events` | 413, 400 | An analytics batch over 256 KiB, or of more than 100 events. |
+| `malformed_json` | 400 | The body is not JSON, or an analytics batch is not `{sentAt, events}`. |
 
 ## Limits
 
@@ -1320,6 +1508,8 @@ cross-origin request are all refused.
 | Create, rename an analytics database | No | Yes | Creator or Admin |
 | Switch an analytics database's country derivation | No | Yes | Database or project Admin |
 | Read an analytics database's deletion impact, delete it | No | Yes | Admin |
-| Ingest analytics events (Release 8, to come) | Yes | Yes | Not applicable |
+| Ingest analytics events | Yes | Yes | Not applicable |
+| Send an analytics test event | No | Yes | Creator or Admin |
+| Read the analytics live feed | No | Yes | Viewer or above |
 | Edit or delete one analytics event | No | No | Not supported |
 | Connect an MCP client to `/v1/mcp` | No | Yes | No |

@@ -991,6 +991,8 @@ export const analyticsDroppedCounts = pgTable(
     paramKeysDropped: bigint('param_keys_dropped', { mode: 'number' }).notNull().default(0),
     categoriesDropped: bigint('categories_dropped', { mode: 'number' }).notNull().default(0),
     placeholdersDropped: bigint('placeholders_dropped', { mode: 'number' }).notNull().default(0),
+    /** AN-014: events whose timestamps were corrected, the one warning AN-168 does not list. */
+    clockCorrected: bigint('clock_corrected', { mode: 'number' }).notNull().default(0),
     duplicates: bigint('duplicates', { mode: 'number' }).notNull().default(0),
     accepted: bigint('accepted', { mode: 'number' }).notNull().default(0),
   },

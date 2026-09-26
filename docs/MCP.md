@@ -224,14 +224,16 @@ of every unique count, and a user ID the integrator sets after sign-in is the ot
 analytics answer covers the database's storage window (13 months or 500 million events by
 default) and states the range it covers, and a range preset such as `last30Days` ends today
 and includes it. The server's instructions say the same, so an agent reads it before it
-calls anything. The database tools below exist now; the query, catalog, profile, storage
-and erasure tools arrive with later pieces of Release 8 (UX Analytics PRD section 8.3).
+calls anything. The database tools, the test event and the live feed below exist now; the
+query, catalog, profile, storage and erasure tools arrive with later pieces of Release 8
+(UX Analytics PRD section 8.3).
 
 ### Reading
 
 | Tool | What it does |
 | --- | --- |
 | `list_analytics_databases`, `get_analytics_database` | The analytics databases of a project; one of them with its reporting timezone, country derivation, storage settings in force, the deployment's limits, and `eventStore`, whether the event store answers now. Both work while it does not. |
+| `get_analytics_live_events` | The latest events the database accepted, newest first, with name, effective time, installation ID, platform and app version: the last 500 since the server started, empty after a restart. At most 500 per call with a `cursor`; pass it back as `after` to get only what arrived since. Takes no query slot. |
 
 ### Writing
 
@@ -239,6 +241,7 @@ and erasure tools arrive with later pieces of Release 8 (UX Analytics PRD sectio
 | --- | --- |
 | `create_analytics_database` | Takes a name and a `timezone`, an IANA name such as `Europe/Paris` that can never be changed; offsets such as `UTC+2` are refused with `timezone_invalid`. Refused with `analytics_not_enabled` on a deployment without the event store, and `analytics_database_limit` when it holds its limit. The project's existing publishable key will ingest into it. |
 | `update_analytics_database` | Renames it, or switches country derivation, which applies to events received afterwards. |
+| `send_analytics_test_event` | Sends one `test_event` (category `test`, environment `development`) through the ingest path, from the database's test installation, which counts in no unique, active, new-installation, session or cohort figure; it takes no slot of the event-name limit. Answers like ingest, with the `eventId`, and shows up in `get_analytics_live_events`. |
 
 ### Destructive
 

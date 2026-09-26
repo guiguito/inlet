@@ -1,11 +1,31 @@
+import { Transform } from 'node:stream';
 import { z } from 'zod';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { desc, eq } from 'drizzle-orm';
-import { createAnalyticsDatabaseBodySchema, updateAnalyticsDatabaseBodySchema } from '@inlet/shared';
+import {
+  ANALYTICS_DEFAULTS,
+  ANALYTICS_LIMITS,
+  TEST_EVENT_CATEGORY,
+  TEST_EVENT_NAME,
+  analyticsBatchSchema,
+  createAnalyticsDatabaseBodySchema,
+  updateAnalyticsDatabaseBodySchema,
+  uuidV7,
+} from '@inlet/shared';
 import type { AppContext } from '../context.js';
-import { requireAnalyticsEnabled } from '../db/clickhouse.js';
+import { requireAnalyticsEnabled, requireEventStore } from '../db/clickhouse.js';
 import { analyticsDatabases, type AnalyticsDatabaseRow } from '../db/schema.js';
-import { listAccessibleAnalyticsDatabaseIds, requireAnalyticsDatabase, requireProject } from '../services/access.js';
+import { createAddressCeiling } from '../lib/address-ceiling.js';
+import { createCountrySource } from '../lib/country.js';
+import { ApiError, apiError } from '../lib/errors.js';
+import {
+  listAccessibleAnalyticsDatabaseIds,
+  requireAnalyticsDatabase,
+  requireClientAnalyticsDatabase,
+  requireProject,
+} from '../services/access.js';
+import { countRefusedBatch, ingestAnalyticsBatch, readLiveFeed, trackAddressCeiling } from '../services/analytics-ingest.js';
+import { testInstallationId } from '../services/analytics-derive.js';
 import {
   analyticsDatabaseLimits,
   analyticsDeletionImpact,
@@ -14,7 +34,7 @@ import {
   deleteAnalyticsDatabase,
   effectiveStorage,
 } from '../services/analytics.js';
-import { requireManagementPrincipal } from '../services/principal.js';
+import { requireManagementPrincipal, requireProjectCredential } from '../services/principal.js';
 import { databaseIdParam, errorsFor, projectIdParam } from './schemas.js';
 
 /**
@@ -61,8 +81,68 @@ const deletionImpactSchema = z.object({
   notice: z.string(),
 });
 
+const issueSchema = z.object({
+  index: z.int().describe('The event\u2019s position in `events`, from 0.'),
+  code: z.string(),
+  field: z.string().optional().describe('The path of the field concerned, where there is one, such as `params.plan`.'),
+});
+
+const batchAnswerSchema = z.object({
+  accepted: z.int().describe('Events stored by this request.'),
+  duplicates: z.int().describe('Events already stored, from an earlier attempt or a copy (AN-013); each is stored once.'),
+  rejected: z.array(issueSchema).describe('Events not stored, with the reason (PRD 7.1).'),
+  warnings: z.array(issueSchema).describe('Stored events with something truncated, dropped or corrected.'),
+});
+
+const liveEventSchema = z.object({
+  name: z.string(),
+  time: z.string().describe('The effective time (AN-014), RFC 3339.'),
+  installationId: z.string(),
+  platform: z.string(),
+  appVersion: z.string(),
+});
+
+/**
+ * AN-010: the route's own check answers `batch_too_large` for a body over 256 KiB, so the
+ * Fastify limit sits well above it; only a body past this one gets Fastify's generic 413.
+ */
+const BATCH_BODY_LIMIT = 4 * ANALYTICS_LIMITS.batchMaxBytes;
+
+/** The bytes of a batch body sent without a length, counted as it arrived (AN-010). */
+const chunkedBytes = new WeakMap<object, number>();
+
+function batchTooLarge(): ApiError {
+  return apiError('batch_too_large', `A batch is at most ${ANALYTICS_LIMITS.batchMaxBytes / 1024} KiB serialized as UTF-8.`);
+}
+
+/** AN-010: the envelope of the batch. Its failures map to the codes PRD 7.1 names. */
+function parseBatch(body: unknown): { sentAt: string; events: unknown[] } {
+  const result = analyticsBatchSchema.safeParse(body);
+  if (result.success) return result.data;
+  if (result.error.issues.some((issue) => issue.path[0] === 'events' && issue.path.length === 1 && issue.code === 'too_big')) {
+    throw apiError('too_many_events', `A batch holds 1 to ${ANALYTICS_LIMITS.batchMaxEvents} events.`);
+  }
+  throw apiError(
+    'malformed_json',
+    'A batch is an object with `sentAt`, an RFC 3339 time, and `events`, a list of 1 to 100 events.',
+    result.error.issues.map((issue) => ({ path: issue.path.map(String).join('.'), code: issue.code, message: issue.message })),
+  );
+}
+
 export function analyticsRoutes(ctx: AppContext): FastifyPluginAsyncZod {
   return async (app) => {
+    // AN-033 and AN-020, both said once at startup: whether a country can be derived, and
+    // whether the per-address ceiling is on.
+    const country = createCountrySource({
+      header: ctx.env.INLET_COUNTRY_HEADER,
+      databaseFile: ctx.env.INLET_IP_COUNTRY_DB,
+      trustProxy: ctx.env.trustProxy,
+      log: ctx.log,
+    });
+    const ceiling = trackAddressCeiling(
+      createAddressCeiling({ name: 'analytics ingest', limitPerMinute: ctx.env.limits.analyticsPerAddressPerMinute, trustProxy: ctx.env.trustProxy, log: ctx.log }),
+    );
+
     const present = (row: AnalyticsDatabaseRow) => ({
       id: row.id,
       projectId: row.projectId,
@@ -216,6 +296,140 @@ export function analyticsRoutes(ctx: AppContext): FastifyPluginAsyncZod {
         const { database } = await requireAnalyticsDatabase(ctx.db, principal, request.params.databaseId, 'admin');
         await deleteAnalyticsDatabase(ctx, database);
         return { deleted: true as const };
+      },
+    );
+    // --- Ingest (AN-010 to AN-025, section 7.1) ---------------------------------------
+
+    app.post(
+      '/analytics-databases/:databaseId/batch',
+      {
+        bodyLimit: BATCH_BODY_LIMIT,
+        // FD-030, AN-020: every installation of an application shares one publishable key, so
+        // the per-key request ceiling would refuse a fleet; the route counts events instead.
+        config: { rateLimit: false },
+        // AN-010: a declared length over the bound is refused before the body is read, and a
+        // body sent without one (chunked) is counted as it arrives, in bytes as sent, and refused
+        // once read: not by serializing the parsed body again, which a deeply nested value
+        // cannot survive (a 500), and not mid-stream, which a client may see as a reset.
+        preParsing: async (request, _reply, payload) => {
+          const declared = request.headers['content-length'];
+          if (declared !== undefined) {
+            if (Number(declared) > ANALYTICS_LIMITS.batchMaxBytes) throw batchTooLarge();
+            return payload; // Fastify refuses a body longer than it declared
+          }
+          const counted = new Transform({
+            transform(chunk: Buffer, _encoding, next) {
+              chunkedBytes.set(request.raw, (chunkedBytes.get(request.raw) ?? 0) + chunk.length);
+              next(null, chunk);
+            },
+          });
+          payload.on('error', (error) => counted.destroy(error));
+          return payload.pipe(counted);
+        },
+        schema: {
+          tags: ['Analytics ingest'],
+          summary: 'Send a batch of analytics events',
+          description: [
+            'AN-010 to AN-025. A publishable or secret key of the owning project. The body is `sentAt`, the client’s time of sending, and `events`, 1 to 100 events of the envelope in PRD section 9.1, at most 256 KiB as UTF-8.',
+            'Every valid event is stored even when others are rejected. The answer lists each rejected event and each warning by its index. Idempotent: an event already stored (the same `eventId`, name, installation and effective time) is answered as a duplicate and stored once.',
+            'When `sentAt` is more than 60 s from the server’s clock, every timestamp is corrected by that difference rounded to the minute (`clock_corrected`). Refused whole with `429 rate_limit_exceeded` beyond the key’s limits and `503 analytics_unavailable` while the event store is down, both with `Retry-After`. Open cross-origin (FD-015).',
+          ].join('\n\n'),
+          security: [{ projectKey: [] }],
+          params: databaseIdParam,
+          body: z.unknown(),
+          response: { 200: batchAnswerSchema, ...errorsFor(400, 401, 403, 404, 413, 429, 503) },
+        },
+      },
+      async (request) => {
+        const credential = await requireProjectCredential(ctx, request);
+        const database = await requireClientAnalyticsDatabase(ctx.db, credential, request.params.databaseId);
+        if ((chunkedBytes.get(request.raw) ?? 0) > ANALYTICS_LIMITS.batchMaxBytes) throw batchTooLarge();
+        const batch = parseBatch(request.body);
+        // AN-020: the address is a key in memory for a minute at most, never stored.
+        if (!ctx.env.INLET_DISABLE_RATE_LIMITS) {
+          const wait = ceiling.check(request.ip);
+          if (wait !== null) {
+            countRefusedBatch(database.key, batch.events.length);
+            throw new ApiError('rate_limit_exceeded', 'Too many requests from this address; slow down.', undefined, { retryAfterSeconds: wait });
+          }
+        }
+        return ingestAnalyticsBatch(ctx, {
+          database,
+          credentialId: credential.id,
+          rateKey: credential.id,
+          sentAt: batch.sentAt,
+          events: batch.events,
+          country: () => country.countryOf(request),
+        });
+      },
+    );
+
+    app.post(
+      '/analytics-databases/:databaseId/test-event',
+      {
+        schema: {
+          tags: ['Analytics ingest'],
+          summary: 'Send a test event',
+          description:
+            'AN-025. Creator or Admin, not a publishable key. Sends `test_event`, category `test`, environment `development`, through the ingest path, attributed to the database’s test installation, which counts in no unique, active, new-installation, session or cohort figure. It takes no slot of the event-name limit and appears in the live feed.',
+          params: databaseIdParam,
+          response: { 200: batchAnswerSchema.extend({ eventId: z.string() }), ...errorsFor(401, 403, 404, 429, 503) },
+        },
+      },
+      async (request) => {
+        const principal = await requireManagementPrincipal(ctx, request);
+        const { database } = await requireAnalyticsDatabase(ctx.db, principal, request.params.databaseId, 'creator');
+        const now = new Date().toISOString();
+        const eventId = uuidV7();
+        const answer = await ingestAnalyticsBatch(ctx, {
+          database,
+          credentialId: principal.kind === 'credential' ? principal.credential.id : '',
+          rateKey: principal.kind === 'credential' ? principal.credential.id : `user:${principal.userId}`,
+          sentAt: now,
+          events: [
+            {
+              eventId,
+              timestamp: now,
+              name: TEST_EVENT_NAME,
+              category: TEST_EVENT_CATEGORY,
+              installationId: testInstallationId(database.installationSecret),
+              environment: 'development',
+              app: { version: 'test' },
+              sdk: { name: 'inlet', version: 'test-event' },
+            },
+          ],
+          country: () => country.countryOf(request),
+        });
+        return { ...answer, eventId };
+      },
+    );
+
+    app.get(
+      '/analytics-databases/:databaseId/live',
+      {
+        schema: {
+          tags: ['Analytics ingest'],
+          summary: 'Read the live feed',
+          description: `AN-037, AN-058. Viewer or above. The last ${ANALYTICS_DEFAULTS.liveFeedEvents} events this database accepted since the server started, newest first, with name, effective time, installation ID, platform and app version. Pass the returned \`cursor\` as \`after\` to get only the events accepted since, so a client polling every few seconds sees each event once. Held in memory: empty after a restart, and takes no query slot.`,
+          params: databaseIdParam,
+          querystring: z.object({
+            after: z.string().max(200).optional().describe('The `cursor` of the previous call; omit for everything held.'),
+            limit: z.coerce
+              .number()
+              .int()
+              .min(1)
+              .max(ANALYTICS_DEFAULTS.liveFeedEvents)
+              .default(ANALYTICS_DEFAULTS.liveFeedEvents)
+              .describe('At most this many events: without `after`, the most recent; with it, the oldest of the new ones first, so paging shows each event once.'),
+          }),
+          response: { 200: z.object({ events: z.array(liveEventSchema), cursor: z.string() }), ...errorsFor(400, 401, 403, 404, 503) },
+        },
+      },
+      async (request) => {
+        const principal = await requireManagementPrincipal(ctx, request);
+        const { database } = await requireAnalyticsDatabase(ctx.db, principal, request.params.databaseId, 'viewer');
+        requireEventStore(ctx.eventStore);
+        return readLiveFeed(database.key, request.query.after, request.query.limit);
       },
     );
   };

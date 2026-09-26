@@ -99,6 +99,12 @@ export class EventStore {
   private readonly reader: ClickHouseClient;
   private readonly options: EventStoreOptions;
   private currentState: 'pending' | 'ready' = 'pending';
+  /**
+   * When the store became ready in this process (`Date.now()`), undefined until then. Ingest
+   * answers `503` for its first two seconds, so that asynchronous-insert buffers a previous
+   * process left behind flush before any duplicate lookup (DECISIONS 31.3.3).
+   */
+  readyAt: number | undefined;
   private retryTimer: NodeJS.Timeout | undefined;
   private closed = false;
 
@@ -199,6 +205,7 @@ export class EventStore {
         throw new Error(`ClickHouse migrations ${pending.join(', ')} are not applied. Start Inlet once with INLET_MIGRATE_ON_START=true.`);
       }
     }
+    if (this.currentState !== 'ready') this.readyAt = Date.now();
     this.currentState = 'ready';
   }
 
@@ -291,12 +298,13 @@ export function requireEventStore(store: EventStore | null): EventStore {
   return store;
 }
 
-function analyticsUnavailable(): ApiError {
+/** `503 analytics_unavailable` with `Retry-After` (AN-018), for a caller that found the store down itself. */
+export function analyticsUnavailable(retryAfterSeconds = EVENT_STORE_RETRY_AFTER_SECONDS): ApiError {
   return new ApiError(
     'analytics_unavailable',
     'The analytics event store is unavailable. Try again shortly.',
     undefined,
-    { retryAfterSeconds: EVENT_STORE_RETRY_AFTER_SECONDS },
+    { retryAfterSeconds },
   );
 }
 

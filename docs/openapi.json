@@ -16720,6 +16720,503 @@
         }
       }
     },
+    "/v1/analytics-databases/{databaseId}/batch": {
+      "post": {
+        "summary": "Send a batch of analytics events",
+        "tags": [
+          "Analytics ingest"
+        ],
+        "description": "AN-010 to AN-025. A publishable or secret key of the owning project. The body is `sentAt`, the client’s time of sending, and `events`, 1 to 100 events of the envelope in PRD section 9.1, at most 256 KiB as UTF-8.\n\nEvery valid event is stored even when others are rejected. The answer lists each rejected event and each warning by its index. Idempotent: an event already stored (the same `eventId`, name, installation and effective time) is answered as a duplicate and stored once.\n\nWhen `sentAt` is more than 60 s from the server’s clock, every timestamp is corrected by that difference rounded to the minute (`clock_corrected`). Refused whole with `429 rate_limit_exceeded` beyond the key’s limits and `503 analytics_unavailable` while the event store is down, both with `Retry-After`. Open cross-origin (FD-015).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "projectKey": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accepted": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991,
+                      "description": "Events stored by this request."
+                    },
+                    "duplicates": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991,
+                      "description": "Events already stored, from an earlier attempt or a copy (AN-013); each is stored once."
+                    },
+                    "rejected": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "index": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991,
+                            "description": "The event’s position in `events`, from 0."
+                          },
+                          "code": {
+                            "type": "string"
+                          },
+                          "field": {
+                            "description": "The path of the field concerned, where there is one, such as `params.plan`.",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "index",
+                          "code"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "description": "Events not stored, with the reason (PRD 7.1)."
+                    },
+                    "warnings": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "index": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991,
+                            "description": "The event’s position in `events`, from 0."
+                          },
+                          "code": {
+                            "type": "string"
+                          },
+                          "field": {
+                            "description": "The path of the field concerned, where there is one, such as `params.plan`.",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "index",
+                          "code"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "description": "Stored events with something truncated, dropped or corrected."
+                    }
+                  },
+                  "required": [
+                    "accepted",
+                    "duplicates",
+                    "rejected",
+                    "warnings"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/analytics-databases/{databaseId}/test-event": {
+      "post": {
+        "summary": "Send a test event",
+        "tags": [
+          "Analytics ingest"
+        ],
+        "description": "AN-025. Creator or Admin, not a publishable key. Sends `test_event`, category `test`, environment `development`, through the ingest path, attributed to the database’s test installation, which counts in no unique, active, new-installation, session or cohort figure. It takes no slot of the event-name limit and appears in the live feed.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accepted": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991,
+                      "description": "Events stored by this request."
+                    },
+                    "duplicates": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991,
+                      "description": "Events already stored, from an earlier attempt or a copy (AN-013); each is stored once."
+                    },
+                    "rejected": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "index": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991,
+                            "description": "The event’s position in `events`, from 0."
+                          },
+                          "code": {
+                            "type": "string"
+                          },
+                          "field": {
+                            "description": "The path of the field concerned, where there is one, such as `params.plan`.",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "index",
+                          "code"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "description": "Events not stored, with the reason (PRD 7.1)."
+                    },
+                    "warnings": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "index": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991,
+                            "description": "The event’s position in `events`, from 0."
+                          },
+                          "code": {
+                            "type": "string"
+                          },
+                          "field": {
+                            "description": "The path of the field concerned, where there is one, such as `params.plan`.",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "index",
+                          "code"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "description": "Stored events with something truncated, dropped or corrected."
+                    },
+                    "eventId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "accepted",
+                    "duplicates",
+                    "rejected",
+                    "warnings",
+                    "eventId"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/analytics-databases/{databaseId}/live": {
+      "get": {
+        "summary": "Read the live feed",
+        "tags": [
+          "Analytics ingest"
+        ],
+        "description": "AN-037, AN-058. Viewer or above. The last 500 events this database accepted since the server started, newest first, with name, effective time, installation ID, platform and app version. Pass the returned `cursor` as `after` to get only the events accepted since, so a client polling every few seconds sees each event once. Held in memory: empty after a restart, and takes no query slot.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "description": "The `cursor` of the previous call; omit for everything held."
+          },
+          {
+            "schema": {
+              "default": 500,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500
+            },
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "description": "At most this many events: without `after`, the most recent; with it, the oldest of the new ones first, so paging shows each event once."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "time": {
+                            "type": "string",
+                            "description": "The effective time (AN-014), RFC 3339."
+                          },
+                          "installationId": {
+                            "type": "string"
+                          },
+                          "platform": {
+                            "type": "string"
+                          },
+                          "appVersion": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "time",
+                          "installationId",
+                          "platform",
+                          "appVersion"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "cursor": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "events",
+                    "cursor"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/analytics-databases/{databaseId}/slack-notifications": {
       "get": {
         "summary": "Read the Slack notification settings",

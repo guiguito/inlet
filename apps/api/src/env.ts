@@ -136,6 +136,20 @@ const envSchema = z.object({
     .regex(/^[A-Za-z_][A-Za-z0-9_]{0,63}$/, 'must be a plain identifier')
     .default('inlet'),
 
+  /**
+   * UX Analytics AN-033, Foundations §12.1, FD-032: the header in which a trusted reverse
+   * proxy reports the client's country, such as Cloudflare's `CF-IPCountry`. Honoured only
+   * for a request whose address was resolved through a proxy INLET_TRUSTED_PROXIES names.
+   * Empty: the bundled IP-to-country database alone.
+   */
+  INLET_COUNTRY_HEADER: z.string().default(''),
+  /**
+   * AN-033: a DB-IP Lite (or MaxMind-format) country database. Empty means the one bundled
+   * with the platform, `apps/api/ip-country/dbip-country-lite.mmdb`, which the Docker image
+   * fetches at build and `npm run services:up` fetches for development.
+   */
+  INLET_IP_COUNTRY_DB: z.string().default(''),
+
   /** Directory holding the built management interface. Empty disables SPA serving. */
   INLET_WEB_DIST: z.string().default(''),
 

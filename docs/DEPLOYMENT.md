@@ -220,6 +220,8 @@ Only for analytics; see [Analytics](#analytics) for what each one does.
 | `INLET_CLICKHOUSE_MAX_SERVER_MEMORY` | `3221225472` (3 GB) | Bundled service only: ClickHouse's memory ceiling, in bytes. |
 | `INLET_CLICKHOUSE_MARK_CACHE` | `268435456` (256 MB) | Bundled service only: its mark cache, in bytes. |
 | `INLET_CLICKHOUSE_BACKGROUND_POOL` | `4` | Bundled service only: threads for merges and deletions. |
+| `INLET_COUNTRY_HEADER` | *(unset)* | The header in which your reverse proxy reports the client's country, such as Cloudflare's `CF-IPCountry`. Believed only for a request that came through a proxy `INLET_TRUSTED_PROXIES` names. See [Country](#country). |
+| `INLET_IP_COUNTRY_DB` | *(unset: the bundled file)* | Another IP-to-country database in the MaxMind DB format, such as a newer DB-IP Lite file. |
 
 ### Malware scanning
 
@@ -271,8 +273,17 @@ That `client_max_body_size` matters. The default of 1 MB rejects most phone
 screenshots before they reach Inlet, and the respondent sees a proxy error rather than
 Inlet's own message.
 
-**Do not add CORS headers at the proxy.** Inlet sets them itself, on crash ingest and
-`/v1/health` only, so that the browser crash SDK can report from an integrator's own site.
+**Name the proxy, for analytics too.** Behind a trusted proxy, analytics ingest applies a
+generous ceiling of 6,000 requests a minute per client address
+(`INLET_LIMIT_ANALYTICS_PER_ADDRESS_PER_MINUTE`), held in memory and never stored. Without a
+trusted proxy the ceiling is off, and startup says so once: behind a proxy nobody declared,
+every request would seem to come from the proxy and one ceiling would refuse the whole fleet.
+The per-key and per-installation limits, counted in events, apply either way. The trusted
+proxy is also what makes Inlet believe a country header (below).
+
+**Do not add CORS headers at the proxy.** Inlet sets them itself, on crash ingest, analytics
+ingest (`POST` only), the four feedback collection routes and `/v1/health`, so that the
+browser SDK can report from an integrator's own site.
 An `add_header 'Access-Control-Allow-Origin' '*'` on top of Inlet's produces two identical
 headers, which browsers reject as invalid, and it would open every other route as well. A
 proxy that answers `OPTIONS` itself, or strips response headers it does not recognise, breaks
@@ -368,6 +379,30 @@ deployment that is already running, Inlet notices within a minute; no restart is
 
 Keep using `--profile analytics` on every later `docker compose up`, or put
 `COMPOSE_PROFILES=analytics` in `.env` so that a plain `docker compose up -d` includes it.
+
+### Country
+
+Each analytics event gets the country its request came from, as an ISO code and nothing
+finer, unless the event names one, the database has country derivation off, or the event
+comes from a backend (`platform: "server"`). The address is used for the lookup only: it is
+not stored with the event, not logged, and not kept anywhere.
+
+- **From your proxy**, when it already knows the country: set `INLET_COUNTRY_HEADER` to its
+  header (`CF-IPCountry` on Cloudflare) and name the proxy in `INLET_TRUSTED_PROXIES`. The
+  header is believed only for requests that came through that proxy; `XX` and `T1` (unknown,
+  Tor) record no country.
+- **Otherwise from the bundled database**: DB-IP's *IP to Country Lite*, which the Docker
+  image downloads at build (`scripts/ip-country-db.mjs`, pinned to one monthly file and its
+  SHA-256) into `apps/api/ip-country/`. **IP to country data by
+  [DB-IP](https://db-ip.com), licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).**
+  Its licence allows bundling it with attribution, which Inlet shows under an analytics
+  database's Settings; MaxMind's GeoLite licence does not. It is as current as the image you
+  run; to use a newer file, point `INLET_IP_COUNTRY_DB` at it, or update the pin in
+  `scripts/ip-country-db.mjs` (the file says how) and rebuild.
+
+A server started without the file logs once that it could not read it and records no
+country; everything else works. `npm run services:up` downloads the same pinned file for
+development.
 
 ### Without it
 

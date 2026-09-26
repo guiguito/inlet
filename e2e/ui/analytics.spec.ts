@@ -2,11 +2,12 @@ import { expect, test, type Page } from '@playwright/test';
 import { E2E } from '../env';
 
 /**
- * UX Analytics in the browser, piece 2 (UX Analytics PRD section 8.1, journey 5.1 step 2):
- * a Creator creates an analytics database from the project page and confirms the
- * reporting timezone the form proposes from the browser, finds it in the switcher beside
- * the project's other databases, renames it, switches country derivation, and deletes it
- * by typing its name.
+ * UX Analytics in the browser (UX Analytics PRD section 8.1, journey 5.1): a Creator creates
+ * an analytics database from the project page and confirms the reporting timezone the form
+ * proposes from the browser, finds it in the switcher beside the project's other databases,
+ * renames it, switches country derivation, and deletes it by typing its name (piece 2); and
+ * Collect gives the database ID, the keys and the snippets, and shows a test event in the live
+ * feed (piece 3).
  */
 test.use({ timezoneId: 'Europe/Paris' });
 
@@ -136,9 +137,97 @@ test.describe('analytics databases', () => {
     await dialog.getByLabel(/Days, weeks and months are counted in/).check();
     await dialog.getByRole('button', { name: 'Create' }).click();
     await expect(dialog.getByRole('heading', { name: 'Analytics is not enabled' })).toBeVisible();
-    await expect(dialog.getByText('docker compose --profile analytics up -d')).toBeVisible();
+    // The command and the variable are shown as code, not between literal backticks.
+    await expect(dialog.locator('code', { hasText: 'docker compose --profile analytics up -d' })).toBeVisible();
+    await expect(dialog.locator('code', { hasText: 'INLET_CLICKHOUSE_URL' })).toBeVisible();
+    await expect(dialog.getByText(/`/)).toHaveCount(0);
     await expect(dialog.getByLabel('Name')).toHaveCount(0);
   });
+});
+
+test('Collect shows the ID, the keys and consent-first snippets, and a test event reaches the live feed within five seconds', async ({ page, request }) => {
+  await request.post('/v1/auth/sign-in', { data: { email: E2E.adminEmail, password: E2E.adminPassword } });
+  const projectId = (await (await request.post('/v1/projects', { data: { name: `Analytics collect ${Date.now()}` } })).json()).id as string;
+  const databaseId = (await (await request.post(`/v1/projects/${projectId}/analytics-databases`, { data: { name: 'Checkout app', timezone: 'Europe/Paris' } })).json()).id as string;
+  const key = (await (await request.post(`/v1/projects/${projectId}/credentials`, { data: { type: 'publishable', label: 'web' } })).json()).secret as string;
+
+  await signIn(page);
+  await page.goto(`/analytics-databases/${databaseId}?tab=collect`);
+  await expect(page.getByText(databaseId).first()).toBeVisible();
+  await expect(page.getByText(key).first()).toBeVisible();
+  // AN-186: every snippet starts disabled and is turned on in the consent callback.
+  for (const runtime of ['Browser', 'React Native', 'Electron main', 'Electron renderer', 'Node server']) {
+    await expect(page.getByText(runtime, { exact: true })).toBeVisible();
+  }
+  await expect(page.getByText('generally requires consent in the European Union')).toBeVisible();
+  await expect(page.getByText('enabled: false').first()).toBeVisible();
+  await expect(page.getByText('setEnabled(true)').first()).toBeVisible();
+  await expect(page.getByTestId('live-feed-empty')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Send a test event' }).click();
+  const feed = page.getByTestId('live-feed');
+  await expect(feed.getByRole('cell', { name: 'test_event' })).toBeVisible({ timeout: 5_000 });
+  await expect(feed.getByRole('row')).toHaveCount(2);
+
+  // Paused, an event sent meanwhile does not appear; resumed, it does, once.
+  await page.getByRole('button', { name: 'Pause' }).click();
+  await request.post(`/v1/analytics-databases/${databaseId}/test-event`);
+  await page.waitForTimeout(3_500);
+  await expect(feed.getByRole('row')).toHaveCount(2);
+  await page.getByRole('button', { name: 'Resume' }).click();
+  await expect(feed.getByRole('row')).toHaveCount(3, { timeout: 5_000 });
+  await page.waitForTimeout(3_500);
+  await expect(feed.getByRole('row')).toHaveCount(3);
+});
+
+test('lists a test event once when it is sent while a poll of the live feed is on its way', async ({ page, request }) => {
+  await request.post('/v1/auth/sign-in', { data: { email: E2E.adminEmail, password: E2E.adminPassword } });
+  const projectId = (await (await request.post('/v1/projects', { data: { name: `Analytics live race ${Date.now()}` } })).json()).id as string;
+  const databaseId = (await (await request.post(`/v1/projects/${projectId}/analytics-databases`, { data: { name: 'Checkout app', timezone: 'Europe/Paris' } })).json()).id as string;
+
+  // Hold the next poll before it reaches the server, so that it overlaps the refetch the test
+  // event triggers, both reading from the same cursor.
+  let holdNext = false;
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  let reached!: () => void;
+  const held = new Promise<void>((resolve) => (reached = resolve));
+  await page.route(/\/v1\/analytics-databases\/[^/]+\/live/, async (route) => {
+    if (holdNext) {
+      holdNext = false;
+      reached();
+      await released;
+    }
+    await route.continue();
+  });
+
+  await signIn(page);
+  await page.goto(`/analytics-databases/${databaseId}?tab=collect`);
+  await expect(page.getByTestId('live-feed-empty')).toBeVisible();
+  holdNext = true;
+  await held;
+  await page.getByRole('button', { name: 'Send a test event' }).click();
+  const feed = page.getByTestId('live-feed');
+  await expect(feed.getByRole('cell', { name: 'test_event' })).toBeVisible({ timeout: 5_000 });
+  release();
+  await page.waitForTimeout(1_000);
+  await expect(feed.getByRole('row')).toHaveCount(2);
+});
+
+test('Collect says in one sentence that the event store is unreachable, in the live feed and for the test event', async ({ page, request }) => {
+  await request.post('/v1/auth/sign-in', { data: { email: E2E.adminEmail, password: E2E.adminPassword } });
+  const projectId = (await (await request.post('/v1/projects', { data: { name: `Analytics collect down ${Date.now()}` } })).json()).id as string;
+  const databaseId = (await (await request.post(`/v1/projects/${projectId}/analytics-databases`, { data: { name: 'Checkout app', timezone: 'Europe/Paris' } })).json()).id as string;
+  // What the server answers while the event store has not become ready (AN-018, 9.4).
+  const unavailable = { status: 503, headers: { 'retry-after': '30' }, json: { error: { code: 'analytics_unavailable', message: 'The analytics event store is unavailable. Try again shortly.' } } };
+  await page.route(/\/v1\/analytics-databases\/[^/]+\/(live|test-event)/, (route) => route.fulfill(unavailable));
+
+  await signIn(page);
+  await page.goto(`/analytics-databases/${databaseId}?tab=collect`);
+  const sentence = 'The analytics event store is unreachable, so this database cannot be read or collect events for now';
+  await expect(page.getByRole('status').filter({ hasText: sentence })).toBeVisible();
+  await page.getByRole('button', { name: 'Send a test event' }).click();
+  await expect(page.getByText(sentence)).toHaveCount(2);
 });
 
 test('names the analytics and crash scopes on an invitation and in the access panel', async ({ request, browser }) => {

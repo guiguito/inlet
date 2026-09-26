@@ -238,6 +238,13 @@ const NESTED_FIELDS: Record<string, Set<string>> = {
   sdk: new Set(['name', 'version']),
 };
 
+/** Section 9.1's optional fields, which a `null` leaves absent rather than refused. */
+const OPTIONAL_TOP_FIELDS = [
+  'category', 'installationId', 'userId', 'sessionId', 'attribution', 'experiments', 'params', 'platform', 'os', 'runtime',
+  'locale', 'country', 'environment', 'ephemeral',
+];
+const OPTIONAL_NESTED_FIELDS: Record<string, string[]> = { app: ['build', 'id'], os: ['name', 'version'], runtime: ['name', 'version'] };
+
 /** Thrown inside `validateEvent` and turned into its answer; never escapes it. */
 class Refusal {
   constructor(
@@ -294,6 +301,8 @@ export function isRfc3339(value: string): boolean {
  * an attribution or a category longer than its bound is truncated with `truncated`, never
  * splitting a surrogate pair; a placeholder user ID is dropped with `placeholder_user_id`.
  * UUIDs are accepted in any case, with or without dashes, and returned lowercase and dashed.
+ * A `null` in an optional field, top level or inside `app`, `os` or `runtime`, is read as
+ * the field's absence, silently; a `null` param value or required field is still refused.
  *
  * Never throws: the answer is the normalised event with its warnings, or the rejection.
  */
@@ -321,6 +330,14 @@ function accept(raw: unknown): EventValidation {
     for (const key of Object.keys(value)) {
       if (!allowed.has(key)) throw new Refusal('unknown_field', `${parent}.${key}`, `"${parent}.${key}" is not a field of an analytics event.`);
     }
+  }
+
+  // A JSON `null` in an optional field is its absence, as many serialisers write one for an
+  // unset property (`"userId": null`). Required fields and param values stay refused.
+  for (const key of OPTIONAL_TOP_FIELDS) if (input[key] === null) delete input[key];
+  for (const [parent, optional] of Object.entries(OPTIONAL_NESTED_FIELDS)) {
+    const value = input[parent];
+    if (isPlainObject(value)) for (const key of optional) if (value[key] === null) delete value[key];
   }
 
   const warnings: AnalyticsEventWarning[] = [];

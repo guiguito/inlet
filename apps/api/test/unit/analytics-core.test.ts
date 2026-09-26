@@ -169,6 +169,62 @@ describe('validateEvent', () => {
     }
   });
 
+  it('reads a null optional field as absent, at the top level and inside app, os and runtime', () => {
+    const { event, warnings } = accepted(
+      validateEvent({
+        ...valid(),
+        category: null,
+        userId: null,
+        sessionId: null,
+        attribution: null,
+        experiments: null,
+        params: null,
+        platform: null,
+        os: { name: null, version: '14' },
+        runtime: null,
+        locale: null,
+        country: null,
+        environment: null,
+        ephemeral: null,
+        app: { version: '1.4.0', build: null, id: null },
+      }),
+    );
+    expect(warnings).toEqual([]);
+    expect(event).toEqual({
+      eventId: valid().eventId,
+      timestamp: valid().timestamp,
+      name: 'checkout_completed',
+      installationId: valid().installationId,
+      app: { version: '1.4.0' },
+      platform: 'other',
+      os: { version: '14' },
+      environment: 'production',
+      sdk: { name: 'inlet-sdk', version: '0.3.0' },
+    });
+    // A null installation ID beside a user ID is no installation ID: the event is the user's.
+    expect(accepted(validateEvent({ ...valid(), installationId: null, userId: 'u1' })).event).not.toHaveProperty('installationId');
+    expect(rejected(validateEvent({ ...valid(), installationId: null }))).toMatchObject({ code: 'missing_identity' });
+  });
+
+  it('still refuses a null required field and a null param value', () => {
+    for (const [overrides, field] of [
+      [{ eventId: null }, 'eventId'],
+      [{ timestamp: null }, 'timestamp'],
+      [{ name: null }, 'name'],
+      [{ app: null }, 'app'],
+      [{ app: { version: null } }, 'app.version'],
+      [{ sdk: null }, 'sdk'],
+      [{ sdk: { name: null, version: '1' } }, 'sdk.name'],
+      [{ sdk: { name: 's', version: null } }, 'sdk.version'],
+      [{ params: { plan: null } }, 'params.plan'],
+      [{ experiments: { checkout: null } }, 'experiments.checkout'],
+    ] as [Record<string, unknown>, string][]) {
+      expect(rejected(validateEvent({ ...valid(), ...overrides })), field).toMatchObject({ code: 'invalid_event', field });
+    }
+    // An unknown field is unknown whatever its value.
+    expect(rejected(validateEvent({ ...valid(), channel: null }))).toMatchObject({ code: 'unknown_field', field: 'channel' });
+  });
+
   it('truncates a string param, an attribution and a category with a truncated warning', () => {
     const { event, warnings } = accepted(
       validateEvent({ ...valid(), params: { note: 'x'.repeat(1_000), n: 3 }, attribution: 'a'.repeat(200), category: 'c'.repeat(40) }),

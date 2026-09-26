@@ -159,6 +159,9 @@ services:
       INLET_CLICKHOUSE_URL: ${INLET_CLICKHOUSE_URL-http://inlet:${INLET_CLICKHOUSE_PASSWORD:-inletanalytics}@clickhouse:8123}
       INLET_CLICKHOUSE_READ_URL: ${INLET_CLICKHOUSE_READ_URL-http://inlet_reader:${INLET_CLICKHOUSE_READER_PASSWORD:-inletanalyticsreader}@clickhouse:8123}
       INLET_CLICKHOUSE_DATABASE: ${INLET_CLICKHOUSE_DATABASE:-inlet}
+      # AN-033: the header a trusted reverse proxy puts the client's country in, such as
+      # CF-IPCountry; empty means the IP-to-country database bundled in the image alone.
+      INLET_COUNTRY_HEADER: ${INLET_COUNTRY_HEADER:-}
 
 volumes:
   pgdata:

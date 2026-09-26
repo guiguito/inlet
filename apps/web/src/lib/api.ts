@@ -393,6 +393,17 @@ export type AnalyticsDeletionImpact = {
   notice: string;
 };
 
+/** AN-018, Appendix E: what a batch, or the test event, was answered. */
+export type AnalyticsBatchAnswer = {
+  accepted: number;
+  duplicates: number;
+  rejected: { index: number; code: string; field?: string }[];
+  warnings: { index: number; code: string; field?: string }[];
+};
+
+/** AN-058: one event of the live feed. */
+export type AnalyticsLiveEvent = { name: string; time: string; installationId: string; platform: string; appVersion: string };
+
 // --- Crash Reports (Release 6) -------------------------------------------------
 
 export type CrashDatabase = {
@@ -551,6 +562,13 @@ export const api = {
     request<{ deleted: true }>(`/v1/analytics-databases/${databaseId}`, { method: 'DELETE' }),
   analyticsDeletionImpact: (databaseId: string) =>
     request<AnalyticsDeletionImpact>(`/v1/analytics-databases/${databaseId}/deletion-impact`),
+  // --- Collect (AN-025, AN-058) ---
+  sendAnalyticsTestEvent: (databaseId: string) =>
+    request<AnalyticsBatchAnswer & { eventId: string }>(`/v1/analytics-databases/${databaseId}/test-event`, { method: 'POST' }),
+  analyticsLiveFeed: (databaseId: string, after?: string) =>
+    request<{ events: AnalyticsLiveEvent[]; cursor: string }>(
+      `/v1/analytics-databases/${databaseId}/live${after ? `?after=${encodeURIComponent(after)}` : ''}`,
+    ),
 
   // --- Crash databases ---
   listCrashDatabases: (projectId: string) =>

@@ -377,6 +377,22 @@ function AnalyticsDatabasesSection({ projectId }: { projectId: string }) {
   );
 }
 
+/**
+ * AN-005's message names a command and a variable between backticks, as the API sends it;
+ * they are shown as code rather than as literal backticks.
+ */
+function withCodeSpans(text: string) {
+  return text.split('`').map((part, index) =>
+    index % 2 === 1 ? (
+      <code key={index} className="font-mono text-[12px]">
+        {part}
+      </code>
+    ) : (
+      part
+    ),
+  );
+}
+
 function CreateAnalyticsDatabaseDialog({ projectId, onClose }: { projectId: string; onClose: () => void }) {
   const [name, setName] = useState('');
   const [timezone, setTimezone] = useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
@@ -422,7 +438,7 @@ function CreateAnalyticsDatabaseDialog({ projectId, onClose }: { projectId: stri
           <>
             <DialogHeader>
               <DialogTitle>Analytics is not enabled</DialogTitle>
-              <DialogDescription>{notEnabled}</DialogDescription>
+              <DialogDescription>{withCodeSpans(notEnabled)}</DialogDescription>
             </DialogHeader>
             <DialogFooter>
               <Button type="button" onClick={onClose}>

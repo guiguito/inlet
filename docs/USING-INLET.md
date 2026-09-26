@@ -317,8 +317,37 @@ your browser's zone, which happens with a zone renamed recently such as `Europe/
 form proposes its former name (`Europe/Kiev`), which counts exactly the same hours.
 
 The database opens on **Insights → Overview**, with four groups: **Insights** (Overview,
-Events, Funnels, Cohorts), **Users**, **Collect** and **Settings**. For now **Settings** is
-where the work is:
+Events, Funnels, Cohorts), **Users**, **Collect** and **Settings**. For now **Collect** and
+**Settings** are where the work is.
+
+### Collect: sending events
+
+**Collect** holds everything an app needs to send events:
+
+- **The database ID and the project's publishable keys**, each with a copy button. Both are
+  safe to ship inside an app; a publishable key can send events and do nothing else. The
+  project's existing key works: an analytics database needs no new credential.
+- **A snippet per runtime**: browser, React Native, Electron main and renderer, and a Node
+  server. Each starts the SDK disabled and turns it on with `setEnabled(true)` in your
+  consent callback, because an installation ID stored on a device generally requires consent
+  in the European Union. Deciding the lawful basis of that collection is yours; the SDK
+  stores and sends nothing until you enable it.
+- **Send a test event.** One click sends a `test_event` through the same path your app
+  uses, in environment `development`, from a test installation that counts in no
+  installation, active, session or cohort figure and takes no slot of the database's
+  500 event names. Use it to check the database accepts events before you ship.
+- **The live feed**: the latest events the database accepted, newest first, refreshed every
+  three seconds, each with its time, name, the start of its installation ID, platform and app
+  version. **Pause** stops the refresh while you read. The feed is kept in the server's memory
+  (the last 500 events), so it starts empty after a restart; stored events are not affected.
+
+Events are checked one by one as they arrive: a batch stores every valid event and reports
+each refused one with its reason, which `inlet-sdk` passes to your `onDrop`. A database accepts
+at most 500 distinct event names, 50 new ones an hour, 100 param keys and 10 categories per
+event name, unless your operator changed those; events older than 30 days are refused. The
+[API reference](API.md#analytics-ingest) lists every rule.
+
+### Settings
 
 - **General**: rename it; read the reporting timezone; switch **country derivation**, on by
   default, which gives each event received afterwards the country its request came from and
@@ -381,7 +410,7 @@ claude mcp add inlet \
   -- node "$PWD/apps/mcp/dist/server.js"
 ```
 
-It authenticates with a secret server key and exposes 55 tools, feedback and crash reports together. Read-only tools are
+It authenticates with a secret server key and exposes 62 tools, feedback, crash reports and analytics together. Read-only tools are
 marked as such, so an agent can explore without changing anything, and the destructive
 ones require confirmation. Full list in [MCP.md](MCP.md).
 

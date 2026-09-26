@@ -7,8 +7,8 @@ import { E2E } from '../env';
 /**
  * Analytics databases through MCP (UX Analytics 8.3, AN-201, AN-203): a real MCP client, a
  * real server and the real API. An agent creates a database with its timezone, reads and
- * updates it, reads the shared deletion impact with its adb_ ID, and deletes it only when
- * it echoes the exact name.
+ * updates it, reads the shared deletion impact with its adb_ ID, sends a test event and reads
+ * it from the live feed, and deletes the database only when it echoes the exact name.
  */
 function textOf(result: unknown): string {
   const content = (result as { content?: { type: string; text?: string }[] }).content ?? [];
@@ -46,6 +46,15 @@ test('an agent manages an analytics database end to end', async ({ request, play
 
     const impact = JSON.parse(textOf(await call('get_deletion_impact', { databaseId: database.id })));
     expect(impact).toMatchObject({ events: 0, funnels: 0, cohorts: 1 });
+
+    // AN-025, AN-058: a test event through the ingest path, then read back from the live feed
+    // with its cursor, which the next call honours by returning nothing new.
+    const sent = JSON.parse(textOf(await call('send_analytics_test_event', { analyticsDatabaseId: database.id }))) as { accepted: number; eventId: string };
+    expect(sent.accepted).toBe(1);
+    const live = JSON.parse(textOf(await call('get_analytics_live_events', { analyticsDatabaseId: database.id }))) as { events: { name: string }[]; cursor: string };
+    expect(live.events.map((e) => e.name)).toEqual(['test_event']);
+    const again = JSON.parse(textOf(await call('get_analytics_live_events', { analyticsDatabaseId: database.id, after: live.cursor }))) as { events: unknown[] };
+    expect(again.events).toEqual([]);
     const members = JSON.parse(textOf(await call('list_members', { databaseId: database.id }))) as unknown[];
     expect(members.length).toBeGreaterThan(0);
 

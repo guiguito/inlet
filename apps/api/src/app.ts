@@ -194,10 +194,11 @@ async function registerDocs(app: FastifyInstance, ctx: AppContext): Promise<void
  *
  * Everything else in Inlet stays same-origin, which is what section 13 of DECISIONS.md
  * describes and why there is no CORS plugin here. This is the one exception, and FD-015
- * enumerates it in this one place: the health probe, crash ingest, and the four feedback
- * collection routes. Both browser adapters of `inlet-sdk` run on the integrator's own
- * origin by definition, and both send an `authorization` header, which forces a
- * preflight. Without this the preflight 404s and the browser never sends anything at all.
+ * enumerates it in this one place: the health probe, crash ingest, the four feedback
+ * collection routes, and analytics ingest for `POST` only (`CROSS_ORIGIN_BY_METHOD`). The
+ * browser adapters of `inlet-sdk` run on the integrator's own origin by definition, and send
+ * an `authorization` header, which forces a preflight. Without this the preflight 404s and
+ * the browser never sends anything at all.
  *
  * Widening this set is a change to the Foundations PRD first, and
  * `apps/api/test/integration/cors.test.ts` pins both halves of the boundary.
@@ -231,9 +232,30 @@ const CROSS_ORIGIN_COLLECTION = new RegExp(
   ].join(''),
 );
 
+/**
+ * Routes open for one method only, as FD-015 asks of analytics ingest (and, with Release 9,
+ * the config fetch): the path alone would also open whatever another method does there.
+ * A preflight is matched by the method it asks about.
+ */
+const CROSS_ORIGIN_BY_METHOD: { path: RegExp; method: string }[] = [
+  // UX Analytics AN-010, section 7.1: the batch route, and nothing else under /analytics-databases.
+  { path: /^\/v1\/analytics-databases\/[^/]+\/batch$/, method: 'POST' },
+];
+
+/** The methods a preflight may be told, or null when the request is not cross-origin at all. */
+function crossOriginMethods(request: { url: string; method: string; headers: Record<string, string | string[] | undefined> }): string | null {
+  const path = request.url.split('?')[0] ?? '';
+  // DELETE is here for one route only: releasing a screenshot before submitting.
+  if (CROSS_ORIGIN_COLLECTION.test(path)) return 'POST, GET, DELETE, OPTIONS';
+  const asked = request.method === 'OPTIONS' ? String(request.headers['access-control-request-method'] ?? '').toUpperCase() : request.method;
+  const open = CROSS_ORIGIN_BY_METHOD.find((entry) => entry.method === asked && entry.path.test(path));
+  return open ? `${open.method}, OPTIONS` : null;
+}
+
 function registerCrossOriginCollection(app: FastifyInstance): void {
   app.addHook('onRequest', (request, reply, done) => {
-    if (!CROSS_ORIGIN_COLLECTION.test(request.url.split('?')[0] ?? '')) return done();
+    const methods = crossOriginMethods(request);
+    if (methods === null) return done();
 
     /*
      * No `access-control-allow-credentials`, ever. That absence is the security property:
@@ -255,8 +277,7 @@ function registerCrossOriginCollection(app: FastifyInstance): void {
     if (request.method !== 'OPTIONS') return done();
 
     reply
-      // DELETE is here for one route only: releasing a screenshot before submitting.
-      .header('access-control-allow-methods', 'POST, GET, DELETE, OPTIONS')
+      .header('access-control-allow-methods', methods)
       // Exactly what the two modules send, and no more. A static list rather than an
       // echo of `access-control-request-headers`, so a client that adds a header gets a
       // clean preflight failure instead of a silently widened surface. The intent token

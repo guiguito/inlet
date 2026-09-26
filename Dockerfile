@@ -21,6 +21,10 @@ COPY packages/shared packages/shared
 COPY apps/api apps/api
 COPY apps/mcp apps/mcp
 COPY apps/web apps/web
+# UX Analytics AN-033: the pinned DB-IP Lite country database (CC BY 4.0), checked against its
+# SHA-256. Fetched here, so the image carries it and a running container never downloads it.
+COPY scripts/ip-country-db.mjs scripts/ip-country-db.mjs
+RUN node scripts/ip-country-db.mjs apps/api/ip-country/dbip-country-lite.mmdb
 # What the server ships, and only that: the SDK is published to npm, not served, and is not
 # in this build context, so the root `build` (which includes it) cannot run here.
 RUN npm run build:server
@@ -51,6 +55,7 @@ COPY --from=build /app/apps/api/dist apps/api/dist
 COPY --from=build /app/apps/api/drizzle apps/api/drizzle
 # The event store's migrations, which the API applies at start when ClickHouse is configured.
 COPY --from=build /app/apps/api/clickhouse apps/api/clickhouse
+COPY --from=build /app/apps/api/ip-country apps/api/ip-country
 COPY --from=build /app/apps/mcp/package.json apps/mcp/package.json
 COPY --from=build /app/apps/mcp/dist apps/mcp/dist
 COPY --from=build /app/apps/web/dist apps/web/dist

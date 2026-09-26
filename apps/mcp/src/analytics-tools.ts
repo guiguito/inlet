@@ -4,8 +4,8 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { InletClient, InletError } from './client.js';
 
 /**
- * The UX Analytics tool surface (UX Analytics PRD section 8.3, AN-200 to AN-203): the
- * database tools of piece 2; later pieces add the query, catalog, profile, storage and
+ * The UX Analytics tool surface (UX Analytics PRD section 8.3, AN-200 to AN-204): the
+ * database tools of piece 2, the test event and the live feed of piece 3; later pieces add the query, catalog, profile, storage and
  * erasure tools here. Every tool is one authenticated HTTP request, so an agent can do what
  * a secret server key can do over HTTP and nothing more (FD-021). Descriptions state the
  * defaults, because an agent reads the tool, not the PRD (AN-201).
@@ -109,6 +109,37 @@ export function registerAnalyticsTools(server: McpServer, client: InletClient): 
           );
         }
         return json(await client.request('DELETE', `/v1/analytics-databases/${id}`));
+      }),
+  );
+  server.registerTool(
+    'send_analytics_test_event',
+    {
+      title: 'Send an analytics test event',
+      description:
+        'Sends one `test_event`, category `test`, environment `development`, through the same ingest path an application uses (AN-025), attributed to the database’s test installation. It proves the database accepts events; it counts in no unique, active, new-installation, session or cohort figure, takes no slot of the event-name limit, and appears in get_analytics_live_events within seconds. Answers like ingest: `accepted`, `duplicates`, `rejected`, `warnings`, and the `eventId` sent. Needs Creator or Admin, which a secret key has.',
+      inputSchema: { analyticsDatabaseId },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    },
+    async ({ analyticsDatabaseId: id }) => guard(async () => json(await client.request('POST', `/v1/analytics-databases/${id}/test-event`))),
+  );
+
+  server.registerTool(
+    'get_analytics_live_events',
+    {
+      title: 'Read the analytics live feed',
+      description:
+        'The most recent events the database accepted, newest first, each with its name, effective time (RFC 3339, UTC), installation ID, platform and app version (AN-058). Held in memory: the last 500 events since the server started, all environments, duplicates never repeated; empty after a restart. Returns at most `limit` events per call (500 at most, the whole feed) and a `cursor`: pass it back as `after` to get only the events accepted since, so polling every few seconds shows each event once. Takes no query slot. For stored history use the query tools instead.',
+      inputSchema: {
+        analyticsDatabaseId,
+        after: z.string().max(200).optional().describe('The `cursor` a previous call returned. Omit for everything the feed holds.'),
+        limit: z.number().int().min(1).max(500).optional().describe('At most this many events, 500 by default: without `after`, the most recent; with it, the oldest of the new ones first, so paging shows each event once.'),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ analyticsDatabaseId: id, after, limit }) =>
+      guard(async () => {
+        const query = new URLSearchParams({ ...(after ? { after } : {}), ...(limit ? { limit: String(limit) } : {}) }).toString();
+        return json(await client.request('GET', `/v1/analytics-databases/${id}/live${query ? `?${query}` : ''}`));
       }),
   );
 }

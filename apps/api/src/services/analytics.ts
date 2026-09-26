@@ -1,7 +1,7 @@
 import { count, eq, sql } from 'drizzle-orm';
 import { RETENTION_COHORT_DEFINITION, RETENTION_COHORT_NAME, newId } from '@inlet/shared';
 import type { AppContext } from '../context.js';
-import { requireAnalyticsEnabled } from '../db/clickhouse.js';
+import { analyticsUnavailable, requireAnalyticsEnabled } from '../db/clickhouse.js';
 import {
   analyticsCohorts,
   analyticsDatabaseRemovals,
@@ -51,15 +51,17 @@ export function analyticsDatabaseLimits(limits: OperatorLimits) {
 }
 
 /**
- * AN-002: POSIX-style and offset strings. ICU accepts some of them (`+02:00`, and
- * `GMT+0`), and POSIX reads `UTC+2` as two hours *west* of UTC, so none is a reporting
- * timezone whatever a timezone library says.
+ * AN-002: POSIX-style and offset strings, and IANA names that carry a sign. ICU accepts some
+ * offsets (`+02:00`, `GMT+0`), POSIX reads `UTC+2` as two hours *west* of UTC, and the IANA
+ * names `Etc/GMT+2` and `GMT+0` keep POSIX's inverted sign, so a reader cannot tell which
+ * way any of them goes. A `+` or `-` followed by a digit anywhere refuses the name; `UTC`
+ * and `Etc/UTC` remain.
  */
-const OFFSET_STYLE = /^(?:UTC|GMT|UT|Z)?\s*[+-]\s*\d/i;
+const SIGNED = /[+-]\s*\d/;
 
 /** AN-002, first half: Node's ICU accepts it as a zone name, and it is not an offset. */
 export function apiListsTimezone(timezone: string): boolean {
-  if (timezone === '' || OFFSET_STYLE.test(timezone)) return false;
+  if (timezone === '' || SIGNED.test(timezone)) return false;
   try {
     new Intl.DateTimeFormat('en-US', { timeZone: timezone });
     return true;
@@ -85,6 +87,9 @@ export async function assertReportingTimezone(ctx: AppContext, timezone: string 
     throw timezoneInvalid(`${timezone} is not an IANA timezone name. Use a name such as Europe/Paris; offsets such as UTC+2 are not accepted.`);
   }
   const store = requireAnalyticsEnabled(ctx.eventStore);
+  // Two seconds at most, as the deletion impact does: a store that hangs rather than refuses
+  // would otherwise hold the creation dialog for the reader's whole 40-second timeout.
+  if (!(await store.reachable())) throw analyticsUnavailable();
   const [row] = await store.query<{ listed: number }>('SELECT count() > 0 AS listed FROM system.time_zones WHERE time_zone = {timezone:String}', { timezone });
   if (!Number(row?.listed)) {
     throw timezoneInvalid(`The analytics event store does not know ${timezone}. It may know this zone by a former name; choose another.`);

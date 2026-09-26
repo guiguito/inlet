@@ -23,6 +23,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import EmbeddedPostgres from 'embedded-postgres';
+import { ensureIpCountryDb } from './ip-country-db.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const devDir = path.join(repoRoot, '.dev');
@@ -420,6 +421,9 @@ export async function startClickhouse(options = {}) {
 
 /** Every service, with the environment variables Inlet expects. */
 export async function startLocalServices(options = {}) {
+  // AN-033: the IP-to-country database the API reads by default, fetched once. Without it
+  // the API still runs and derives no country, so a failed download only warns.
+  await ensureIpCountryDb().catch((error) => console.warn(`No IP-to-country database: ${error.message}`));
   const postgres = await startPostgres(options);
   const storage = await startObjectStore(options);
   const clickhouse = await startClickhouse(options);

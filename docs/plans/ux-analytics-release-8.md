@@ -60,7 +60,7 @@ pieces land; a piece that departs from one says so in its report and in that sec
 | --- | --- | --- | --- |
 | 1 | Event store foundation | ClickHouse in local services, CI and compose (profile `analytics`); client, readiness, migrations, schema; `/v1/health`; harness; the 8.1 spike and storage measurement | verified and committed (`04ba43c`; DECISIONS 33.1) |
 | 2 | Contract and analytics databases | `@inlet/shared` analytics contract; PostgreSQL tables; create, read, rename, delete; fourth access scope; operator limits; project page, switcher, database shell with Settings; MCP database tools | verified and committed (DECISIONS 33.2) |
-| 3 | Ingest and Collect | The batch route and every derivation at ingest; rate limits; country; catalog writes; live feed; test event; counters; the analytics worker; Collect tab; its tools | pending |
+| 3 | Ingest and Collect | The batch route and every derivation at ingest; rate limits; country; catalog writes; live feed; test event; counters; the analytics worker; Collect tab; its tools | verified and committed (DECISIONS 33.3) |
 | 4 | Catalog, Lexicon and trends | Query layer (slots, limits, filters, ranges, periods, coverage, the erasure skip); catalog, event detail, filter values, hide, block, delete; trends and their export; catalog export; Events tab; tools | pending |
 | 5 | Overview | Every figure of AN-140, sessions, retention D1/D7/D30, crash-free sessions; Overview tab; tool | pending |
 | 6 | Profiles and links | AN-120 to AN-126, AN-154, FR-066; the shared helper that finds crash reports and submissions carrying an ID; Users tab; Usage profile links; tools | pending |
@@ -68,7 +68,7 @@ pieces land; a piece that departs from one says so in its report and in that sec
 | 8 | Cohorts | AN-100 to AN-109; Cohorts tab; tools | pending |
 | 9 | Storage, retention and data health | AN-004 removal worker, AN-160 to AN-169, AN-190 to AN-192, the orphan sweep; Settings → Storage; the Collect notice; tools | pending |
 | 10 | Erasure and event export | FD-033 across crash, feedback and analytics (CR-047, FR-064A); AN-183 to AN-185; AN-210, AN-212; project settings and profile screens; tools | pending |
-| 11 | `inlet-sdk/analytics` | AN-150, AN-151, AN-220 to AN-242, AN-230; CR-111, CR-119; crash and feedback attach rules; build, size and purity checks; Metro | pending |
+| 11 | `inlet-sdk/analytics` | AN-150, AN-151, AN-220 to AN-242, AN-230; CR-111, CR-119; crash and feedback attach rules; build, size and purity checks; Metro | 11a verified and committed (6bfa07c, DECISIONS 33.11a); 11b built, in verification |
 | 12 | Full verification | Every acceptance criterion of PRD section 12 against the running product; the scaled load test; docs, PRD status, DECISIONS, Docker with the profile | pending |
 
 Profiles come before funnels and cohorts so that the funnel drill-down (AN-088) reuses the
@@ -412,6 +412,205 @@ answers `analytics_unavailable`. `lib/api.ts`: `AnalyticsDatabase`, `AnalyticsDa
 `lib/timezones.ts`: `formerTimezoneName`. The access panel takes `kind: 'analyticsDatabase'`;
 the notification panel runs with `hideContentLevel`.
 
+### From piece 11a: the analytics SDK core, browser and Node
+
+**Entries.** `packages/sdk/src/analytics/`: `index.ts` (the bare core, the `globalThis` slot
+`Symbol.for('inlet-sdk.analytics.current')`, `initWith(options, adapter)` for adapters),
+`browser.ts`, `node.ts`, `client.ts` (`AnalyticsClient`, `AnalyticsAdapter`), `transport.ts`,
+`queue.ts`, `types.ts`. `build.mjs` builds `analytics: ['index', 'node', 'browser']`; add
+`electron`, `electron-renderer`, `react-native` there, to `platformOf` if new, to
+`browserSafe()` (renderer, React Native), `reactNativeSafe()` (React Native), `metroShims()`
+(bare and React Native entries; none exists yet for analytics) and to `package.json`
+`exports` (and `files` for the shim directories).
+
+**An adapter plugs in** by calling `initWith(options, adapter)` with:
+`storage` (an `IdentityStorage`, synchronous `read`/`write(key, value | null)`), `queue` (an
+`EventQueueStore`: `load`, `put`, `remove`, `shared?`), `context` (an `EventContext`),
+`ephemeral`, `sharedSession` (browsers only), `locks` (Web Locks or null), `defaultMode`,
+`defaultFlushIntervalMs`; and by calling `client.pageHidden()` when the app goes to the
+background (flush with keepalive in browsers; React Native should call `flush()` instead or a
+new hook) and `client.foreground()` when it returns (activity; rotates an expired session with
+`resume`). Electron main: `storage` = `identityStorageOver(new FileStore(userData/inlet), keys)`
+(synchronous), `queue` = `new KeyedEventQueue(fileStore)`, context from `nodeContext` with the
+product OS version (`os` option), app version/name defaults. React Native: an `IdentityStorage`
+that is memory written through to AsyncStorage, preloaded before `init` (or pass the async
+store as `options.store`, which `identityStorageOver` already preloads, `track` calls waiting
+for it), and an `EventQueueStore` of one item per key under the byte budget.
+
+**Identity** (`packages/sdk/src/identity.ts`, one `Identity` on `globalThis`):
+
+- `IDENTITY_KEYS`: `installation-id` (**the one key** of the installation ID; a config module
+  reads and writes the same key, and the analytics module adopts what it finds there —
+  tested by pre-seeding it), `analytics-opt-out` (`'1'`), `analytics-state` (JSON:
+  attribution, experiments, `appVersion`, `appBuild`, `installed` = the installation ID
+  `app_installed` was sent for), `session` (browser: the shared `SessionRecord`), `crash-flags`
+  (JSON `CrashFlag[]`). The browser prefixes them `inlet-sdk:` in `localStorage`; on disk each is
+  `<key>.json` under the persistence directory (`FileStore`).
+- **Persisted installation ID vs attached field** (RC-119): the persisted ID is only in
+  storage. `identity.installationId` is the field crash and feedback attach, set by an enabled
+  device-mode analytics client and null otherwise; `identity.analyticsEnabled` is the flag the
+  crash and feedback modules decide by (`crash/client.ts identityFields`, `feedback/client.ts`).
+  A config module must never set either.
+- Sessions: `currentSession(now, activity)`, `sessionId(now)`, `peekSessionId(now)`,
+  `rotate(now, trigger)`, `markAnnounced`, `adopt`, `readStored`, `clearSession`, `timeoutMs`,
+  `sharedSession` and `deriveSessions` (no Web Locks: `derivedSessionId(installation, expired)`,
+  SHA-256 from the shared core, a version-8 UUID). `onRotate(session, trigger)` is the analytics
+  client's hook; `watch(fn)` notifies on a session change or an enable/disable (the Electron
+  sentinel uses it).
+- **Crash flags**: `flagCrash(flag)` (no-op unless `analyticsEnabled`) writes `crash-flags`
+  through `identity.storage` synchronously where the storage is (localStorage, `FileStore`),
+  then calls `onCrashFlag`; `pendingFlags()`, `settleFlags(flags)` once the `session_crashed`
+  is persisted in the queue. The crash module raises them in `CrashClient.capture` /
+  `captureSync` after `beforeSendSync`, before sampling and dedupe (sampling moved after the
+  hook only while analytics is enabled, so crash-only behaviour is unchanged).
+- `crashReporting()` (set by the last `CrashClient`: enabled, and in a browser a page script
+  within its app roots), `analyticsApp`, `previousRun` (set by the adapter that read the
+  sentinel: `{ sessionId, installationId, appVersion }`), `onForget(fn)` / `forgetQueued(id)`
+  (crash and feedback strip the installation ID from their queues).
+- `identityStorageOver(store, keys)` in `store.ts`: synchronous over a store with
+  `getSync`/`setSync`, else memory preloaded from an asynchronous store and written through.
+
+**Sentinel** (`crash/sentinel.ts`): `identity?: () => SentinelIdentity` recorded at every write,
+`refresh()`, and `previous.identity`. `crash/electron.ts` wires it (records only while analytics
+is enabled, rewritten on `watch`) and sets `identity.previousRun` before its previous-run report.
+
+**Context** (`packages/sdk/src/context.ts`, neutral, no globals read at load):
+`browserContext(userAgent, language)`, `isElectronRenderer(ua)`, `normalizeLocale(value)`
+(BCP 47), `serverRuntime(globalThis, process.versions)`, `nodeContext({ mode, runtime, platform,
+release, os, locale })`. Remote Config's fetch context reuses these; a React Native
+`reactNativeContext(Platform, Intl)` belongs here too.
+
+**Stores**: `IndexedDbEventQueue` (database `inlet-analytics`, object store `events`, one JSON
+record per event ID) and `LocalStorageIdentity` in `store-browser.ts`; `KeyedEventQueue` (key
+`analytics-queue`) and `MemoryEventQueue` in `analytics/queue.ts`.
+
+**Health**: `capabilities(baseUrl, fetch, timeoutMs, refresh)` gained `refresh`, used for the
+ten-minute re-read while `analytics` is not listed (AN-241).
+
+### From piece 11b: the analytics SDK for Electron and React Native
+
+**Entries.** `packages/sdk/src/analytics/electron.ts` (`installElectronMain(options, { electron })`
+returning the `AnalyticsClient` plus `uninstall()`; options `app?` (defaults `app.getVersion()`,
+`app.getName()`), `persistenceDir?` (default `<userData>/inlet`), `acceptRendererIdentity?`
+(default true)), `electron-renderer.ts` (`createElectronRenderer({ send?, on?, debug? })`,
+channels `ANALYTICS_IPC_CHANNEL = 'inlet:analytics'` and `ANALYTICS_IDS_CHANNEL =
+'inlet:analytics:ids'`, the `RendererAnalyticsMessage` union; preload bridge
+`window.inletAnalytics = { send, on }`), `react-native.ts` (`init({ …, Platform, AppState, store,
+maxStoreBytes? })`, `DEFAULT_MAX_STORE_BYTES` 1 MB). All three are in `build.mjs`, the
+`exports`, the purity check (renderer, React Native), the React Native load check and the Metro
+shims (`analytics`, `analytics/react-native`, listed in `files` and ignored by
+`packages/sdk/.gitignore`).
+
+**Context.** `context.ts` gained `reactNativeContext(Platform, locale)`, `reactNativeOs`,
+`reactNativeVersion` and the `ReactNativePlatform` type (moved from `crash/react-native.ts`,
+which re-exports them); `nodeContext`'s `runtime` accepts any name (`electron`). Remote
+Config's React Native and Electron adapters reuse them.
+
+**React Native storage.** The identity is a `ReactNativeStore` with prefix `inlet-sdk:` (keys
+`inlet-sdk:installation-id`, `inlet-sdk:analytics-state`, … — the same names as the browser's
+`localStorage`, so a config module reads the one installation key under the same name on every
+platform); the queue is a second one with prefix `inlet-analytics:` and the queue key
+`analytics-queue`, one event per key. `ReactNativeStoreOptions.keepLast` drops matching items
+last; the ceiling counts each item's index entry. A config module on React Native should take
+the same injected store and keep its budget (RC-120) as its own `maxBytes`.
+
+**Crash flags.** `Identity.useFlagStorage(storage)`: the React Native crash adapter's store for
+`crash-flags` (`inlet-crash:crash-flags`), synchronous when the store is; `pendingFlags`,
+`settleFlags` and `dropFlags` use it instead of `identity.storage` once set, and it sends the
+flags it finds to an analytics client already enabled.
+
+**Client.** `close()` marks the client closed before awaiting its store; `detach()` removes
+only the hooks this client installed (`identity.onRotate === this.rotateHook`); calls before an
+asynchronous store loads (`track`, `setAttribution`, `setExperiment`) wait and run after the
+stored state; `ephemeral` becomes true at the first enable when the installation ID cannot be
+read back after it is written. `CrashClient.flagUnsent` flags a crashing report the bounds check
+dropped, after `beforeSendSync`.
+
+**Build checks** are in `packages/sdk/build-checks.mjs` (`browserSafe(files)`,
+`reactNativeSafe(files)`), called by `build.mjs` and proven by `test/build-checks.test.ts`.
+
+### From piece 3: ingest and Collect
+
+**Modules.** `apps/api/src/services/analytics-ingest.ts` (the pipeline and every piece of
+in-memory state), `analytics-derive.ts` (pure: `effectiveTime`, `localDay`, `installAges`,
+`serverInstallationId`, `testInstallationId`, `eventNameIdFor`, `eventStoreTime`),
+`analytics-worker.ts`, and the neutral `apps/api/src/lib/country.ts` (`createCountrySource`),
+`lib/address-ceiling.ts` (`createAddressCeiling`), `lib/buckets.ts` (`BucketedCounters`) and
+`lib/lru.ts` (`Lru`), which Remote Config reuses as they are.
+
+**Routes** (`routes/analytics.ts`): `POST /v1/analytics-databases/{id}/batch` (any key of the
+project, `config: { rateLimit: false }`, 1 MiB Fastify limit, the route's own 256 KiB check),
+`POST …/test-event` (Creator or Admin), `GET …/live?after=&limit=` (Viewer; no query slot).
+`app.ts` opens the batch route cross-origin for `POST` only, through `CROSS_ORIGIN_BY_METHOD`:
+Remote Config's fetch goes in the same list with its method.
+
+**Functions later pieces call** (all in `analytics-ingest.ts`):
+
+- `raiseAcceptanceFloor(databaseKey, keptFrom)` — piece 9, before dropping a week: `keptFrom`
+  is the local date (the Monday) of the oldest week kept. Effective for ingest at once; never
+  moves back. Then write `analytics_databases.kept_from`, which every batch reads with the row,
+  so the floor survives a restart. `acceptanceFloor(database, limits, receivedMs)` answers
+  `{ fromMs, keptFrom }` for the Storage panel's statement.
+- `evictInstallations(databaseKey, installationIds?)` — piece 10 after an erasure, piece 9
+  after the AN-165 pruning (omit the IDs for a whole database, e.g. on removal).
+- `invalidateAnalyticsCatalog(databaseKey, names?)` — piece 4 after deleting, blocking or
+  unblocking a name (omit the names for a whole database).
+- `removeFromLiveFeed(databaseKey, { installationIds?, userIds? })` — piece 10.
+- `resetAnalyticsIngestState()` — the harness calls it from `reset()`; it clears caches, keys in
+  flight, rate limits, raised floors, live feeds, counters and every address ceiling. A test
+  simulates a restart with it.
+- `analyticsIngestTimings` (`warmupMs`, `failedKeyBlockMs`) — test seams; the harness sets
+  `warmupMs = 0`.
+- `flushAnalyticsCounters(db)` — the counters pass; a test may call it directly.
+
+**Worker.** `startAnalyticsWorker(ctx, options)` in `server.ts`, stopped (and flushed) on
+shutdown after `app.close()`. Add a pass to the `passes` list with an interval in
+`AnalyticsWorkerOptions` (so a test can shorten it); each pass runs once at a time and a
+failure is logged and retried at the next tick. Claim per-database work with row locks, as the
+PRD's section 11 asks, when a pass mutates shared rows.
+
+**Counters schema.** `analytics_dropped_counts (database_key, hour)`: one bigint per reason —
+`rate_limit_exceeded`, `installation_rate_limited`, `event_too_old`, `event_too_large`,
+`event_name_limit`, `event_name_rate`, `event_blocked`, `invalid_event`, `unknown_field`,
+`missing_identity` — then `truncated` (per truncated value), `param_keys_dropped`,
+`categories_dropped`, `placeholders_dropped`, `clock_corrected` (new, migration
+`0002_analytics_clock_corrected.sql`), `duplicates`, `accepted` (stored events, duplicates not
+included), `removed_by_cap` (piece 9 writes it). Hours are UTC hour starts of the received
+time; data health (piece 9) sums them over 24 hours and 7 days, and the incidents read the same
+rows. Written at least every ten seconds; a crash loses at most the last interval.
+
+**What the event store holds per event, as ingest writes it.** `installation_kind` is `device`
+(an installation ID), `server` (a user ID alone: `serverInstallationId(secret, userId)`) or
+`test` (`testInstallationId(secret)`, also for a client naming that ID); `category` and every
+absent dimension are `''`; `params` values are strings (`String(value)`), the catalog keeping
+their types; `experiment_keys`/`variants` are sorted by key; `country` is `''` for a background
+event, a database with derivation off, or no answer; `credential_id` is the key's ID, `''` for a
+signed-in user's test event; `received_time` is taken once the batch holds its installation
+locks and is strictly increasing across batches (DECISIONS 33.3). Being at least a millisecond
+apart per batch, it runs ahead of the wall clock whenever the process takes more than a thousand
+batches a second, by a millisecond per extra batch: piece 10 compares a pending erasure's time
+with `received_time` (AN-184), so it takes that time from the same clock (export
+`rowsReceivedTime` from `analytics-ingest.ts`) rather than from `Date.now()`, or no row received
+before the erasure could escape it. A replay, or a copy that waited on a batch in flight, carries
+the received time already stored (verification of piece 3).
+
+**The test-installation rule for every query.** The test installation counts in no unique,
+active, new-installation, session or cohort figure (AN-025): every such query filters
+`installation_kind = 'device'` (which also drops server installations), sessions count
+`app_started` of device installations only, and cohorts and new installations read device
+installation records only. Event totals (`count()` by name) include it, so `test_event`'s own
+totals show the test events.
+
+**Collect.** `apps/web/src/lib/analytics-snippets.ts` holds the five consent-first snippets and
+`ANALYTICS_CONSENT_NOTE`; piece 11 checks its surface against them (entries, `init` options
+`baseUrl`, `publishableKey`, `analyticsDatabaseId`, `app`, `enabled`, `store` on React Native,
+`installElectronMain`, `createElectronRenderer`, `setEnabled`, `track`, `screen`, `flush`). The
+Collect panel is `CollectPanel` and `LiveFeed` in `pages/analytics-database.tsx`; piece 9 adds
+the notice for `event_name_limit`/`event_name_rate` above the live feed.
+
+**MCP.** `send_analytics_test_event`, `get_analytics_live_events` (at most 500 per call, the
+whole feed, with a cursor).
+
 ## Left out, and why
 
 Each piece appends what it did not build and the reason.
@@ -463,3 +662,91 @@ Each piece appends what it did not build and the reason.
   the cohort run's `granularity`/`filters` overrides should be written into 9.2; see the
   piece 2 report for the exact text.
 
+### From piece 11a
+
+- **Electron, React Native, Metro** (AN-238, AN-239, CR-111's renderer `setUserId`): piece 11b,
+  on the seams above. The Collect snippets for them (`apps/web/src/lib/analytics-snippets.ts`)
+  pass React Native's store as `storage`; the core's option is `store` (AN-221 "a store"), so
+  11b either names its option `storage` in the React Native entry or the snippet changes.
+- **Keepalive and the flush lock**: the page-hide send does not wait for the Web Lock (a page
+  being hidden cannot await one); two tabs hidden at once may both send, which the server's
+  idempotency absorbs. The ordinary flush is one tab at a time.
+- **Ephemeral on Node**: device mode without `persistenceDir` marks events ephemeral; a
+  directory whose writes a runtime permission refuses (Deno without `--allow-write`) keeps
+  the identity in memory silently and does not mark events ephemeral, because detecting it
+  would need a probe write, which FD-016 forbids while disabled.
+- **An IndexedDB that fails to open asynchronously** (Firefox private windows): the queue stays
+  in memory and says so through `debug` on the first failed write; events are marked
+  ephemeral only when `indexedDB` or `localStorage` is missing outright.
+- **Queue order across tabs** is by timestamp then creation order; events from different tabs
+  with the same millisecond may interleave, which the server does not care about.
+- **Bun** was not available on this machine; Deno 2.9.7 ran the built Node entry in server and
+  device mode, with and without file and system permissions.
+
+**Verification of piece 11a (September 27, 2026).** Defects fixed, with tests in
+`packages/sdk/test/analytics-verify.test.ts` (DECISIONS 33.11a, "From the verification"):
+keepalive before a health answer listing `analytics`, and resent on a second hide; the queue not
+written on a hide while paused; an older version's identity on `globalThis` making `init` throw;
+a previous-run flag's `crashedAt` set to the next launch; empty files written by `forget` on
+Node; inline JSON-LD counted toward `crashReporting`; a closing background tab overwriting the
+session another tab rotated to. Left, for a decision or for 11b:
+
+- **A crash whose report fails the bounds check before `beforeSendSync`** (a context over
+  16 KiB, an envelope over 64 KiB) flags no session, because the flag follows the synchronous
+  hook and the hook never runs on it. Flagging it means running `beforeSendSync` on an
+  out-of-bounds report while analytics is enabled; a product call, not made here.
+- **Two `init` calls in quick succession with an asynchronous store** (11b's React Native): the
+  first client's `close` awaits its own store, then detaches the shared identity after the
+  second client attached, leaving analytics disabled in the identity while the second client
+  is enabled. `close` should mark the client closed before awaiting and detach only what it
+  attached.
+- **`forget` in a browser where analytics never ran** opens the `inlet-analytics` IndexedDB
+  database to empty it, which creates it. Harmless (an empty database), but it is a write while
+  disabled; `indexedDB.databases()` could check first where it exists.
+- **The Deno note above is not quite right**: detecting a refused write needs no probe, since
+  the first enable writes the installation ID anyway; `identityStorageOver` swallows that
+  failure. Marking such an installation ephemeral is possible if the product wants it.
+- The React Native Collect snippet now passes `store:`, matching the core's option.
+
+### From piece 11b
+
+- **No end-to-end spec against the running API** for the Electron and React Native entries
+  (`e2e/api/sdk-analytics*.spec.ts`): the agent brief forbids running the end-to-end suites
+  while other agents test, and an unrun spec is not evidence. The unit suite runs every
+  criterion with fakes of `electron` and React Native, and `npm run test:metro` bundles the new
+  entries from the packed tarball. Piece 12 (or the orchestrator) can add a spec that drives the
+  built Electron main entry with a fake `electron` against the real ingest route.
+- **No real Electron or device run.** `process.getSystemVersion()`, `webContents` and
+  `AppState` are faked; Metro bundling proves resolution on React Native 0.74, not execution on
+  a device.
+- **The Collect snippets** (`apps/web/src/lib/analytics-snippets.ts`) match the surface, but
+  the Electron renderer snippet does not show the preload bridge (`window.inletAnalytics`) it
+  depends on; without it `createElectronRenderer()` sends nothing and says so only through
+  `debug`. For the orchestrator to route to the web piece.
+- **With AsyncStorage, crash flags are best effort** (AN-151 says so): the flag is written
+  through asynchronously and a crash that kills the JavaScript thread at once may lose it.
+- **The React Native byte budget counts values, not keys**; AsyncStorage's own per-key overhead
+  is outside it, and the identity keys are covered by a fixed 8 KiB reserve.
+- **Electron windows get the IDs only through the push**; a window created before
+  `installElectronMain` resolved asks once (`hello`) at `createElectronRenderer` and is answered
+  only if main is listening by then; later changes reach it by the push to every `webContents`.
+
+### From piece 3
+
+- **The Collect notice** while events are refused for the name limit or the hourly allowance
+  (PRD 8.1): piece 9, with data health and the incidents it links to.
+- **Incidents** (AN-169): the counters exist; opening and resolving `event_name_limit`,
+  `event_name_rate`, `rate_limited` and `invalid_events` is piece 9's, from these rows.
+- **Replays carry the retry's dimensions.** A replay has the stored received and effective
+  times, but its other values (country included) are the retry's. If a retry's derived
+  country differs from the first attempt's (a device that changed network between two
+  attempts) and ties the stored event to the millisecond, `latest.country` may take the
+  larger of the two. Reading every stored column back with the duplicate lookup would cure it
+  at the cost of a wider read on every batch; left, since it needs a retry, a network change
+  and an exact tie.
+- **The reference-workload latency** (9.5): measured on a laptop only (DECISIONS 33.3); piece
+  12's load test measures it at scale.
+- **PRD amendments for the orchestrator** (not applied here): Appendix B.1's first example
+  gives 1 month for an event on August 31 against an install on August 30, which AN-032 makes
+  0 (both in August); AN-034's "never updates an existing entry" needs the observed-types
+  exception; see the piece 3 report for the exact wording.
