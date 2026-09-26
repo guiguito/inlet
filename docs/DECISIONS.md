@@ -2598,3 +2598,266 @@ Found on the way, both fixed: `docker-compose.dev.yml` mounted PostgreSQL 18 at
 `/var/lib/postgresql/data`, which that image refuses (the bundled file already knew); and
 `services-down` stopped PostgreSQL with SIGTERM, its "smart" shutdown, which waits for every
 client to disconnect and so could leave it running indefinitely. It now sends SIGINT.
+
+## 31. Release 8: analytics events in ClickHouse
+
+The UX Analytics PRD approved on September 24, 2026 kept events in PostgreSQL: weekly
+partitions per database, exact per-installation aggregates written in the ingest
+transaction, and a 20 million raw-event cap that keeps about 20 days at a million events a
+day. Param filters, funnels and param cohorts could only reach back that far, and the
+design stopped at about ten million events a day per deployment. On September 26, before
+any analytics code existed, the product owner moved events to ClickHouse to serve larger
+product teams and give every analysis the same long history. PostgreSQL keeps everything
+else. The PRD pages (UX Analytics, Foundations) were amended the same day; this section is
+the technical record behind them. The ClickHouse claims below were checked against the
+documentation and source of ClickHouse 26.8 LTS (`v26.8.11.7-lts`) unless marked
+**unverified**, and every throughput or size figure is an estimate that the 8.1
+measurement and the 8.3 load test must confirm.
+
+### 31.1 The owner's decisions
+
+- **Shipping.** ClickHouse is bundled in `docker-compose.yml` behind the compose profile
+  `analytics`, as ClamAV is behind `malware-scanning`, so the package stays standalone and
+  a team that never uses analytics never runs it. An external or managed ClickHouse is
+  named by `INLET_CLICKHOUSE_URL`. Without it, Inlet runs as before and `/v1/health` does
+  not list `analytics`.
+- **One storage window.** Events are kept 13 months by default and every query covers the
+  same history. The data-source rule, the per-answer `source`, the separate aggregate age
+  and the "clamped to the raw window" notes are gone.
+- **Disk protection.** A maximum age (13 months) and a maximum event count (500 million)
+  per database, each lowerable by an Admin; the operator sets their defaults and bounds
+  (FD-032). At the reference workload the cap binds first, at about 50 days, and operators
+  with the disk raise it.
+- **Reference workload.** Ten million events a day per database on one node of about
+  8 vCPU and 32 GB. The `analytics` profile needs 4 vCPU and 8 GB for the whole stack,
+  because ClickHouse's own guidance is at least 8 GB and says below 16 GB it needs tuning;
+  a deployment without the profile keeps 2 vCPU and 4 GB.
+- **No session record**, and **a funnel trend's own time limit** of 120 seconds (its budget is
+  60 s at the 95th percentile, so the limit is not the budget).
+- **Erasure by ID is a project-level action** (Foundations FD-033), so a deployment without
+  the event store can still erase crash reports and submissions by installation or user ID,
+  which before this change could only be reached from an analytics profile.
+- Funnel, cohort and trend semantics and Appendix B are unchanged.
+
+### 31.2 What lives where
+
+PostgreSQL keeps what is small, mutable or needs a transaction: analytics databases with
+their settings, integer key and installation secret; memberships and invitations; the
+catalog and Lexicon (event names, param keys, categories), whose integer IDs the events
+carry; funnels and cohorts; dropped counts and incidents; erasure, pending-erasure and
+removal records; notification deliveries. ClickHouse keeps the events and what derives
+from them.
+
+| Table | Engine | Partition | Order | Fed by |
+| --- | --- | --- | --- | --- |
+| `events_ingest` | Null | — | — | the API's insert |
+| `events` | MergeTree | database key, ISO week of the local day | database key, event-name ID, local day, installation ID, effective time, event ID | a materialized view from `events_ingest`, replays excluded |
+| `installations` | AggregatingMergeTree | database key | database key, installation ID | a materialized view from `events_ingest`, replays included |
+| `installation_users` | AggregatingMergeTree | database key | database key, installation ID, user ID | the same |
+| `installation_first`, `user_first` | AggregatingMergeTree | database key | database key, event-name ID (0 for any event), installation or user ID | the same |
+| `inlet_migrations` | MergeTree | — | version | the migration runner |
+
+- **Dimensions are columns.** Context, country and attribution are `LowCardinality(String)`
+  columns; experiments are two key-sorted arrays so they can be grouped on; params are a
+  `Map(LowCardinality(String), String)` whose types the catalog records. Column
+  compression does what the dimension-set table did, so AN-024 is withdrawn. Protection
+  against invented values is the rate limits: an invented app version costs column
+  storage, never a row in a lookup table.
+- **Internal rollups are projections**, two aggregate projections on `events` (per event
+  name, day, installation, user and dimensions; and per day, installation, user and
+  dimensions for "any event"). A projection is written with each part, so it can never
+  disagree with the events, and it vanishes with a dropped partition, which is exactly
+  AN-035. **Unverified:** whether the optimizer uses them for the two-level unique-count
+  queries and period expressions, and what rebuilding them costs on erasure. The 8.1 spike
+  answers both before the schema is frozen; the fallback is SummingMergeTree rollups fed
+  by materialized views plus a nightly reconciliation against the events.
+- **Installation state is materialized views with idempotent states** (`min`, `max`,
+  `argMin`, `argMax`), so an event stored twice, or replayed, changes nothing. The install
+  time is `argMinIf(effective time, (received time, effective time, event ID))` over
+  qualifying events — not background, or a server installation — so it is the effective
+  time of the first event *received*, which never moves, as AN-031 requires; a naive
+  `min(effective time)` would move it when a late event arrives. The latest user ID is the
+  one last seen, derived at read time, so an erasure corrects it for free.
+- **Partitions per database and ISO week.** About 57 per database at 13 months: 2,850 at
+  the default 50 databases, inside ClickHouse's guidance of partition-key cardinality
+  below 1,000 to 10,000. Age, cap and database deletion are `DROP PARTITION`, and
+  `system.parts` gives each database's rows and bytes exactly (AN-166, AN-167).
+  `max_partitions_per_insert_block` defaults to 100 and throws beyond it; an asynchronous
+  flush mixing databases and late weeks can pass that, so Inlet sets it to 1,000.
+
+### 31.3 Ingest
+
+1. Authenticate, rate-limit, validate and sanitise with `@inlet/shared`, compute the
+   effective time and check the acceptance floor, all as before.
+2. Insert new catalog entries in PostgreSQL (`on conflict do nothing returning`), so a
+   stored event always has its name.
+3. Drop duplicates. Each event's whole sort key is known at ingest, so one query reads the
+   primary key for the batch's keys. An in-process map of keys in flight makes concurrent
+   copies of one event wait for the first; a key whose insert failed or timed out stays
+   blocked for ten seconds, longer than the asynchronous flush, because a buffered row can
+   still land after the client gave up. For the first two seconds after start, ingest
+   answers `503` so buffers left by the previous process flush before any lookup.
+4. Resolve install times from an LRU cache, else from `installations`; a new
+   installation's install time comes from the batch's first qualifying event by the same
+   ordering the view uses, and batches creating the same installation are serialised in
+   process so they stamp the same install ages. An erasure or the daily pruning evicts the
+   installations it removes, so one that sends again starts over consistently.
+5. Compute local day, week, month and install ages in the API with ICU, because ClickHouse
+   refuses non-constant timezone arguments (`allow_nonconst_timezone_arguments` is off by
+   default and documented as "please do not enable").
+6. One insert into `events_ingest` with `async_insert=1, wait_for_async_insert=1`, which
+   acknowledges only after the flush is written. Duplicates go in with `is_replay=1`, which
+   feeds only the installation views.
+
+A view that fails does not roll back the write to the source table. That is why counts
+are projections rather than view-fed rollups on a plain MergeTree (they would drift), and
+why duplicates are replayed: a retry after a failed view completes the installation state.
+
+| Failure | Outcome |
+| --- | --- |
+| Catalog written, ClickHouse insert fails | `503 analytics_unavailable`; the retry stores the events |
+| ClickHouse writes, the answer is lost | The retry finds duplicates and replays them; nothing counts twice |
+| A batch spanning two weeks half written | The retry deduplicates the written part and inserts the rest |
+| An installation view fails | The retry heals it; a client that never retries leaves a gap, logged and accepted |
+| ClickHouse down | `503` with `Retry-After`; the SDK keeps its queue; nothing else waits |
+
+Accepted divergence: an `eventId` reused for another name or installation is a different
+event (AN-013 says so). Latency: the adaptive asynchronous timeout is 50 to 200 ms, so the
+ingest budget moves from 100 to 300 ms at the 95th percentile. Single-instance topology
+(Foundations §4) is what makes the in-process map enough; a second instance needs a shared
+one.
+
+### 31.4 Queries
+
+- `@clickhouse/client` over HTTP, server-side query parameters (`{name:Type}`) for every
+  value, a `readonly=2` user for reads and another for ingest, and per-query
+  `max_execution_time`, `max_memory_usage` and `max_threads`. Time and memory breaches
+  both answer `query_limit_exceeded`, which replaces `query_timeout`.
+- `uniqExact` and `medianExact` only: `uniq` is approximate, and so is `median`.
+- Periods of a day or longer come from the stored `local_day`; only hour buckets and "the
+  last 60 minutes" pass the reporting timezone, one constant per query. **Unverified:**
+  `toStartOfHour` in half-hour-offset zones.
+- **Funnels are not `windowFunnel`.** It returns the longest chain from any step-1 event
+  within the window, whereas AN-083 enters at the *first* step-1 occurrence in the range,
+  orders by effective time then event ID, and excludes the occurrence that reached the
+  previous step. The query sorts each unit's step occurrences into an array and walks it
+  with generated `arrayFirst` expressions, one per step; open funnels and the trend view
+  (`arrayJoin` over entry groups) are variations of the same walk.
+- Cohorts with unfiltered starts take members from `installations` or the first-occurrence
+  tables and returns from the rollups; a filtered start reads the events and is marked
+  `firstInWindow`. Sessions and crash-free sessions read `app_started` and
+  `session_crashed`, which the event-name prefix of the sort key prunes.
+- AN-205's connection pool becomes three query slots in the API with the same fairness
+  rules, plus a second slot per caller for a funnel trend, so a two-minute trend does not
+  lock its user out of every other screen; ClickHouse's limits do the rest. Profile prefix
+  search, the recent-installations list and erasure previews scan and so take a slot too.
+- `bloom_filter` skipping indexes on `installation_id` and `user_id` serve profiles,
+  drill-downs and erasure previews, since neither ID leads the sort key.
+
+Estimated at the reference workload (about 4 billion events over 13 months, 8 cores, 100
+to 300 million rows a second for simple aggregation): Overview under a second; trends
+from the rollups 0.3 to 1.5 s; a param filter over 13 months 8 to 20 s, hence its 20 s
+budget; a funnel's steps over 14 days 1 to 2 s and its trend by day over 90 days 5 to
+10 s; the trend by week over 13 months 20 to 60 s, hence its own 120 s limit; cohorts 1 to
+2 s; profiles and prefix search under half a second.
+
+### 31.5 Retention, deletion and erasure
+
+- **Age and cap:** raise the acceptance floor in memory, then drop whole weeks. Row counts
+  come from active parts in `system.parts` and include rows deleted but not yet merged
+  away, so the cap can overcount slightly. A week an insert racing the drop recreates is
+  dropped by the next pass.
+- **Installation state:** once a day, lightweight `DELETE` of the installations with no
+  event within the maximum age, from every installation table.
+- **Lightweight deletes, and every derived table explicitly.** A lightweight `DELETE`
+  masks rows at once (`lightweight_deletes_sync` defaults to waiting) and leaves the files
+  to merges. Materialized views do not follow deletions, so erasure, event-name deletion,
+  pruning and database removal delete from each table. A table with projections refuses
+  lightweight deletes unless `lightweight_mutation_projection_mode` is `drop` or
+  `rebuild`; Inlet uses `rebuild`, whose cost per touched part the 8.1 spike measures.
+- **Erasure:** the request resolves the installations to erase with a user ID and writes a
+  pending erasure holding the ID, those installations and its time; every read skips those
+  IDs' rows *received before that time*, so events the same IDs send afterwards, which
+  erasure must not prevent, stay visible and survive the worker's deletes, which carry the
+  same bound. The worker runs the deletes, and forces removal
+  from disk with `ALTER TABLE … APPLY DELETED MASK IN PARTITION` on the partitions it
+  touched, within 30 days, because old partitions rarely merge on their own. Thirty days
+  matches the one month GDPR allows for answering an erasure request; the operator may
+  shorten it.
+- **Event-name deletion:** deleting the PostgreSQL row retires the name's ID, which makes
+  its data unreadable at once; a name sent again gets a new ID. The worker then deletes
+  its rows, which rebuilds the projections of almost every part (estimated 20 to 60
+  minutes at 4 billion events; measure).
+- **Database removal:** drop every partition of the database key from each table, then
+  delete the removal record. Keys are never reused, and a daily sweep treats ClickHouse
+  keys or name IDs that PostgreSQL no longer knows, as after restoring an older PostgreSQL
+  backup, as deletions.
+
+### 31.6 Operations
+
+- **Storage:** about 30 to 45 bytes an event compressed (the event ID, about 10 bytes, and
+  params dominate; sorted installation IDs and times compress to a few bytes), planned at
+  50 bytes including projections and indexes, against PostgreSQL's 450. The 8.1
+  measurement confirms it on seeded data.
+- **Memory:** `max_server_memory_usage` set in bytes, caches and background pools reduced
+  and the log tables off on the Small host, as ClickHouse's small-machine guidance says.
+  **Unverified:** cgroup memory detection in the container.
+- **Compose:** `clickhouse/clickhouse-server:26.8` pinned to a patch release, under
+  `profiles: ['analytics']`, with a volume, a raised `nofile` limit and no published port.
+  The `inlet` service gets `INLET_CLICKHOUSE_URL=http://clickhouse:8123` by default and
+  does not wait on the service, so the profile alone enables analytics; the API lists
+  `analytics` once ClickHouse answers and its migrations have run, and keeps retrying in
+  the background until then.
+- **Without the event store** means none configured, or the configured one not yet answered
+  and migrated since the API started; only then does creation answer
+  `analytics_not_enabled`. Existing databases answer `503 analytics_unavailable` in that
+  state and in any later outage.
+- **Health:** an outage after start keeps `/v1/health` at 200 with `analytics` still listed. Failing it would restart
+  the container and take feedback and crash collection down with analytics.
+- **Migrations:** numbered, idempotent SQL files under `apps/api/clickhouse/`, applied at
+  start under `INLET_MIGRATE_ON_START` and recorded in `inlet_migrations`. Drizzle stays
+  PostgreSQL-only.
+- **Backups:** `BACKUP DATABASE … TO S3(...)` into the bundled RustFS or to a disk, with
+  incremental `base_backup`. Not atomic with `pg_dump`: restore PostgreSQL first, then
+  ClickHouse, and the daily orphan sweep reconciles the difference.
+- **Local services and CI:** ClickHouse publishes macOS binaries for arm64 and x86_64
+  without checksums, so `scripts/local-services.mjs` pins its own SHA-256, as it does for
+  RustFS; Linux uses the `clickhouse-common-static` archives. The binary is several
+  hundred megabytes, so CI caches it. Tests reset with `TRUNCATE` and run deletes with
+  `mutations_sync=1`.
+
+### 31.7 Rejected
+
+- **Keep PostgreSQL only.** It met its budgets at a million events a day on paper, but its
+  0.45 KB an event is why the raw window was 20 days, a year of param filters and funnels
+  was out of reach, and ten million a day was its ceiling for a whole deployment.
+- **Either engine, chosen by the operator.** Every query written and tested twice.
+- **ReplacingMergeTree to absorb duplicates.** It deduplicates only on merge, so counts
+  are wrong until then unless every query pays for `FINAL`, and rollups fed from the same
+  inserts would never deduplicate at all.
+- **Rollups as materialized views on a plain MergeTree.** A failing view does not roll
+  back the source write, so the two drift. Kept only as the fallback of 31.2, with a
+  reconciliation.
+- **`windowFunnel`**, for the semantics in 31.4.
+- **Partitions by time alone.** Idiomatic for many tenants, but per-database retention and
+  deletion become row deletions and mask rewrites, and per-database bytes become an
+  estimate. Inlet has at most tens of analytics databases.
+- **Partitions by month per database.** Fewer partitions, but the cap would move by a
+  month of volume, which already exceeds the default cap at the reference workload.
+- **A session table.** With one window, the events answer every question it served, and
+  it would be one more table to erase and delete. A lifetime session count is what is
+  lost.
+- **The Small tier on 4 GB with analytics.** Against ClickHouse's own guidance; the
+  deployment without the profile keeps it.
+- **ClickHouse started by the API inside the Inlet image.** About 150 MB more for every
+  deployment, two servers sharing one container's memory, and the API as a process
+  supervisor.
+- **Approximate counters** (`uniq`, `uniqCombined`, sampling). The PRD promises exact
+  numbers.
+
+### 31.8 A convention for withdrawn requirements
+
+The PRDs had never removed a requirement. A withdrawn one keeps its ID and its line, which
+reads `**AN-024:** (Withdrawn September 26, 2026: reason.)`, so every citation still
+resolves and the numbering never shifts. AN-024 (dimension sets), AN-038 (the session
+record) and Appendix B.7 (the data-source rule) are the first.

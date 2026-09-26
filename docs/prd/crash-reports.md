@@ -1,14 +1,14 @@
 # Inlet — Crash Reports PRD
 
 ## Document Status
-**Status:** Implemented as Release 6 on September 17, 2026: server, interface, MCP tools and `inlet-sdk/crash` with Node, browser and Electron adapters, published to npm as `inlet-sdk` (the `@inlet` scope belongs to an unrelated party). Technical choices and rejected alternatives: `docs/DECISIONS.md` section 24. `inlet-sdk/feedback`, which section 15 allowed to slip, is specified in Feedback Collection PRD section 25 as Release 7 — SDK. Release 8 adds the shared SDK identity and a React Native adapter (CR-118 to CR-120): built on September 24, 2026 and published to npm as `inlet-sdk` 0.2.0, except what takes effect only while an analytics client is enabled — the installation ID, crash flags, the session and installation IDs the sentinel records, and erasure by installation or user ID (CR-047) — which ships with the analytics module. Technical choices: `docs/DECISIONS.md` section 29.
+**Status:** Implemented as Release 6 on September 17, 2026: server, interface, MCP tools and `inlet-sdk/crash` with Node, browser and Electron adapters, published to npm as `inlet-sdk` (the `@inlet` scope belongs to an unrelated party). Technical choices and rejected alternatives: `docs/DECISIONS.md` section 24. `inlet-sdk/feedback`, which section 15 allowed to slip, is specified in Feedback Collection PRD section 25 as Release 7 — SDK. Release 8 adds the shared SDK identity and a React Native adapter (CR-118 to CR-120): built on September 24, 2026 and published to npm as `inlet-sdk` 0.2.0, except what takes effect only while an analytics client is enabled — the installation ID, the crash flags and the session and installation IDs the sentinel records — which ships with the analytics module; erasure by installation or user ID (CR-047) ships in Release 8 as the project's erasure, which needs no analytics module (Foundations FD-033). Technical choices: `docs/DECISIONS.md` section 29.
 **Product:** Inlet — Crash Reports capability
 **Language:** English
 **Foundations:** Accounts, roles, keys, notifications plumbing, export, deletion, deployment, brand, SDK packaging and MCP conventions are on the Foundations PRD and are not repeated here.
 **Sources:** the HappyVibe "Crashreporting?" proposal (revised September 16, 2026), the competitor research in Appendix A, and the Inlet codebase as of Release 5.
 **Notion page:** https://app.notion.com/p/3ddd33dfffca81129df2c8a1e4af25cb
 **Repository mirror:** `docs/prd/crash-reports.md`
-**Last revised:** September 24, 2026 (Release 8: CR-118 to CR-120 added; CR-002, CR-011, CR-015, CR-016, CR-040, CR-047, CR-051, CR-090, CR-091, CR-092, CR-097, CR-100, CR-101, CR-109, CR-111, CR-115 and sections 3.2, 7.2, 7.3, 8.1, 8.3, 9.1, 9.2, 10, 12 and 15 amended for the shared SDK identity and React Native)
+**Last revised:** September 26, 2026 (erasure by installation or user ID moved to the project, Foundations FD-033: CR-047, section 7.3 and the status line amended). Previously September 24, 2026 (Release 8: CR-118 to CR-120 added; CR-002, CR-011, CR-015, CR-016, CR-040, CR-047, CR-051, CR-090, CR-091, CR-092, CR-097, CR-100, CR-101, CR-109, CR-111, CR-115 and sections 3.2, 7.2, 7.3, 8.1, 8.3, 9.1, 9.2, 10, 12 and 15 amended for the shared SDK identity and React Native)
 
 > **Positioning in one line.** Collect, group, notify, hand off. Inlet tells you that your application broke, how often, on which versions and systems, and for how many users, then hands the developer a content-free report and gets out of the way. It is not Sentry: it never receives a minidump, never symbolicates, never traces, never replays, and never stores a line of your users' content.
 
@@ -115,7 +115,7 @@ The first consumer, the HappyVibe desktop application, measured the gap directly
 - **CR-044:** The Groups tab shall support selecting several groups and resolving or ignoring them together.
 - **CR-045:** The Releases tab shall list releases in order with first seen, report count, group count and new-group count.
 - **CR-046:** A Viewer or above shall be able to read statistics for a crash database: reports and new groups per day for a time range, and per release or per operating system.
-- **CR-047:** An Admin shall be able to delete a group, which deletes its reports, rollups and user associations. Individual reports are not deletable, except through the erasure of an installation or user ID (UX Analytics AN-183), which deletes the reports carrying it and its group-user associations, adjusts affected users and leaves every other aggregate unchanged; otherwise they expire under retention.
+- **CR-047:** An Admin shall be able to delete a group, which deletes its reports, rollups and user associations. Individual reports are not deletable, except through the project's erasure of an installation or user ID (Foundations FD-033, UX Analytics AN-183), which deletes the reports carrying it and its group-user associations, adjusts affected users and leaves every other aggregate unchanged; otherwise they expire under retention.
 - **CR-048:** The Groups tab shall open with a timeline chart of the crash database: reports per day and new groups per day as two series over a selectable range of 7, 30 or 90 days, with a vertical marker on the day each release was first seen. The chart shall honour the list's filters, so narrowing to a release, system, environment, kind or state reshapes it. It is served from the daily rollup and never scans reports.
 - **CR-049:** The group detail shall show the same timeline for that group alone, with the same range control and release markers, in place of a fixed sparkline. Rows in the Groups list keep a small sparkline of the last 30 days.
 
@@ -204,7 +204,7 @@ Endpoint paths are proposals; the flows are requirements.
 | Group | Resolve, ignore, reopen, bulk | No | Yes | Creator or Admin |
 | Group | Delete | No | Yes | Database or project Admin |
 | Report | Edit individually | No | No | Not supported |
-| Report | Erase by installation or user ID (UX Analytics AN-183) | No | Yes | Database or project Admin |
+| Report | Erase by installation or user ID, through the project's erasure (Foundations FD-033) | No | Yes | Database or project Admin |
 | Export | Groups JSON/CSV, reports NDJSON | No | Yes | Viewer or above |
 | Retention setting | Read, change | No | Yes | Database or project Admin |
 

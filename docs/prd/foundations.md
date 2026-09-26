@@ -1,11 +1,11 @@
 # Inlet — Foundations PRD
 
 ## Document Status
-**Status:** Baseline for every Inlet capability — Feedback Collection shipped (Releases 1–5), Crash Reports shipped (Release 6), SDK shipped (Release 7), UX Analytics specified (Release 8, not yet built; FD-016 and FD-032 built for the crash and feedback modules on September 24, 2026, their analytics parts waiting for the analytics module)
+**Status:** Baseline for every Inlet capability — Feedback Collection shipped (Releases 1–5), Crash Reports shipped (Release 6), SDK shipped (Release 7), UX Analytics specified (Release 8, not yet built; FD-016 and FD-032 built for the crash and feedback modules on September 24, 2026, their analytics parts waiting for the analytics module; analytics events moved to an optional ClickHouse event store on September 26, 2026)
 **Product:** Inlet, the self-hosted place your applications report to
 **Language:** English
 **Notion page:** https://app.notion.com/p/3ddd33dfffca813c87daf018eec9aeb4
-**Last revised:** September 24, 2026 (Release 8 — UX Analytics: FD-016 and FD-032 added; FR-082, FR-087, FR-088, FR-171, FD-002, FD-010, FD-012, FD-014, FD-015, FD-030 and sections 1, 6, 9, 11, 12.1, 12.2, 12.3, 13, 15, 17, 18, 20.2, 20.5, 23 and 28 amended for the analytics capability and the shared SDK identity)
+**Last revised:** September 26, 2026 (Release 8 — analytics events stored in ClickHouse, an optional bundled service: FD-033 added; FD-005, FD-009, FD-015, FD-032, FR-027 and sections 1, 3, 4, 6, 9.6, 11, 12.3, 12.6, 13, 14, 15, 16, 17, 18 and 28 amended). Previously September 24, 2026 (Release 8 — UX Analytics: FD-016 and FD-032 added; FR-082, FR-087, FR-088, FR-171, FD-002, FD-010, FD-012, FD-014, FD-015, FD-030 and sections 1, 6, 9, 11, 12.1, 12.2, 12.3, 13, 15, 17, 18, 20.2, 20.5, 23 and 28 amended for the analytics capability and the shared SDK identity)
 **Capability PRDs:** Feedback Collection · Crash Reports · UX Analytics — subpages of this page
 **Repository mirror:** `docs/prd/foundations.md`
 
@@ -14,7 +14,7 @@
 > Section numbers are preserved from the unified PRD (sections 1–24) so that cross-references in the text, in `docs/DECISIONS.md`, and in the code (`FR-xxx`) stay valid. A gap in the numbering means that section lives on the other page. New sections added by the 2026-09-16 split are numbered from 25 onward.
 
 ## 1. Executive Summary
-Inlet is a self-hosted platform that gives a product team one place their applications report to. It began with feedback: forms designed once, collected from any client or from a shared link, read in one interface, exported as data, and operated by an AI agent through MCP. It now also collects crash reports and, from Release 8, product usage events, so that what users say, what breaks and what users do can be read side by side. Every capability shares the same foundations described on this page: projects, typed databases, project-owned API keys, three roles at two scopes, invitation-only accounts, notifications, export, deletion with asynchronous purge, rate limits that platform users cannot configure, one Docker deployment, one brand, and one SDK.
+Inlet is a self-hosted platform that gives a product team one place their applications report to. It began with feedback: forms designed once, collected from any client or from a shared link, read in one interface, exported as data, and operated by an AI agent through MCP. It now also collects crash reports and, from Release 8, product usage events, so that what users say, what breaks and what users do can be read side by side. Every capability shares the same foundations described on this page: projects, typed databases, project-owned API keys, three roles at two scopes, invitation-only accounts, notifications, export, deletion with asynchronous purge, rate limits that platform users cannot configure, one Docker deployment with optional services behind compose profiles, one brand, and one SDK.
 
 A capability is a **database type**. A project holds feedback databases, crash databases and analytics databases side by side. They share identity, access, credentials, notifications, export, deletion and MCP conventions, and differ only in what they collect, how it is stored, how it is read, and how long it is kept. This page defines the shared part once. Each capability PRD defines its own part and nothing else.
 
@@ -31,7 +31,7 @@ Inlet separates the plumbing from the payload. Plumbing is written once and shar
 - Provide read-write MCP access for project administrators.
 - Let one project hold databases of different types, and let every type reuse the same accounts, keys, roles, notifications, export, deletion and MCP conventions.
 - Ship one TypeScript SDK, `inlet-sdk`, with one capability module per database type.
-- Stay one container beside PostgreSQL and S3-compatible storage, whatever the number of capabilities.
+- Stay one container beside PostgreSQL and S3-compatible storage, whatever the number of capabilities, with optional services — ClamAV for malware scanning, ClickHouse for analytics — shipped in the same compose file behind profiles and off until enabled (FD-009).
 
 ## 4. Platform Non-Goals
 The following are outside scope for the platform as a whole. Capability PRDs list their own.
@@ -40,7 +40,7 @@ The following are outside scope for the platform as a whole. Capability PRDs lis
 - Open self-service registration, email verification, and password reset.
 - Multi-tenancy across organisations: one deployment serves one team.
 - Per-user MCP access: MCP acts with a secret server key and project Admin authority.
-- Horizontal scaling: one API instance is the supported topology; the upgrade path is documented, not built.
+- Horizontal scaling: one API instance, and one ClickHouse node for analytics, is the supported topology; the upgrade path is documented, not built.
 
 ## 5. Users and Roles
 ### 5.1 Platform User
@@ -71,7 +71,8 @@ A Viewer can:
 - **Project:** A top-level organizational container owned or shared by users.
 - **Publishable Client Key:** A project-owned credential safe to embed in browser or mobile clients and restricted to the collection flows of each database type: the client feedback flow, crash ingest and analytics ingest.
 - **Secret Server Key:** A project-owned secret credential that carries project Admin authority over the API and MCP.
-- **Database:** A typed collection inside a project. The type is `feedback`, `crash` or `analytics`. Every database has a stable public ID, a name, database-level memberships, notification settings, an export, a retention rule and a deletion path. The type decides the collection endpoint, the stored record, the reading interface and the retention default.
+- **Database:** A typed collection inside a project. The type is `feedback`, `crash` or `analytics`. Every database has a stable public ID, a name, database-level memberships, notification settings, an export, a retention rule and a deletion path. The type decides the collection endpoint, the stored record and where it is stored, the reading interface and the retention default. Analytics events and the records derived from them live in the ClickHouse event store; files live in object storage; everything else lives in PostgreSQL.
+- **Optional Service:** A service the bundled Docker configuration ships behind a compose profile, off until the operator enables it and replaceable by an external one through configuration only, on which one capability may depend and nothing else does (FD-009).
 - **Database ID:** The stable public identifier a client combines with a project credential to target one database. Prefixed by type (`fdb_`, `cdb_`, `adb_`).
 - **Notification Settings:** Per-database configuration that decides whether, where and how an event in that database is announced. Slack incoming webhooks are the only destination today.
 - **MCP Server:** `inlet-mcp`, a stdio server that authenticates with a secret server key and exposes one tool per permitted HTTP operation. The platform serves the same tools over Streamable HTTP at `/v1/mcp`, for clients that connect to a URL rather than spawn a process.
@@ -119,7 +120,7 @@ Journeys 7.1 to 7.3 are on the Feedback Collection page.
 - **FR-024:** Deleting a feedback database shall permanently delete its form versions, submissions, answers, attachments, pending uploads, and feedback-database memberships.
 - **FR-025:** Before destructive deletion, the platform shall clearly warn the user, offer CSV or JSON export, and state that the export contains data only and that screenshots must be downloaded separately before deletion.
 - **FR-026:** Deleting a project shall permanently delete its feedback databases, forms, submissions, attachments, memberships, invitations, and project-owned API keys. Feedback-database role overrides do not prevent a project Admin from deleting the project.
-- **FR-027:** Deletion shall be reported as complete once the database records are removed. Object-storage purge may complete asynchronously with retries; deleted assets shall not be retrievable in the meantime because their authorizing records no longer exist.
+- **FR-027:** Deletion shall be reported as complete once the database records are removed from PostgreSQL. Object-storage purge, and the removal of an analytics database's events from its event store, may complete asynchronously with retries; deleted assets and events shall not be retrievable in the meantime because their authorizing records no longer exist.
 ### 8.7 Collaboration and Access Control
 - **FR-070:** Access may be granted at project level or feedback-database level.
 - **FR-071:** For users whose project role is Creator or Viewer, or who have no project role, a feedback-database assignment overrides the project role for that feedback database; otherwise the project role is inherited.
@@ -176,6 +177,7 @@ This matrix defines the shared operation surface. "User" means a signed-in user 
 | Notification settings | Set the webhook URL | No | No | Creator or Admin |
 | Notification | Send a test message | No | Yes | Creator or Admin |
 | Export | Any format the type defines | No | Yes | Viewer or above |
+| Installation or user ID | Preview and erase across the project (FD-033) | No | Yes | Project Admin, or the Admin of each database included |
 | Invitation | Read by token, redeem | No | No | Unauthenticated, rate limited |
 
 ## 10. Data Model
@@ -231,6 +233,7 @@ Defined in section 23. Deliveries carry a `kind` (FD-006) so one queue serves ev
 - A database belongs to exactly one project and has exactly one type, fixed at creation.
 - Every database type is reachable with the same project credentials; a capability never introduces a credential of its own.
 - A capability may add resources under its database, never beside the project.
+- A capability that needs an optional service is off until the operator enables it, and no other capability depends on that service (FD-009).
 
 ## 12. Non-Functional Requirements
 ### 12.1 Security
@@ -249,14 +252,15 @@ Capability PRDs add their own privacy rules on top of these.
 - No capability derives identity from network metadata or device characteristics. Identity, where a capability accepts it at all, is either supplied explicitly by the integrator and stored as an opaque string, or is a random installation or session identifier that `inlet-sdk` generates under FD-016.
 - Every capability names the fields it stores and refuses the rest. "Content-free" is enforced by validation, not promised in copy.
 ### 12.3 Reliability Baseline
-- Database deletion and object purge are not one transaction. Records are deleted first; object purge runs asynchronously with retries and is not user-visible.
+- Database deletion, object purge and the removal of analytics events from the event store are not one transaction. Records are deleted first; purge and removal run asynchronously with retries and are not user-visible.
 - Background work runs in the API process without a queue service: a purge worker, a notification worker and each capability's retention worker claim their work with row locks, so a second instance would not duplicate work.
 - Anything a client may retry is idempotent, by intent, by event ID or by unique constraint; the capability PRD names which.
 ### 12.5 Accessibility
 The hosted management interface and any reference form renderer should support keyboard navigation, readable validation errors, semantic labels, sufficient contrast, and assistive technologies.
 ### 12.6 Deployment
-- The bundled Docker configuration shall persist PostgreSQL and object-storage data across container restarts and upgrades.
-- Switching to an external PostgreSQL or S3-compatible provider shall require configuration changes only, with no code changes.
+- The bundled Docker configuration shall persist PostgreSQL and object-storage data, and ClickHouse data when the `analytics` profile runs, across container restarts and upgrades.
+- Switching to an external PostgreSQL, S3-compatible provider or ClickHouse shall require configuration changes only, with no code changes.
+- An optional service (FD-009) shall start only under its compose profile. Without it the deployment starts and runs every other feature, and `/v1/health` omits the capability it serves.
 - The first Admin account and trusted-proxy settings shall be supplied through configuration.
 
 ## 13. Platform Scope
@@ -268,7 +272,7 @@ What every capability inherits, shipped in Releases 1–4:
 - Export in the formats each type defines, deletion with a warning and an export offer, asynchronous object purge.
 - Security rate limits that platform users cannot configure.
 - An MCP server authenticated by secret server key with one tool per permitted operation, reachable over stdio and at `/v1/mcp`.
-- One Docker deployment beside PostgreSQL and S3-compatible storage, with external providers by configuration only.
+- One Docker deployment beside PostgreSQL and S3-compatible storage, with external providers by configuration only, and optional services behind compose profiles: malware scanning since Release 2 and the analytics event store since Release 8 (FD-009).
 - One brand and one voice.
 
 ## 14. Acceptance Criteria
@@ -285,14 +289,15 @@ What every capability inherits, shipped in Releases 1–4:
 - An MCP client authenticated with a secret server key can perform the matrix operations within that project and cannot edit finalized submissions.
 - MCP access does not expose or mutate resources outside the key's project.
 - A client that connects to `/v1/mcp` with a secret server key lists and calls the same tools the stdio server exposes. The same endpoint refuses a publishable key, a session cookie and a request carrying no credential.
-- Restarting the bundled Docker deployment preserves all data. Pointing the deployment at external PostgreSQL and S3 requires only configuration changes.
+- Restarting the bundled Docker deployment preserves all data, ClickHouse's included when the `analytics` profile runs. Pointing the deployment at external PostgreSQL, S3 and ClickHouse requires only configuration changes.
+- Started without the `analytics` profile or a ClickHouse address, the deployment serves feedback and crash databases, `/v1/health` does not list `analytics`, and creating an analytics database is refused with `analytics_not_enabled`, naming the step that enables it (UX Analytics AN-005), and the project's erasure still deletes crash reports and submissions by installation or user ID (FD-033); with ClickHouse stopped, feedback and crash collection are unaffected.
 - A project holding a feedback database and a crash database shows both on the project page and in the database switcher, and the same publishable key collects into both.
 - A database-level invitation for a crash database grants exactly that role on that database and nothing on the project's feedback databases.
 - Deleting a project deletes its databases of every type, their notification settings and queued deliveries, and enqueues every stored object for purge.
 - A notification delivery of any kind that fails permanently is reported once and never retried; a transient failure is retried with backoff.
 
 ## 15. Success Criteria
-Inlet is successful as a platform when a second capability ships without a new credential type, a new role, a new notification pipeline, a new deployment service or a new SDK package. The measure is the diff: a capability adds tables, routes, tools and a page, and changes nothing about accounts, keys or roles, nor anything about the deployment beyond configuration values and bundled data, such as the IP-to-country database of UX Analytics.
+Inlet is successful as a platform when a second capability ships without a new credential type, a new role, a new notification pipeline, a new required deployment service or a new SDK package. The measure is the diff: a capability adds tables, routes, tools and a page, and changes nothing about accounts, keys or roles, nor anything about the deployment beyond configuration values, bundled data such as the IP-to-country database of UX Analytics, and an optional service listed in FD-009 that stays off until the operator enables it, such as the ClickHouse event store of UX Analytics.
 
 ## 16. Risks and Mitigations
 - **Permission override confusion:** Feedback-database assignments override inherited project roles and may surprise users. Mitigation: display the effective role and its source wherever access is managed, and never offer overrides for project Admins.
@@ -300,7 +305,8 @@ Inlet is successful as a platform when a second capability ships without a new c
 - **MCP data mutation or exposure:** MCP acts with project Admin authority. Mitigation: authenticate with a revocable server key, enforce project scope, use audit logs, validate destructive operations, forbid editing submissions, and never grant access beyond the matrix.
 - **Capability sprawl:** Each database type tempts a bespoke permission or credential. Mitigation: section 25 forbids it; the matrix in 9.6 is the only place a new action may appear.
 - **Shared queue contention:** A noisy crash database could delay feedback notifications in the shared delivery queue. Mitigation: per-kind pacing and the new-group-only rule for crashes; a per-kind worker split is the documented upgrade.
-- **One-instance ceiling:** In-memory rate limits and in-process workers assume one API instance. Mitigation: documented; a shared store for limits and `for update skip locked` on every queue are the upgrade path.
+- **One-instance ceiling:** In-memory rate limits, in-process workers and the analytics ingest's in-process duplicate check assume one API instance, and analytics one ClickHouse node. Mitigation: documented; a shared store for limits and duplicates, `for update skip locked` on every queue and ClickHouse replication are the upgrade path.
+- **Optional services:** a capability behind one can be unavailable while the rest of Inlet runs. Mitigation: `/v1/health` omits the capability until its service is ready, the capability's routes answer `503` with `Retry-After` while the service is down, creating a database of that type explains the step that enables it, erasure works without it (FD-033), the SDK keeps its queue, and the backup of every bundled volume is documented in `docs/DEPLOYMENT.md`.
 
 ## 17. Final Product Decisions
 > No blocking product questions remain for the MVP requirements baseline. Endpoint naming, token and invitation lifetimes, pixel limits, upload caps, rate-limit values, and other low-level parameters will be finalized in the technical specifications.
@@ -327,6 +333,12 @@ Inlet is successful as a platform when a second capability ships without a new c
 - `inlet-sdk` holds one identity shared by its modules. Only the analytics module creates an installation ID; the crash and feedback modules attach the session and user IDs unless told not to, and the installation ID only alongside an enabled analytics client (FD-016).
 - An analytics database may derive the country of an ingest request from its address, and nothing finer; no ingest address is stored or logged.
 - The deployment operator may override collection rate limits and the bounds of retention and storage settings; platform users still cannot (FD-032).
+**Decided September 26, 2026, with the ClickHouse amendment to Release 8**
+- Analytics events are stored and queried in ClickHouse; analytics databases, their settings, memberships, catalog, funnels, cohorts, incidents and erasure records stay in PostgreSQL.
+- A capability may depend on an optional service listed in FD-009, shipped in the same `docker-compose.yml` behind a compose profile and replaceable by an external one through configuration; ClamAV (`malware-scanning`) and ClickHouse (`analytics`) are the two. Without its service a capability is off and nothing else changes.
+- `/v1/health` lists `analytics` only once its event store is configured and ready (FD-015).
+- The operator sets the defaults as well as the bounds of the analytics storage settings, to size a deployment to its machine (FD-032).
+- Erasure by installation or user ID is a project-level action, so that a deployment without the event store can still honour an erasure request for its crash reports and submissions (FD-033).
 
 ## 18. Technical Constraints
 - Backend runtime: Node.js.
@@ -334,6 +346,7 @@ Inlet is successful as a platform when a second capability ships without a new c
 - Deployment: Docker-based and suitable for a personal deployment, with persistent volumes.
 - Primary database: PostgreSQL 14 or later, version 18 in the bundled configuration, with a bundled local Docker configuration by default and support for an external provider such as Neon through configuration only.
 - Object storage: S3-compatible storage with lifecycle-rule support, with a bundled local Docker configuration by default and support for an external S3-compatible service through configuration only.
+- Analytics event store: ClickHouse 26.8 LTS or later, one node, required only by UX Analytics (FD-009): a pinned image in the bundled configuration behind the compose profile `analytics`, with its memory capped, and an external or managed ClickHouse through configuration only. A deployment running the profile needs at least 4 vCPU and 8 GB for the whole stack; one without it keeps the bundled stack on 2 vCPU and 4 GB.
 - Source and product documentation live in the GitHub repository.
 - Implementation work should use Context7 to retrieve current library and framework documentation.
 - SDK: TypeScript, zero runtime dependencies, ESM and CommonJS, Node 18 or later and evergreen browsers.
@@ -472,11 +485,11 @@ Beyond Release 4: notification destinations other than Slack, a digest instead o
 - **FD-002:** Every database type shall provide the same shared surface: stable ID, name, rename, database-level memberships and invitations, notification settings, export, deletion impact, deletion with warning and export offer, asynchronous purge of stored objects, rate limits on its collection endpoints that platform users cannot configure (FD-032), and MCP tools for every permitted operation.
 - **FD-003:** The project page and the database switcher shall list databases of every type, grouped by type, and shall move between them without returning to the project.
 - **FD-004:** Retention shall be a per-database setting, with a default per type and platform bounds. Feedback defaults to indefinite. Each capability PRD states its default and bounds.
-- **FD-005:** One purge path shall serve every type. A capability enqueues storage keys in the deleting transaction and never deletes objects inline.
+- **FD-005:** One purge path shall serve every type. A capability enqueues storage keys in the deleting transaction and never deletes objects inline. A capability whose records live outside PostgreSQL records them for removal in the deleting transaction in the same way, and its worker removes them with retries (UX Analytics AN-004).
 - **FD-006:** A notification delivery shall carry a `kind` naming the event it announces and exactly one source identifier for that kind. The worker renders the message at send time from the source as it stands then. Adding a kind adds a renderer, never a queue.
 - **FD-007:** Invitations and memberships shall accept exactly one scope: a project or a database of any type. The effective-role calculation is unchanged: project Admin wins, then the database assignment, then the project role.
 - **FD-008:** Deletion impact shall be reported per type in the type's own units before a destructive action, and the warning shall state what the export does not contain.
-- **FD-009:** A capability shall not introduce a credential type, a role, a notification destination or a deployment service. A need for any of these is a change to this page first.
+- **FD-009:** A capability shall not introduce a credential type, a role or a notification destination, and shall not require a deployment service beyond PostgreSQL and S3-compatible storage. It may depend on an optional service that the bundled Docker configuration ships behind a compose profile and that an operator may replace by an external one through configuration only, provided that the service is listed here, that what it serves is off until an operator configures it, and that nothing else depends on it unless an operator chooses so, as requiring malware scanning makes uploads wait on ClamAV, so that by default Inlet runs unchanged without it or while it is down. The optional services are ClamAV, behind the profile `malware-scanning`, which scans uploaded attachments (Feedback Collection), and ClickHouse, behind the profile `analytics`, which stores and queries analytics events (UX Analytics section 9.4). A need for another service, or for a listed service to serve anything else, is a change to this page first.
 
 ## 26. SDK Packaging and Conventions
 - **FD-010:** Inlet shall ship one TypeScript SDK, `inlet-sdk`, with subpath entries per capability (`inlet-sdk/crash`, `inlet-sdk/feedback`, `inlet-sdk/analytics`) and per platform adapter (`node`, `browser`, `electron`, `react-native`). A capability's bare entry runs in any runtime that has `fetch`. A React Native adapter takes React Native's modules and storage as parameters and imports nothing. Published unscoped: the `@inlet` scope on npm belongs to an unrelated party, so the scoped name the earlier drafts assumed was never available.
@@ -484,7 +497,7 @@ Beyond Release 4: notification destinations other than Slack, a digest instead o
 - **FD-012:** The SDK shall have one transport shared by every module: a persistent offline queue (disk on Node and Electron, IndexedDB in browsers, an injected store on React Native), replay on start, exponential backoff on transport failure, a hard stop on `429` that honours `Retry-After` before replay resumes, at least 100 ms between replayed requests, and no retry of an individual event the server has answered. Size limits are enforced before an event is queued. Each module sets its own batch size and queue bound — 50 reports and 200 queued for crashes, 20 pending submissions for feedback, 50 events and 1,000 queued for analytics — and a `429` pauses only the module and route that received it.
 - **FD-013:** The SDK shall have zero runtime dependencies, ship ESM and CommonJS with type declarations, support Node 18 or later and evergreen browsers, and be versioned independently of the server with a minimum-server-version check on first use.
 - **FD-014:** Nothing the SDK sends automatically may contain content the integrator did not name in the capability's envelope. Each module documents its allowlist and exposes a `beforeSend` hook for redaction. The identity of FD-016 is part of every module's allowlist, under the rules stated there.
-- **FD-015:** A collection route authenticated by a publishable key may answer cross-origin requests, with a wildcard origin, credentials off and `Retry-After` exposed, because the browser adapters of the SDK run on the integrator's origin and a publishable key was always meant to travel in public code. Nothing else answers cross-origin: not the management interface, not a route a secret key reads, not the hosted form routes. The set of open routes is enumerated in one place in the API and pinned by a test, and widening it is a change to this page first. As of Release 8 the set is crash ingest, analytics ingest, matched by method as well as path, the health probe, and the four feedback collection routes (retrieve the published form, create an intent, upload or release an attachment under it, finalize). `/v1/health` names each open capability, and lists `identity` when the deployment accepts the fields of FD-016, so an SDK can tell an old deployment from an unreachable one.
+- **FD-015:** A collection route authenticated by a publishable key may answer cross-origin requests, with a wildcard origin, credentials off and `Retry-After` exposed, because the browser adapters of the SDK run on the integrator's origin and a publishable key was always meant to travel in public code. Nothing else answers cross-origin: not the management interface, not a route a secret key reads, not the hosted form routes. The set of open routes is enumerated in one place in the API and pinned by a test, and widening it is a change to this page first. As of Release 8 the set is crash ingest, analytics ingest, matched by method as well as path, the health probe, and the four feedback collection routes (retrieve the published form, create an intent, upload or release an attachment under it, finalize). `/v1/health` names each open capability — `analytics` only once its event store is configured and ready (FD-009) — and lists `identity` when the deployment accepts the fields of FD-016, so an SDK can tell an old deployment from an unreachable one.
 - **FD-016:** `inlet-sdk` shall hold one identity per application, shared by every module: a **session ID**, a **user ID** and, once the analytics module has created one, an **installation ID**. The installation ID is a random UUID the analytics module creates in device mode at its first enable, keeps until `forget`, and never derives from the device, the network or the user. Both IDs are sent as lowercase dashed UUIDs. The session ID is a random, time-ordered UUID that rotates after a period without activity, 30 minutes by default, after 24 hours, and at each process start outside browsers; activity in any module extends it. While an analytics client is enabled in a browser, the session is shared by every tab of an origin and rotates under a Web Lock; where Web Locks are unavailable the next session ID is derived from the previous one, and is then not time-ordered (UX Analytics AN-229). The user ID is set once for every module, by any module's `setUser` or `setUserId`, and lives in memory. Unless initialised with `identity: false`, the crash and feedback modules attach the session ID, the user ID when one is set, and the installation ID only while an analytics client of the same application is enabled. Identity is written to the device only while an analytics client is enabled: without one, the session ID lives in memory, rotating as above, a new process or page load begins a new one and no two tabs share it; while analytics is disabled the only value written is its opt-out choice. It is written where a crash's fatal path can read it synchronously — `localStorage` in browsers, a file on Node and in the Electron main process — and on React Native it is kept in memory and written through to the analytics module's injected store, while crash flags are written to the crash module's store on its fatal path, synchronously only when that store is. Electron renderers hold no identity; the main process supplies it. A module sends identity fields only to a deployment whose `/v1/health` lists `identity`, checking when it sends and again after a failed probe, so that a newer SDK never loses a report to an older server's strict envelope. `forget` removes the installation ID, the session ID and pending crash flags, and the installation ID from reports and submissions still queued.
 
 ## 27. MCP and Rate-Limit Conventions
@@ -496,7 +509,8 @@ Beyond Release 4: notification destinations other than Slack, a digest instead o
 - **FD-025:** The MCP endpoint of FR-126 shall be stateless: no session identifier, and every call answered with a JSON body rather than a held-open stream. A tool call made through it shall travel the platform's own HTTP layer, meeting the same routing, authentication and validation an external caller meets, so that FR-123 holds by construction on both transports.
 - **FD-030:** Collection endpoints shall be rate limited per credential over short and hourly windows. Where a capability defines a fingerprint for what it collects, it shall also limit per credential and fingerprint. Exceeding a limit returns `429` with `Retry-After`. A capability whose clients are a fleet sharing one publishable key may count its limits in the items it collects rather than in requests, and be exempt from the per-key request ceiling; analytics ingest does (UX Analytics AN-020).
 - **FD-031:** Rate-limit state is in memory on one API instance today. A shared store is the documented upgrade path and changes no contract.
-- **FD-032:** The deployment operator may override, through environment variables, the rate limits of every collection route, the per-address ceiling of analytics ingest, the bounds of every database type's retention and storage settings, the analytics limits — the number of analytics databases, the event-name limit and its hourly allowance of new names, and the param-key, category and dimension-set limits — and the size and statement timeout of the analytics query pool, within hard limits the platform sets and documents in one table in `docs/DEPLOYMENT.md`. Platform users cannot change them. The name of a trusted proxy's country header, and the IP-to-country database the platform bundles, are deployment configuration too (UX Analytics AN-033).
+- **FD-032:** The deployment operator may override, through environment variables, the rate limits of every collection route, the per-address ceiling of analytics ingest, the bounds of every database type's retention and storage settings, the defaults of the analytics storage settings, the analytics limits — the number of analytics databases, the event-name limit and its hourly allowance of new names, and the param-key and category limits — the number of analytics query slots and the time, memory and thread limits of an analytics query, the funnel trend's own time limit included, and the bound within which erased analytics events leave the event store's files, within hard limits the platform sets and documents in one table in `docs/DEPLOYMENT.md`. Platform users cannot change them. The name of a trusted proxy's country header, the IP-to-country database the platform bundles (UX Analytics AN-033), and the address and memory cap of the analytics event store (FD-009) are deployment configuration too.
+- **FD-033:** A project Admin, and a database Admin for the databases they administer, shall be able to erase an installation ID or a user ID across a project — from the project's settings, through `POST /v1/projects/{id}/erasures/preview` and `POST /v1/projects/{id}/erasures`, and through the MCP tools `preview_erasure` and `erase_identity` — whether or not the deployment runs the analytics event store. The preview lists, for every database of every type the actor administers, what the erasure would delete; the erasure deletes what the actor selects, demands the exact ID repeated (FD-022), and is recorded with its actor, time and counts and without the ID. What it deletes is specified per type: in crash databases by Crash Reports CR-047, in feedback databases as an individual submission deletion does (Feedback Collection FR-064A), and in analytics databases by UX Analytics AN-183 to AN-185. While the event store is unreachable, the preview and the erasure cover the other databases and name the analytics databases they could not reach, to be erased once it answers.
 
 ## 28. Platform Release Timeline
 | Release | Capability | Content | Status |
@@ -508,7 +522,7 @@ Beyond Release 4: notification destinations other than Slack, a digest instead o
 | 6 — Crash Reports | Crash | Crash databases, ingest, grouping, groups UI, new-group and regression notifications, MCP, `inlet-sdk/crash` with node, browser, electron and react entries | Shipped September 17, 2026, see the Crash Reports PRD |
 | 7 — SDK | Feedback + Foundations | `inlet-sdk/feedback` with node, browser, electron and react entries (Feedback Collection PRD section 25), FD-015 cross-origin collection routes, npm publication of `inlet-sdk` with both modules | Shipped September 18, 2026, see section 25 of the Feedback Collection PRD |
 | 7.1 — Remote MCP | Foundations | The MCP tools served over Streamable HTTP at `/v1/mcp`, authenticated by a secret server key (FR-126, FR-127, FD-025) | Shipped September 22, 2026 |
-| 8 — UX Analytics | Analytics + Foundations + Crash + Feedback | Analytics databases, ingest, Overview, Events, Funnels, Cohorts, Users, data health, MCP; `inlet-sdk/analytics` with browser, node, electron and react-native entries; the shared SDK identity (FD-016); React Native adapters for crash and feedback. See the UX Analytics PRD | Specified September 24, 2026; the shared identity, the React Native adapters for crash and feedback and the operator overrides of FD-032 for crash and feedback built the same day (`docs/DECISIONS.md` section 29); analytics not started |
+| 8 — UX Analytics | Analytics + Foundations + Crash + Feedback | Analytics databases, ingest, Overview, Events, Funnels, Cohorts, Users, data health, MCP; `inlet-sdk/analytics` with browser, node, electron and react-native entries; the shared SDK identity (FD-016); React Native adapters for crash and feedback; the ClickHouse event store behind the compose profile `analytics`. See the UX Analytics PRD | Specified September 24, 2026, and amended September 26, 2026 to store analytics events in ClickHouse; the shared identity, the React Native adapters for crash and feedback and the operator overrides of FD-032 for crash and feedback built the same day (`docs/DECISIONS.md` section 29); analytics not started |
 
 Release 5 — Reviewed (the response as the row, per-reader read markers, four-tab navigation, database switcher) shipped in September 2026 between Releases 4 and 6 and is specified in section 24 of the Feedback Collection PRD.
 
