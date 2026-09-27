@@ -17,16 +17,52 @@ export function sanitizeText(value: string): string {
   return value.replace(/\u0000/g, '').replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '�');
 }
 
-/** Every string in a JSON value, object keys included, through `sanitizeText`. */
-export function sanitizeDeep<T>(value: T): T {
-  if (typeof value === 'string') return sanitizeText(value) as T;
-  if (Array.isArray(value)) return value.map((item) => sanitizeDeep(item)) as T;
-  if (value !== null && typeof value === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [key, item] of Object.entries(value as Record<string, unknown>)) out[sanitizeText(key)] = sanitizeDeep(item);
-    return out as T;
+/**
+ * How deep a JSON value taken from a request may nest (objects and arrays inside one
+ * another). A parsed body can nest as deep as its bytes allow (a 40 KB body holds 20,000
+ * levels), and walking that recursively overflows the stack: a condition of the data would
+ * answer 500. Every walk of a request's arbitrary JSON (`sanitizeDeep` here, then the size
+ * checks' `JSON.stringify`) stops at this bound instead. 64 is far past any real crash
+ * `context` or `clientContext`, whose documents are a few levels deep.
+ */
+export const JSON_NESTING_MAX = 64;
+
+/** Thrown by `sanitizeDeep` for a value nested deeper than its bound; `path` names where. */
+export class NestingTooDeepError extends Error {
+  constructor(readonly path: string, readonly maxDepth: number) {
+    super(`Nested more than ${maxDepth} levels deep.`);
+    this.name = 'NestingTooDeepError';
   }
-  return value;
+}
+
+/**
+ * Every string in a JSON value, object keys included, through `sanitizeText`. Throws
+ * `NestingTooDeepError` rather than recursing past `maxDepth` levels, so a deeply nested
+ * (or circular) value is refused by the caller with its own error code, never a 500.
+ */
+export function sanitizeDeep<T>(value: T, maxDepth: number = JSON_NESTING_MAX): T {
+  const path: string[] = [];
+  const walk = (item: unknown, depth: number): unknown => {
+    if (typeof item === 'string') return sanitizeText(item);
+    if (item === null || typeof item !== 'object') return item;
+    if (depth >= maxDepth) throw new NestingTooDeepError(path.join('.'), maxDepth);
+    if (Array.isArray(item)) {
+      return item.map((entry, index) => {
+        path.push(String(index));
+        const out = walk(entry, depth + 1);
+        path.pop();
+        return out;
+      });
+    }
+    const out: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(item as Record<string, unknown>)) {
+      path.push(key);
+      out[sanitizeText(key)] = walk(entry, depth + 1);
+      path.pop();
+    }
+    return out;
+  };
+  return walk(value, 0) as T;
 }
 
 /**

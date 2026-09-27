@@ -728,7 +728,8 @@ function feedbackTestMessage(ctx: AppContext, databaseId: string, databaseName: 
     via: 'a test message',
     settings: {
       ...settings,
-      messageTitle: settings.messageTitle ?? `Test message from Inlet · ${databaseName}`,
+      // The operator's title is not escaped; the database name in the default one is.
+      messageTitle: settings.messageTitle ?? `Test message from Inlet · ${escapeSlackText(databaseName)}`,
       contentLevel: settings.contentLevel === 'link_only' ? 'answers' : settings.contentLevel,
     },
   });

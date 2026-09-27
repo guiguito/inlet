@@ -69,7 +69,7 @@ pieces land; a piece that departs from one says so in its report and in that sec
 | 9 | Storage, retention and data health | AN-004 removal worker, AN-160 to AN-169, AN-190 to AN-192, the orphan sweep; Settings → Storage; the Collect notice; tools | verified and committed (DECISIONS 33.9) |
 | 10 | Erasure and event export | FD-033 across crash, feedback and analytics (CR-047, FR-064A); AN-183 to AN-185; AN-210, AN-212; project settings and profile screens; tools | verified and committed (DECISIONS 33.10) |
 | 11 | `inlet-sdk/analytics` | AN-150, AN-151, AN-220 to AN-242, AN-230; CR-111, CR-119; crash and feedback attach rules; build, size and purity checks; Metro | verified and committed (11a 6bfa07c, 11b d30ed9b; DECISIONS 33.11a, 33.11b); end-to-end against the running API left to piece 12 |
-| 12 | Full verification | Every acceptance criterion of PRD section 12 against the running product; the scaled load test; docs, PRD status, DECISIONS, Docker with the profile | pending |
+| 12 | Full verification | Every acceptance criterion of PRD section 12 against the running product; the scaled load test; docs, PRD status, DECISIONS, Docker with the profile | 12a (hardening, the SDK against the running API, the documentation pass; DECISIONS 33.12a) implemented, awaiting verification; 12c (load test, Docker) in progress |
 
 Profiles come before funnels and cohorts so that the funnel drill-down (AN-088) reuses the
 cross-capability lookup profiles need (AN-124) instead of building it twice.
@@ -1042,9 +1042,7 @@ Each piece appends what it did not build and the reason.
 ### From piece 11a
 
 - **Electron, React Native, Metro** (AN-238, AN-239, CR-111's renderer `setUserId`): piece 11b,
-  on the seams above. The Collect snippets for them (`apps/web/src/lib/analytics-snippets.ts`)
-  pass React Native's store as `storage`; the core's option is `store` (AN-221 "a store"), so
-  11b either names its option `storage` in the React Native entry or the snippet changes.
+  on the seams above.
 - **Keepalive and the flush lock**: the page-hide send does not wait for the Web Lock (a page
   being hidden cannot await one); two tabs hidden at once may both send, which the server's
   idempotency absorbs. The ordinary flush is one tab at a time.
@@ -1317,3 +1315,71 @@ passed the five-experiment cap and made every later event invalid. Left:
   feedback databases are resolved from every reachable analytics database the Admin administers;
   an installation erasure leaves the user's first occurrences), AN-184 (the forced removal starts at
   half the bound), and 7.2's answers of the two erasure routes and the export's `limit`/`cursor`.
+
+### From piece 12a
+
+- **Resolved from earlier pieces**: crash ingest's and finalization's 500 on a deeply nested body
+  (both now refuse past 64 levels); the `Exact` checks of `form.ts` and `answers.ts`; the unescaped
+  database name in the feedback, crash and test-message Slack headings; the crash groups CSV's
+  second byte-order mark; the error-level logging of every analytics 503; `deleteProject`'s race
+  with a creation; piece 5's Overview minors (the "0" sessions of a version not measured, the range
+  chip's remove button, the custom dates' timezone); piece 7's open memory question for funnels
+  (and cohorts): they spill past half the memory limit; the funnel trend's 0% for an empty group;
+  the MCP client's 30-second cut of a funnel trend; piece 10's note that the name deletion left its
+  rows to merges; piece 11b's missing end-to-end spec for the browser and Node entries
+  (`e2e/api/sdk-analytics-server.spec.ts`, DECISIONS 33.12a); the README's "not an analytics
+  product" line (piece 4).
+- **Still no end-to-end run of the Electron and React Native entries** against the running API:
+  they need a real Electron or device, or a fake `electron` driving the built main entry, which this
+  piece did not add; the unit suites with fakes and the Metro bundling stand.
+- **The Overview's crash-free table shows "—" for a version not measured** rather than its total
+  sessions: a total per version would be a new field of the answer (Appendix E), for the owner.
+- **The `Exact` checks compare by mutual assignability**, so an optional key added on one side only
+  still compiles (DECISIONS 33.12a).
+- **The spill's disk use is not measured at scale** here: 12c's load test times long funnels and
+  cohorts at the reference workload; DEPLOYMENT.md sizes the temporary disk from the limits.
+- **Left from piece 11b, not taken up**: calls made before an asynchronous store loads take their
+  time and user ID when they run; `installElectronMain` twice without `uninstall()`; the React
+  Native store's drops past its budget without `onDrop`.
+- **PRD amendments for the orchestrator**: CR-011, FR-062A and UX Analytics 9.5, with the exact
+  wording at the end of DECISIONS 33.12a.
+- **From 12a's verification**: fixed `erase_identity`'s 30-second MCP cut and the UTC default of
+  the Dates in Events, Funnels and Cohorts (DECISIONS 33.12a). Left: the snippets' comment "nothing
+  is stored or sent until consent" (SDK README, USING-INLET, `analytics-snippets.ts`) passes over
+  the opt-out choice the SDK does store while disabled, as AN-225 allows.
+
+
+### From piece 12c
+
+The scaled load test and the Docker check (DECISIONS 33.12c); no product code changed.
+
+- **Not measured: the reference node and the Small host** (PRD 15 "8.1" and "8.3"). Measured instead
+  at 320 million events over 33 days at the reference's daily density on a shared laptop, and
+  extrapolated; the Small host approximated by its memory settings only. `scripts/analytics-load.mjs`
+  reruns everything on the real machines (README, "Load-testing analytics").
+- **Budgets missed at this scale or by extrapolation**, each with its cause and a proposed fix in
+  33.12c, for the owner:
+  - **Ingest, 2,000 events a second with a p95 of 300 ms: missed.** The writer's 10 sockets
+    (`@clickhouse/client`'s default `max_open_connections`) carry about 40 asynchronous inserts a
+    second, the test's exact rate, so ingest beside the reads backed up and timed out after eight
+    minutes; with 64 sockets (an experiment) the rate held, p50 250 ms, p95 2.5 s on this loaded
+    machine. Fix: raise the writer's `max_open_connections`, shorten the insert's flush wait.
+  - **Overview, 1 s: missed** (9.7 s idle, the crash-free sessions statement 6.9 s and 4.7 GiB over
+    ten million sessions). Fix: a session table kept at ingest; statements run concurrently.
+  - **Cohort, 12 weekly (2 s): missed; 12 monthly (3 s), recent installations (1 s): at risk to
+    missed** once a database holds about five million installations (both read every installation's
+    state). Fix: a table of install days; the recent list from a table ordered by last seen.
+  - **At risk by extrapolation**: trend over 90 days by day (about 0.7 s for 0.5 s), by week over 13
+    months (about 2.4 s for 2 s), split by app version (about 1.7 s for 1.5 s), the funnel trend by
+    day over 90 days (8 to 11 s for 10 s), the erasure preview (about 12 s for 10 s); and under the
+    concurrent ingest the funnel steps and a profile page passed their budgets at the 95th
+    percentile on this machine.
+- **The Small host's 768 MiB a query fails the Overview and the recent installations** on this
+  seed's density, and would at the Small workload for the recent list once it holds about a million
+  installations.
+- **Worker passes at scale are background work within their bounds** (retention 16 ms, the orphan
+  sweep 68 ms, pruning 0.4 s to 3.8 s, a name deletion 133 s, an erasure 122 s to deleted and 254 s to
+  files removed at 320 million events; about 25 minutes each for the two deletes on a 13-month
+  reference database).
+- **Harness limits**: one reader at a time (the secret key's slot), client-side times on loopback,
+  `passes` needs the API stopped and a checkout with the built API.

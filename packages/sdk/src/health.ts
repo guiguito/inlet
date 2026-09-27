@@ -63,3 +63,17 @@ export function timeoutSignal(ms: number): { signal?: AbortSignal; clear: () => 
   (timer as { unref?: () => void }).unref?.();
   return { signal: controller.signal, clear: () => clearTimeout(timer) };
 }
+
+/**
+ * `work`, or `ms` milliseconds, whichever ends first: the bound of `flush(timeoutMs)`. The timer
+ * is cleared once `work` settles, so a process that awaited a flush exits as soon as the queue is
+ * sent rather than when the timeout would have run out (a command-line tool calling
+ * `flush(10_000)` waited the whole ten seconds before; found by the release 8 end-to-end tests).
+ */
+export function settleWithin(work: Promise<void>, ms: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, ms);
+  });
+  return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
+}

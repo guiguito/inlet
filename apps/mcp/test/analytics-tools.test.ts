@@ -192,5 +192,8 @@ describe('analytics tools', () => {
     expect(instructions).toContain('states the range it covers');
     expect(instructions).toContain('ends\ntoday and includes it');
     expect(instructions).not.toContain('by default counting');
+    // Release 8's closing pass: the paragraph names the funnel, profile and erasure loop too.
+    expect(instructions).toContain('call preview_erasure first, then erase_identity');
+    expect(instructions).toContain('list_analytics_funnel_units lists who dropped at a step');
   });
 });

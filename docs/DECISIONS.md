@@ -4692,3 +4692,344 @@ project cannot open the project page, so Erase led nowhere for the one Admin who
 Closing the dialog reads the profile again. The analytics delete dialog links the export
 (`erasureApi.exportEventsHref`). **MCP**: `preview_erasure`, `erase_identity` (destructive, `confirm`),
 `export_analytics_events`, in `apps/mcp/src/analytics-erasure-tools.ts`.
+
+### 33.12a Hardening, the SDK against the running API, and the documentation pass (piece 12a, September 27, 2026)
+
+The defects the testers of earlier pieces found and left for the closing pass, each fixed where
+every caller goes through and each pinned by a test that failed before the fix
+(`apps/api/test/integration/release-8-hardening.test.ts` unless named otherwise).
+
+- **A deeply nested body answered 500.** A crash report whose `context` nested 20,000 arrays in a
+  40 KB body overflowed the stack in `sanitizeDeep` (and would have in `JSON.stringify` next), and
+  so would a feedback submission's `clientContext`. `sanitizeDeep` (`packages/shared/src/text.ts`)
+  now stops at `JSON_NESTING_MAX` (64 levels) and throws `NestingTooDeepError` with the path; crash
+  ingest answers `invalid_envelope` with a `too_deep` detail at that path (single report, and one
+  item of a batch while the others are stored), and finalization answers `validation_failed` at
+  `clientContext.…`, the intent staying usable. 64 because the envelope's own fields are three
+  levels deep and a real context a handful; any depth that cannot overflow would do. *Rejected:*
+  an iterative walk that accepts any depth (the size checks' `JSON.stringify` and the canonical
+  hash would still recurse, and PostgreSQL's `jsonb` has its own stack limit), and a bound in each
+  route (the shared function is where every caller goes through). Hosted forms take no
+  `clientContext`; analytics events were already bounded by `validateEvent` (33.2).
+- **The compile-time schema checks of `form.ts` and `answers.ts` could never fail**, as 33.2 found
+  for its own: they now use `Assert<Exact<…>>`. Proven by giving `TitleElement` and one answer
+  shape a required key the schemas lack: `tsc` then reports `Type 'false' does not satisfy the
+  constraint 'true'` at each entry, and the mismatch was removed. The check, like `analytics.ts`'s,
+  compares by mutual assignability, so an *optional* key added on one side only still passes; left
+  as it is, since the runtime schemas are what validate requests.
+- **Slack headings carried a database name unescaped.** The feedback default (`New response in …`),
+  the crash defaults and the feedback test message's heading now escape the name as the analytics
+  renderer does, so a name cannot carry `<!channel>`; an operator's own title keeps its markup
+  (`notifications.test.ts`, `slack-notifications.test.ts`).
+- **The crash groups CSV began with two byte-order marks**: the route added one to `toCsv`'s. It
+  sends `toCsv`'s alone (`crash-reads.test.ts`).
+- **Every 503 of an event-store outage was logged as an error.** The error handler logs
+  `analytics_unavailable`, `analytics_busy` and `query_limit_exceeded` at `warn`, with the code and
+  message and no stack; every other 5xx stays at `error` with its stack.
+- **`deleteProject` raced the creation of an analytics database.** It now locks the project row
+  `FOR UPDATE` first. A creation's insert holds a key-share lock on that row until it commits, so
+  the deletion waits and its removal records see the new database; a creation arriving during a
+  deletion takes `FOR KEY SHARE` on the project first, waits, and answers `project_not_found`
+  rather than a foreign-key violation (a 500 before).
+- **Event-name deletion left its rows in the files** (AN-056 asks for the bound of AN-184). The
+  deletion job now continues after completion with piece 10's file step, factored out of
+  `analytics-erasure.ts` as `maskedTables` and `forceMaskedOut`: once half the operator's bound has
+  passed since the deletion was requested, the partitions still carrying masked rows of the name
+  are rewritten with `APPLY DELETED MASK`, and `analytics_event_name_deletions.files_cleared_at`
+  (migration `0007_analytics_piece12_name_deletion_files`) records when no file holds them, after
+  which the deletion is not checked again. *Rejected:* keeping `completed_at` unset until the
+  files are clear, which would keep the name in the read skip, and every read of the database off
+  the rollups, for up to 15 days.
+- **Funnels and cohorts spill to disk rather than fail** (9.5, 33.7's open question). The query
+  layer's `withSpill(settings)` sets `max_bytes_before_external_group_by` and
+  `max_bytes_before_external_sort` to half the per-query memory limit, keeping a lower threshold
+  already set (the cohort members' quarter, 33.8); funnel runs, their drill-downs and cohort runs
+  pass it. The answer is identical — only where the aggregation's states wait changes — and the
+  randomised reference comparisons and Appendix B tests pass unchanged. Measured on a constructed
+  dataset of 1.2 million step occurrences over 200,000 installations: at a 100 MB limit the steps
+  view answered `query_limit_exceeded` without the setting and answers with it; at 150 MB it
+  answered either way on the first statement after the load, but every later statement needs
+  more and is refused without the spill (verification: the test now runs the funnel once at the
+  default limit, then at 150 MB — 6 of 6 answered with the spill, 3 of 3 refused without it; at
+  100 MB it failed one run in five even with the spill); at 60 MB it fails even with spilling, the rest of
+  the statement (reading, the per-unit sort, the outer quantile) needing memory of its own, which
+  is why the floor of `INLET_ANALYTICS_QUERY_MEMORY_BYTES` stays 64 MiB and its default 768 MiB.
+  DEPLOYMENT.md states the temporary disk this needs on the event store's volume (the query limit
+  times the slots). Piece 12c's load test measures it at scale. *Rejected:* a lower threshold for
+  funnels (spilling sooner costs time on every long funnel for no gain below half).
+- **A funnel trend group nobody entered drew 0%.** `TrendChart` takes a gap (`value: null`): no
+  point, the line broken either side, "—" in its table; the funnel's trend passes null for a group
+  whose conversion is undefined (`e2e/ui/analytics-polish.spec.ts`).
+- **Overview polish** (piece 5's tester): a version not measured shows "—" sessions instead of 0
+  (the answer's `sessions` counts the sessions reporting a crash module, the rate's denominator; a
+  total per version would be a new answer field, not needed to stop the table misleading); a range
+  other than the default has a remove button, back to the last 30 days; the custom dates start on
+  today in the database's reporting timezone, not UTC. Verification found the same UTC default in
+  the Dates of Events, Funnels and Cohorts; they now use `useDatabaseToday`
+  (`apps/web/src/components/analytics-events.tsx`, the page's cached read of the database), beside
+  `todayInZone`, which moved there from the Overview (`analytics-polish.spec.ts`).
+- **The MCP client cut analytics calls at 30 s** while a funnel trend may run 120 s (the remote MCP
+  at `/v1/mcp` used the same default). `InletClient` waits at least `ANALYTICS_TIMEOUT_MS` (the
+  funnel-trend default plus 30 s, 150 s) on every `/v1/analytics-databases/…` path and on the
+  erasure and its preview (both count the events in the event store before answering; verification
+  found `erase_identity` still cut at 30 s, an error for an erasure the server went on to apply),
+  and keeps `INLET_TIMEOUT_MS` (30 s by default) for everything else; a longer
+  `INLET_TIMEOUT_MS` applies to both. *Rejected:* reading the operator's funnel-trend limit (the
+  standalone server cannot see it) and a timeout option on each analytics tool (every tool file
+  would repeat it).
+
+**The SDK against the running API** (`e2e/api/sdk-analytics-server.spec.ts`, beside the existing
+`sdk-analytics-browser.spec.ts`, which now also runs under the suite's own configuration and
+server): the built browser entry on a page of another origin, disabled until a consent click,
+with the crash module on the same page; the Node entry in server mode; device mode across two
+processes; and a deployment that did not list `analytics` yet. For the last, the hook is a small
+proxy in front of the real server that leaves `analytics` out of `/v1/health` until switched,
+which is what a server whose event store is not ready answers, with the SDK's injected clock
+passing the ten-minute re-read; a second server process without ClickHouse was rejected because
+it would never list `analytics`, so it cannot show the change. The device-mode test found a
+defect in every module: `flush(timeoutMs)` raced the flush against a timer it never cleared, so a
+Node process that awaited `flush(10_000)` lived ten seconds after its queue was sent. `settleWithin`
+(`packages/sdk/src/health.ts`) clears it; crash, feedback and analytics transports use it
+(`packages/sdk/test/flush-timeout.test.ts`, which also awaits each transport's own
+`flush(60_000)` and fails for any one of them reverted; and the device-mode test bounds each
+process's run at 8 seconds). The browser run also shows the browser SDK's crash messages arrive
+redacted, as CR-094 asks, and that nothing of analytics (installation ID, state, event queue) is
+on the device before the consent click (AN-225).
+
+**Documentation.** README describes Inlet as feedback, crashes and product analytics; USING-INLET's
+analytics part is one guide in reading order with the PRD's terms; API.md gained the analytics rows
+of the 7.3 matrix; MCP.md documents the analytics timeout; DEPLOYMENT.md the spill disk, the
+name-deletion file step and the log levels. The server instructions' analytics paragraph names the
+Overview, funnel, profile and erasure loop.
+
+**PRD amendments for the orchestrator** (behaviour specified by a requirement changed here):
+
+- Crash Reports **CR-011**, append: "An envelope nested more than 64 levels deep, the envelope
+  itself being the first level (objects and arrays inside one another), shall be rejected as
+  `invalid_envelope` with a detail naming the path at which the bound is passed, and never walked
+  further, so that no report answers a server error for its shape."
+- Feedback Collection **FR-062A**, append: "A `clientContext` nested more than 64 levels deep, the
+  object itself being the first level, shall be refused with `validation_failed` and a detail
+  naming the path at which the bound is passed; the intent stays usable."
+- UX Analytics **section 9.5, Query protection**, after the sentence ending "…the interface
+  suggesting a shorter range or a coarser interval.": "Funnel and cohort statements write their
+  aggregation and sorts to the event store's temporary disk once they hold half the memory limit,
+  so that a long range answers more slowly where it would otherwise exceed the limit; the event
+  store's volume keeps room for that disk."
+  (Verification's wording: the proposed text counted levels ambiguously — measured, 64 containers
+  including the envelope or `clientContext` are accepted and the 65th refused — and placed the 9.5
+  sentence inside another; a query can still exceed its limit with the spill, 60 MB above.)
+
+### 33.12c Measured: the load test at scale, and Docker with and without the profile (piece 12c, September 27, 2026)
+
+PRD 15 "8.3" asks for a load test at the reference workload on the reference node; 12 "Storage
+and data health" for every 9.5 budget at the 95th percentile while ingest sustains 2,000 events a
+second. **The reference node (8 vCPU, 32 GB, about 4.1 billion events) and the Small host were not
+available**, so this is the largest scale this laptop sustains, measured through the real API, and
+extrapolated. The harness is `scripts/analytics-load.mjs` (README, "Load-testing analytics"), so an
+owner can rerun every figure below on the reference node.
+
+**Method.**
+- **Machine.** Apple M5, 10 cores, 24 GB, macOS, shared during the whole run with another agent's
+  test suites (load average 5 to 34, swap in use): every "during ingest" figure is pessimistic for
+  contention, and a laptop core is faster than a typical server vCPU, which pulls the other way.
+- **Event store.** A ClickHouse 26.8.12.53 of its own (the local binary, not the shared test server
+  and its 4 GB ceiling), set as the reference host of DEPLOYMENT.md would be within this machine:
+  10 GB server memory (the reference's 24 GB does not fit beside the rest), mark cache 1 GB,
+  background pool 8, `query_log` and `part_log` on to read what each statement did. The API
+  (`apps/api/dist/server.js`, `NODE_ENV=production`) set 4 threads a query (half of 8 vCPU) and
+  8 GB of memory a query, as DEPLOYMENT.md says for the reference host, with the per-credential
+  ingest limits raised (`INLET_LIMIT_ANALYTICS_PER_KEY_5M=10000000`, `…_HOUR=100000000`) and
+  `INLET_ANALYTICS_NEW_EVENT_NAMES_PER_HOUR=100` for the seed's 63 names. PostgreSQL and RustFS
+  were the shared local servers (own database and bucket).
+- **Seed.** `scripts/analytics-seed.mjs`, extended for this piece (it can now seed a database Inlet
+  created, with its key and catalog IDs; installations grow by `SEED_NEW` a day, recent ones more
+  active; every session opens with `app_started` with `trigger` and `crashReporting`, one in about
+  150 ends with `session_crashed`, new installations send `app_installed`; the 60 other names keep
+  their weighting, the first being `screen_viewed`). `SEED_DAYS=32 SEED_ACTIVE=115000 SEED_EVENTS=87
+  SEED_POOL=300000 SEED_NEW=10000`: **320,160,063 events over 33 days (32 seeded, today's ingested),
+  10.0 million a day from 90,000 to 99,000 daily active installations** — the reference workload's
+  daily density, for 32 of its 395 days — and 916,634 installations. Seeded in 24 minutes, then
+  every partition merged (`OPTIMIZE … FINAL`, 5 minutes). Disk and time allowed more; the run was
+  sized so that the seed, the reads, three load runs and the passes fitted one working session.
+- **Reads.** Every row of the 9.5 table, as the interface asks for it, with the secret key (one
+  caller, so one slot at a time): times are the HTTP answer on loopback, which is the server's time
+  plus well under a millisecond. The charted event is `screen_viewed` (12.6% of events, under a
+  fifth); the funnel is `event_02 → event_03 → event_05` (5.4, 4.1 and 3.1%, under a tenth); the
+  param filter `event_04`'s `plan = pro`; the cohorts the standard Retention cohort by week and by
+  month; the profile an installation with a user ID and its first page of events; the prefix search
+  its first 8 hex digits; the erasure preview a user ID. Idle: 10 runs of each; during ingest: the
+  same list in a loop, 29 to 30 runs each over 15 minutes.
+- **Ingest.** Open loop, a batch of 50 events every 25 ms (2,000 a second) from 40,000 seeded
+  installations and new ones (5% of batches), each batch one installation's SDK flush with a session
+  and its `app_started`, whatever the answers take.
+
+**Storage** (budget 50 bytes an event, rollups and indexes included; 100 a row of the installation
+tables):
+
+| Table | Rows | Bytes on disk a row |
+| --- | --- | --- |
+| `events` (both projections and the skipping indexes included) | 320,160,063 | **43.7** |
+| `installations` | 916,634 | **81.7** |
+| `installation_first` | 26,367,378 | 35.7 |
+| `installation_users` | 550,789 | 33.7 |
+| `user_first` | 10,698,426 | 24.2 |
+
+Within budget, and within a byte of 33.1's spike. At the reference workload, 4.1 billion events are
+about 180 GB; the installation tables hold 1.3 GB at 917,000 installations here, about 7 GB at five
+million.
+
+**Reads, at 320 million events** (milliseconds; "ingest" is the product as built, during the
+15-minute run below):
+
+| Budgeted read (budget) | Idle p50 | Idle p95 | Ingest p50 | Ingest p95 | Reference, extrapolated | |
+| --- | --- | --- | --- | --- | --- | --- |
+| Overview (1,000) | 9,716 | 11,478 | 13,462 | 19,780 | the same (30 days are the default range) | **missed** |
+| Catalog (300) | 4 | 5 | 2 | 5 | the same | ok |
+| Trend, 90 days by day (500) | 219 | 252 | 262 | 363 | ×3 rows: about 0.7 s | **at risk** |
+| Trend, 13 months by week (2,000) | 196 | 216 | 215 | 267 | ×12: about 2.4 s | **at risk** |
+| Split by app version, 90 days (1,500) | 558 | 1,732 | 628 | 1,258 | ×3: about 1.7 s | **at risk** |
+| Param filter, 13 months (20,000) | 260 | 1,476 | 286 | 434 | ×12: about 3.5 s | ok |
+| Param top values, 7 days (3,000) | 42 | 48 | 45 | 76 | the same | ok |
+| Funnel steps, 14 days (3,000) | 976 | 1,070 | 1,179 | 3,110 | the same | at risk under load |
+| Funnel trend by day, 90 days (10,000) | 2,667 | 3,592 | 4,142 | 13,445 | ×3: 8 to 11 s | **at risk** |
+| Funnel trend by week, 13 months (60,000) | 2,544 | 3,077 | 3,235 | 7,977 | ×12: 30 to 40 s | ok |
+| Cohort, 12 weekly (2,000) | 807 | 988 | 911 | 2,092 | ×5 installations: about 4 s | **missed** |
+| Cohort, 12 monthly (3,000) | 831 | 926 | 874 | 2,260 | ×5: about 4 s | **at risk** |
+| Profile and a page of its events (300) | 113 | 137 | 126 | 612 | the same | at risk under load |
+| Profile prefix search (1,000) | 84 | 92 | 92 | 246 | the same | ok |
+| Recent installations (1,000) | 495 | 587 | 554 | 5,734 | ×5: about 3 s | **missed** |
+| Erasure preview of a user ID (10,000) | 951 | 1,039 | 1,027 | 1,714 | ×12: about 12 s | **at risk** |
+| Live feed (50) | 2 | 8 | 2 | 3 | the same | ok |
+
+The extrapolation scales by the rows each statement reads (a 90-day range reads 3 times this seed's
+32 days at the reference workload, 13 months about 12 times; cohorts and the recent list grow with
+installations, about five million after 13 months against 917,000 here), which is linear and
+ignores that a server vCPU is slower than this laptop's cores. Measured with piece 12a's spill
+(`withSpill`, below) the funnel and cohort shapes moved by 5 to 25% (steps 1,053 ms p50, trend by
+day 3,379, by week 2,806, weekly cohort 962, monthly 907): no statement of this seed held half its
+8 GB limit in aggregation states, so nothing spilled, and the difference is the machine's.
+
+**Ingest.** The product as built did **not** sustain 2,000 events a second beside the reads. It
+accepted 1,992 to 2,015 a second for eight minutes, then fell to 1,526 to 1,865; batches waited in
+the API (2,412 in flight at the end), 4,092 of 35,999 hit the client's 60-second timeout, and the
+p50 was 823 ms and the p95 51 s (budget 300 ms). Ingest alone, for 10 minutes, held the rate
+(1,985 a second, every batch 200) but at a p50 of 1.5 s and a p95 of 4.3 s.
+
+*Cause.* `@clickhouse/client` opens at most 10 sockets per client by default (`max_open_connections`),
+and each batch is one asynchronous insert that waits for its flush, about 245 ms at the 50th
+percentile and 300 ms at the 95th in `system.query_log` (the adaptive busy timeout of up to 200 ms,
+then the write through five views and two projections). Ten sockets therefore carry about 40
+inserts a second, exactly the 40 batches a second of the test: `query_log` shows the duplicate
+lookups arriving at 2,400 a minute throughout while the inserts stayed capped near 2,400 and fell
+below it whenever a flush slowed, and the queue in front of the pool grew without bound.
+*Experiment, not a change:* the same API with the writer's agent raised to 64 sockets (a Node
+`--import` preload wrapping `http.Agent`, nothing in the product changed) held 1,972 events a
+second for 12 minutes beside the reads, every batch answered 200, p50 250 ms, p95 2.5 s, 376 batches
+in flight at most — the tail being this machine's contention (load average 19 to 34) on top of the
+insert's own 250 ms. *Proposed fix:* give the writer client `max_open_connections` of about 100
+(`apps/api/src/db/clickhouse.ts`, `client()`), and lower `async_insert_busy_timeout_max_ms` for
+ingest's inserts to about 100 ms, since the flush wait alone is most of the 300 ms budget; then
+rerun `load` on the reference node.
+
+**Resources during the 15-minute run** (5-second samples): ClickHouse's `MemoryTracking` mean 3.0 GB,
+p95 5.9 GB, max 6.2 GB, resident memory max 5.4 GB, CPU mean 4.4 cores (max 7.2); the API resident
+memory mean 226 MB, max 1.0 GB (the queued batches), CPU about a quarter of one core. Ingest alone:
+ClickHouse 1.1 GB tracked, 1.6 cores. So the API is not CPU-bound at this rate; ClickHouse's
+reads are what compete with the inserts.
+
+**Why the Overview misses.** Its statements run one after another in its slot: the crash-free
+sessions statement 6.9 s and 4.7 GiB, the table by version, platform and country 0.75 s and
+1.3 GiB, retention 0.72 s, new installations 0.54 s, weekly and monthly active 0.25 s, daily active
+0.2 s. The crash-free statement groups every `app_started` of the range by session (`argMin` of the
+session's dimensions over about 10 million sessions in 30 days, the reference's own number) before
+joining `session_crashed`; with a 4 GB limit it answered `query_limit_exceeded`, and under the Small
+host's 768 MiB every Overview failed. *Proposed fix:* a session table maintained at ingest like the
+installation states (one row per session: its first `app_started`'s day, version, dimensions and
+`crashReporting`, and whether a `session_crashed` named it), which turns the statement into a read of
+a few million small rows; and running the Overview's independent statements concurrently within its
+slot, whose sum is otherwise the answer time. Without the first, the 1 s budget cannot hold at the
+reference workload.
+
+**Why cohorts and the recent list will miss at five million installations.** Both read every
+installation's merged state (`installations`): 917,000 here take 0.5 to 0.6 s of each answer, and
+the recent list's `max(seen) OVER ()` statement needs 1.3 GiB (over the Small host's 768 MiB, where
+it answered `query_limit_exceeded`). *Proposed fix:* the table of install days 33.8 named for
+cohorts, and for the recent list an ordering read from a table sorted by last seen, rather than a
+sort of every installation.
+
+**Worker passes**, run by `analytics-load.mjs passes` through the worker's own functions with the
+API stopped:
+
+| Pass | Measured |
+| --- | --- |
+| Retention (AN-164), nothing to drop | 16 ms; its partition read 4 ms |
+| Orphan sweep (its `GROUP BY` over `events` and the first-occurrence tables) | 68 ms, the projections answering it |
+| Daily pruning's counts, nothing stale (the `NOT IN` sets over 921,750 installations) | 423 ms |
+| Daily pruning with "now" moved 381 days on, so 240,182 installations without an event in 14 days are stale | 3.8 s for all three steps, deletes included |
+| An event name of 5.9 million events (1.9%) deleted | 133 s until no row is left (66 passes, the longest 193 ms) |
+| A user ID's erasure (1,277 events, every week touched) | request 1.1 s; deletes and replays done in 122 s; the forced file removal (`APPLY DELETED MASK`, reached by moving "now" 16 days on) done 254 s after the request |
+
+The two deletes that touch `events` rebuild the projections of every part holding one of their rows
+(`lightweight_mutation_projection_mode = 'rebuild'`), so they scale with the rows of the weeks
+touched: here five merged weekly parts of 64 to 70 million rows, the reference's own part size, so
+the memory is the reference's (within this 10 GB server), and the time about 12 times more for a
+13-month database, about 25 minutes for a name deletion or for an erasure of a user active all year.
+Both are background work that no request waits for, within AN-184's 30 days.
+
+**The Small host, approximated.** The same ClickHouse restarted at the Small host's settings
+(3 GB server memory, mark cache 256 MB, background pool 4) and the API at its defaults (768 MiB a
+query) with 2 threads a query; its CPUs could not be limited for a native macOS process, and the
+data is the reference's daily density (ten times the Small workload's), though its 320 million
+events are about the Small workload's 13 months. Three runs of each read: the Overview and the recent
+installations answered `query_limit_exceeded` every time; the funnel steps 2.2 s (p95 9.8 s), the
+funnel trends 5.6 s (both under 3 GB thanks to spilling: the 90-day trend's statement answered in
+3.8 s under a 3 GB limit, writing 945 MiB of aggregation to disk, and failed in 0.9 s without the
+spill); cohorts 1.1 s; the erasure preview 1.7 s (p95 12.5 s); every other read within its budget.
+What it shows: at the Small host's memory, the statements that hold one state per session or per
+installation are the ones to fix first, the same two as above.
+
+**Docker, with and without the profile** (throwaway project `inlet-p12c`, an env file holding only
+the secret and the first Admin, the image built from the working tree):
+- `docker compose build`: succeeds.
+- Without the profile: `/v1/health` lists `feedback, crash, feedback-cross-origin, mcp, identity`,
+  not `analytics`; the log warns once that the event store is not ready and how to enable it;
+  creating an analytics database answers `409 analytics_not_enabled` with "Start Inlet with
+  `docker compose --profile analytics up -d`, or set `INLET_CLICKHOUSE_URL` …"; a feedback
+  submission through `inlet-sdk/feedback/node` and a crash report through `inlet-sdk/crash/node` are
+  stored.
+- `--profile analytics up -d` on the running stack, Inlet not restarted: `analytics` listed 22
+  seconds later, the event store's tables created (`events`, `events_ingest`, the five state tables,
+  their views, `analytics_erasure_targets`, `inlet_migrations`). A database created; five events
+  through `inlet-sdk/analytics/node` in device mode (with `app_installed` and `app_started`, 7
+  stored) and four HTTP batches of 25 with the publishable key; the Overview (2 active today, 5
+  sessions) and a trend (101 events today) read back.
+- ClickHouse stopped: `/v1/health` still 200 and still lists `analytics`; ingest `503
+  analytics_unavailable` with `Retry-After: 30`; the Overview, profiles and storage `503` with
+  `Retry-After`, the catalog and the live feed answer from PostgreSQL and memory, the database read
+  says `eventStore: unavailable`; in a browser (Playwright's Chromium against the container, signed
+  in), the Overview, Events, Funnels, Cohorts, Users, Collect and Settings → Storage each say "The
+  analytics event store is unreachable, so this database cannot be read or collect events for now;
+  the rest of Inlet works as usual", while the feedback and crash database pages load normally; a
+  feedback submission and a crash report are stored. The SDK kept its 8 events (a session's
+  `app_started` and 7 tracked) in its queue file at `close()`.
+- ClickHouse started: the next SDK process delivered the queue — the 7 events stored once each, 16
+  events for the installation, 16 distinct IDs — and all 100 events answered before the stop were
+  there. `docker compose restart clickhouse` during continuous ingest (12 installations, batches of
+  20 every 100 ms): 202 batches answered 200 and 9 answered 503; the 4,040 events of the answered
+  batches were all stored, once each.
+- Inlet restarted while ClickHouse was stopped: `analytics` not listed, the existing database's
+  Overview `503 analytics_unavailable`, creation `409 analytics_not_enabled`; ClickHouse started,
+  `analytics` listed within 6 seconds.
+- The whole stack `down` then `up` with the profile: every count identical (16 and 100 events, both
+  crash groups). The project and its volumes were removed at the end.
+- No defect needed a fix. ClickHouse logs `Listen [::]:8123 failed … Address family for hostname not
+  supported` at start on Docker Desktop, which has no IPv6: harmless, noted in DEPLOYMENT.md's
+  troubleshooting. Its container reports 10 cores (`max_threads` 10) on this machine, so a Small host
+  limiting CPUs with Docker should also set `INLET_ANALYTICS_QUERY_THREADS`.
+
+**Not possible here.** The reference node and its 4.1 billion events (a 13-month seed is about
+7 hours of seeding at this laptop's rate and 180 GB, and the reads' extrapolation above is linear);
+the Small host's 4 vCPU (only its memory and pools were applied, to a native process) and its own
+workload; an ingest p95 on an idle machine; more than one concurrent reader (the slots' fairness is
+covered by the suites, not measured at scale).

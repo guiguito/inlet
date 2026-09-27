@@ -934,8 +934,11 @@ the next page. A transport failure backs off exponentially with jitter; a `429`,
 with `Retry-After`, pauses analytics for that long — and only analytics: the crash module
 keeps sending. An event the server answered, accepted or refused, is never sent again. Past
 `queueSize` (1,000) the oldest of your events is dropped first, the standard events last.
+`flush(timeoutMs)` resolves once the queue is sent or the timeout passes, whichever comes
+first, and keeps nothing running after it, so a command-line tool can end with
+`await analytics.close()` and exit at once.
 
-**Size.** `inlet-sdk/analytics/browser` is 15.4 KB minified and gzipped, the event rules
+**Size.** `inlet-sdk/analytics/browser` is 15.5 KB minified and gzipped, the event rules
 included. The build fails past 20 KB.
 
 ## Analytics options

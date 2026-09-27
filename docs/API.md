@@ -228,7 +228,9 @@ this one request; there is no partial save.
 replayed result.
 
 `clientContext` is arbitrary JSON, stored exactly as you send it, capped at 16 KiB as
-UTF-8. Inlet never interprets it. You are responsible for what it contains and for the
+UTF-8 and at 64 levels of nesting (objects and arrays inside one another): a deeper value is
+`400 validation_failed` with a detail of code `too_deep` whose `path` starts `clientContext.`,
+and the intent stays usable. Inlet never interprets it. You are responsible for what it contains and for the
 lawful use of anything identifying you put in it.
 
 Three optional fields carry the identity `inlet-sdk` attaches (FR-204): `sessionId` and
@@ -958,7 +960,10 @@ See that section for what the exception is and is not.
 ### The envelope
 
 At most 64 KiB serialized. Exactly these top-level fields; any other is refused with
-`unknown_field` naming it. A field out of bounds is `invalid_envelope` with the path.
+`unknown_field` naming it. A field out of bounds is `invalid_envelope` with the path. A value
+nested more than 64 levels deep (objects and arrays inside one another, in `context` say) is
+`invalid_envelope` with a detail of code `too_deep` at its path, checked before anything else
+reads the body.
 
 | Field | Required | Bounds |
 | --- | --- | --- |
@@ -1077,6 +1082,8 @@ GET  /v1/crash-databases/{id}/deletion-impact                 → {groups, repor
 DELETE /v1/crash-databases/{id}
 ```
 
+The CSV of groups is UTF-8 with one byte-order mark and CRLF rows, as the submissions export.
+
 Retention bounds: 1,000 to 100,000 reports; 7 to 365 days or `null`, unless the operator moved them; the read returns the bounds in force as `bounds`. Over the cap the
 oldest reports of the fullest group are evicted at ingest, every group keeping its latest;
 aged reports are evicted at ingest and hourly. Eviction never changes a group's count,
@@ -1098,8 +1105,9 @@ enables with `docker compose --profile analytics up -d` or `INLET_CLICKHOUSE_URL
 [DEPLOYMENT.md](DEPLOYMENT.md)). Databases, [ingest](#analytics-ingest), the test event and
 the live feed, the [event catalog and its Lexicon](#the-event-catalog-and-the-lexicon) and
 [trends](#trends), [the Overview](#the-overview), [profiles](#profiles) and
-[funnels](#funnels), [cohorts](#cohorts) and [storage and data health](#storage-and-data-health)
-are available now; erasure arrives with a later piece of Release 8.
+[funnels](#funnels), [cohorts](#cohorts), [storage and data health](#storage-and-data-health),
+[the event export](#the-event-export) and [erasure](#erasing-an-installation-or-user-id) are
+all available.
 
 ```
 POST /v1/projects/prj_5waxfxyby3st/analytics-databases
@@ -1362,7 +1370,9 @@ The **live feed** returns the last events the database accepted, newest first, e
 Pass `cursor` back as `after` to get only the events accepted since, so a client polling
 every few seconds sees each event once; `limit` (1 to 500) takes the most recent events
 without `after`, and with it pages through a backlog, oldest first taken. The feed holds the last 500 events per database in the server's memory: it is
-empty after a restart, and a duplicate never appears twice. It takes no query slot.
+empty after a restart, and a duplicate never appears twice. It takes no query slot. Until the
+event store has been ready since the server started (or on a deployment without one) it answers
+`503 analytics_unavailable`.
 
 A batch never loses its valid events to one bad key: an event whose param or experiment key
 is `__proto__`, `constructor` or `prototype` is rejected alone, as `invalid_event` with its
@@ -1378,7 +1388,7 @@ PATCH  /v1/analytics-databases/{id}/events/{name}                      {descript
 PATCH  /v1/analytics-databases/{id}/events/{name}/params/{key}         {description}; Creator or Admin
 PUT    /v1/analytics-databases/{id}/events/{name}/blocked              {blocked}; database or project Admin
 DELETE /v1/analytics-databases/{id}/events/{name}?confirm={name}       database or project Admin
-GET    /v1/analytics-databases/{id}/exports/catalog?format=csv|json    Viewer or above
+GET    /v1/analytics-databases/{id}/exports/catalog?format=csv|json    Viewer or above; json by default
 ```
 
 The **catalog** lists every event name the database has received, from PostgreSQL: it takes
@@ -1439,7 +1449,8 @@ stays. **Deleting** needs the exact name as `confirm` (`400 confirmation_mismatc
 otherwise). The name's catalog and Lexicon entries go at once, which retires its ID: its
 events are unreadable when the call answers, and its slot under the limit is free. A
 background job then removes its rows from the event store without the call waiting, and
-finishes after a restart. If a client sends the name again, it comes back as a new event.
+finishes after a restart; the event store's files hold no trace of them within the operator's
+erasure bound (30 days by default, `INLET_ANALYTICS_ERASURE_BOUND_DAYS`, AN-184). If a client sends the name again, it comes back as a new event.
 Standard events can be neither blocked nor deleted (`409 standard_event_undeletable`).
 
 The **catalog export** holds every name, hidden ones included, with its flags, 24-hour
@@ -1863,7 +1874,7 @@ whole) or both. The defaults are applied and stored. Deleting a funnel removes o
 definition, touches no event, and takes no confirmation, as deleting an analytics database over
 HTTP does; the MCP tool asks for the exact name. An unknown ID answers `404 funnel_not_found`.
 
-**The definition** (PRD 9.2), with every default shown:
+**The definition** (PRD 9.2), with every default written out (`split` is optional):
 
 ```json
 {
@@ -2032,7 +2043,7 @@ and population filters. A body is `{ "name", "definition" }`, a name of at most 
 definition and takes no confirmation over HTTP; the MCP tool asks for the exact name. An unknown
 ID answers `404 cohort_not_found`.
 
-**The definition** (PRD 9.2), with every default shown:
+**The definition** (PRD 9.2), an example; the defaults are listed below it:
 
 ```json
 {
@@ -2256,7 +2267,7 @@ Every stored event of an analytics database, as newline-delimited JSON (UX Analy
 for a Viewer or above:
 
 ```
-GET /v1/analytics-databases/{id}/exports/events?from&to&name&installationId&userId
+GET /v1/analytics-databases/{id}/exports/events?from&to&name&installationId&userId&limit&cursor
 ```
 
 ```
@@ -2298,7 +2309,10 @@ answers `503 analytics_busy` with `Retry-After`: retry shortly. Each query then 
 the event store's limits, 30 seconds (`INLET_ANALYTICS_QUERY_TIME_S`), a memory limit
 (`INLET_ANALYTICS_QUERY_MEMORY_BYTES`) and a thread limit (`INLET_ANALYTICS_QUERY_THREADS`);
 one that exceeds them answers `503 query_limit_exceeded`: ask for a shorter range or a
-coarser interval. The catalog list, the live feed, the Lexicon's changes and ingest never take
+coarser interval. Funnel runs, their drill-downs and cohort runs spill their aggregation to the
+event store's temporary disk past half the memory limit rather than fail, so a long range costs
+time before it costs an answer (the time limit still applies; the funnel trend's is 120 seconds,
+`INLET_ANALYTICS_FUNNEL_TREND_TIME_S`). The catalog list, the live feed, the Lexicon's changes and ingest never take
 a slot, and the rules are the same over MCP. A client that closes its connection before the
 answer — a chart replaced by the next one — leaves the queue at once, or has its running
 statement cancelled in the event store, and its slot is free for its next query.
@@ -2353,7 +2367,7 @@ POST /v1/projects/{projectId}/erasures           {kind, id, confirm, databases}
   links, first occurrences of the installations and of the user ID.
 - **The erasure** needs `confirm`, the same ID exactly (`400 confirmation_mismatch`), and
   `databases`, the IDs to erase in, each one you administer in this project (`403 forbidden`
-  otherwise). It answers what it deleted per database. Crash reports and submissions are gone
+  otherwise). It answers what it deleted per database, with `erasureId`, the erasure's record (actor, time, kind and counts, never the ID). Crash reports and submissions are gone
   when it answers; analytics events are unreadable when it answers, and the server's worker
   deletes them from the event store within minutes, then removes them from the event store's
   files within 30 days (`INLET_ANALYTICS_ERASURE_BOUND_DAYS`). Events the same IDs send
@@ -2401,7 +2415,7 @@ The codes you are most likely to handle:
 | Code | Status | Meaning |
 | --- | --- | --- |
 | `invalid_api_key`, `revoked_api_key` | 401 | The key is unknown or has been revoked. |
-| `insufficient_scope` | 403 | A publishable key was used outside the feedback flow. |
+| `insufficient_scope` | 403 | A publishable key was used outside what it may do: the feedback flow, crash reports and analytics ingest. |
 | `feedback_database_inaccessible` | 403 | Valid key, but the database belongs to another project. |
 | `form_not_published` | 409 | Nothing to render, and no new intents. |
 | `form_version_mismatch` | 409 | The `formVersion` you sent is not the pinned one. |
@@ -2430,7 +2444,7 @@ The codes you are most likely to handle:
 | `analytics_unavailable` | 503 | The event store is unreachable or refused the call. Retry after `Retry-After`. |
 | `analytics_database_limit` | 409 | The deployment already holds its limit of analytics databases (50 unless the operator changed it). |
 | `timezone_invalid` | 400 | A missing reporting timezone, an offset, or a zone the API's or the event store's timezone data does not list. |
-| `confirmation_mismatch` | 400 | A destructive action whose echoed name or ID does not match. |
+| `confirmation_mismatch` | 400 | A destructive action, or a storage change that lowers a limit, whose echoed name or ID does not match. |
 | `analytics_busy`, `query_limit_exceeded` | 503 | No analytics query slot within ten seconds, or a query over its time or memory limit. |
 | `invalid_query` | 400 | An analytics query definition outside the contract; `details` carries the path. |
 | `event_not_found`, `funnel_not_found`, `cohort_not_found`, `profile_not_found` | 404 | No such event name, funnel, cohort or profile in this analytics database. |
@@ -2533,6 +2547,16 @@ cross-origin request are all refused.
 | Ingest analytics events | Yes | Yes | Not applicable |
 | Send an analytics test event | No | Yes | Creator or Admin |
 | Read the analytics live feed | No | Yes | Viewer or above |
+| Read the Overview, the event catalog, an event's detail, filter values | No | Yes | Viewer or above |
+| Run or export a trend, funnel or cohort | No | Yes | Viewer or above |
+| List and read funnels and cohorts | No | Yes | Viewer or above |
+| Create, edit, delete a funnel or cohort | No | Yes | Creator or Admin |
+| Edit or delete the standard Retention cohort | No | No | Not supported |
+| Describe or hide an event or param (the Lexicon) | No | Yes | Creator or Admin |
+| Block, unblock, or delete an event name with its data | No | Yes | Database or project Admin |
+| Find, read, list the events of, export a profile | No | Yes | Viewer or above |
+| Read or change analytics storage settings | No | Yes | Database or project Admin |
+| Read analytics data health | No | Yes | Viewer or above |
 | Export analytics events | No | Yes | Viewer or above |
 | Edit or delete one analytics event | No | No | Not supported |
 | Preview and erase an installation or user ID across a project | No | Yes | Project Admin, or the Admin of each database included |

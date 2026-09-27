@@ -34,6 +34,7 @@ import {
   resolveRange,
   runAnalyticsQuery,
   todayIn,
+  withSpill,
   type Covered,
   type FilterScope,
   type ReadStore,
@@ -613,7 +614,9 @@ export async function runCohort(ctx: AppContext, database: AnalyticsDatabaseRow,
     ctx,
     principal,
     'query',
-    async (store, settings) => {
+    async (store, limits) => {
+      // Spills past half the memory limit (the members' statements keep their quarter), 9.5.
+      const settings = withSpill(limits);
       const keptFrom = await oldestKeptDay(store, database, settings);
       const coverage = coverageOf(range, keptFrom, today);
       // Unfiltered starts are decided by records that outlive the events (AN-108), so the table is

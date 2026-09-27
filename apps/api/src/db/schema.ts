@@ -989,6 +989,11 @@ export const analyticsEventNameDeletions = pgTable(
     attempts: integer('attempts').notNull().default(0),
     /** Set once no row of the name remains in the event store. */
     completedAt: timestamp('completed_at', { withTimezone: true }),
+    /**
+     * AN-056, AN-184: set once no file of the event store carries the name's rows either (the
+     * lightweight delete only masks them until a merge or `APPLY DELETED MASK` rewrites the part).
+     */
+    filesClearedAt: timestamp('files_cleared_at', { withTimezone: true }),
   },
   (table) => [index('analytics_event_name_deletions_key_idx').on(table.databaseKey, table.name)],
 );

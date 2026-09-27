@@ -389,28 +389,50 @@ function stateConditions(ids: readonly number[], hasUser: boolean): [string, (p:
 async function filesStep(ctx: AppContext, tx: Db, store: EventStore, databaseKey: number, done: PendingRow[], nowMs: number, after: After): Promise<number> {
   if (done.length === 0) return 0;
   const ids = done.map((row) => row.id);
-  const tables: [string, (p: SqlParams) => string][] = [
-    ['events', (p) => `(${target.erased(p, ids)} OR ${target.user(p, ids)})`],
-    ...stateConditions(ids, done.some((row) => row.kind === 'user')),
-  ];
-  const carrying: { table: string; condition: (p: SqlParams) => string }[] = [];
-  for (const [table, condition] of tables) {
-    const p = new SqlParams();
-    const [row] = await store.query<{ n: string }>(
-      `SELECT count() AS n FROM ${table} WHERE database_key = ${p.add(databaseKey, 'UInt32')} AND ${condition(p)} AND NOT _row_exists SETTINGS apply_deleted_mask = 0`,
-      p.values,
-    );
-    if (Number(row?.n ?? 0) > 0) carrying.push({ table, condition });
-  }
+  const carrying = await maskedTables(store, databaseKey, [
+    { table: 'events', condition: (p) => `(${target.erased(p, ids)} OR ${target.user(p, ids)})` },
+    ...stateConditions(ids, done.some((row) => row.kind === 'user')).map(([table, condition]) => ({ table, condition })),
+  ]);
   if (carrying.length === 0) {
     await tx.delete(analyticsPendingErasures).where(inArray(analyticsPendingErasures.id, ids));
     after.dropTargets.push(...ids);
     return done.length;
   }
-
   const oldest = Math.min(...done.map((row) => row.createdAt.getTime()));
+  await forceMaskedOut(ctx, store, databaseKey, carrying, nowMs - oldest);
+  return 0;
+}
+
+/** Rows of one table that a file may still carry once a lightweight delete masked them. */
+export type MaskedRows = { table: string; condition: (p: SqlParams) => string };
+
+/**
+ * The tables among `tables` whose files still carry rows matching their condition that a
+ * lightweight delete masked (`NOT _row_exists` under `apply_deleted_mask = 0`). Shared by the
+ * erasure's step 5 and the event-name deletion's file step (AN-056, AN-184).
+ */
+export async function maskedTables(store: EventStore, databaseKey: number, tables: readonly MaskedRows[]): Promise<MaskedRows[]> {
+  const carrying: MaskedRows[] = [];
+  for (const entry of tables) {
+    const p = new SqlParams();
+    const [row] = await store.query<{ n: string }>(
+      `SELECT count() AS n FROM ${entry.table} WHERE database_key = ${p.add(databaseKey, 'UInt32')} AND ${entry.condition(p)} AND NOT _row_exists SETTINGS apply_deleted_mask = 0`,
+      p.values,
+    );
+    if (Number(row?.n ?? 0) > 0) carrying.push(entry);
+  }
+  return carrying;
+}
+
+/**
+ * AN-184: once half the operator's bound has passed since the rows were deleted (`ageMs`),
+ * `APPLY DELETED MASK IN PARTITION` rewrites each partition still carrying masked rows, submitted
+ * without waiting and never while one is running for the database; the other half is left for an
+ * outage or a retry. Before that, merges are left to drop the rows on their own.
+ */
+export async function forceMaskedOut(ctx: AppContext, store: EventStore, databaseKey: number, carrying: readonly MaskedRows[], ageMs: number): Promise<void> {
   const forceAfterMs = (ctx.env.limits.analyticsErasureFileRemovalDays * DAY_MS) / 2;
-  if (nowMs - oldest < forceAfterMs || (await maskRunning(store, databaseKey))) return 0;
+  if (ageMs < forceAfterMs || (await maskRunning(store, databaseKey))) return;
   for (const { table, condition } of carrying) {
     const p = new SqlParams();
     const partitions = await store.query<{ id: string }>(
@@ -421,7 +443,6 @@ async function filesStep(ctx: AppContext, tx: Db, store: EventStore, databaseKey
       await store.command(`ALTER TABLE ${table} APPLY DELETED MASK IN PARTITION ID {partition:String}`, { partition: id }, SUBMIT_SETTINGS);
     }
   }
-  return 0;
 }
 
 /** Whether an `APPLY DELETED MASK` on one of this database's partitions is still running. */

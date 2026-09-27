@@ -1,4 +1,4 @@
-import { capabilities, timeoutSignal } from '../health.js';
+import { capabilities, settleWithin, timeoutSignal } from '../health.js';
 import type { EventQueueStore, QueuedEvent } from './queue.js';
 import type { AnalyticsDropReason } from './types.js';
 
@@ -199,7 +199,7 @@ export class AnalyticsTransport {
         this.flushing = null;
       });
     if (timeoutMs === undefined) return this.flushing;
-    return Promise.race([this.flushing, this.sleep(timeoutMs)]);
+    return settleWithin(this.flushing, timeoutMs);
   }
 
   private async run(): Promise<void> {

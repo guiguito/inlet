@@ -127,6 +127,12 @@ export async function deleteProject(
     ...(await logoKeysForProject(ctx, projectId)),
   ];
   await ctx.db.transaction(async (tx) => {
+    // The project row first, FOR UPDATE: an analytics database being created holds a key-share
+    // lock on it until it commits, so this waits for that creation and the removals below then
+    // see its row; a creation that starts after waits here and finds no project (release 8
+    // hardening: a database created in that instant went by cascade with no removal record).
+    const locked = await tx.execute(sql`select id from projects where id = ${projectId} for update`);
+    if (locked.rows.length === 0) throw errors.projectNotFound();
     await deleteNotificationRows(tx, sql`
       select id from feedback_databases where project_id = ${projectId}
       union all select id from crash_databases where project_id = ${projectId}

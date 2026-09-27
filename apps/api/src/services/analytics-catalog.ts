@@ -1,5 +1,5 @@
 import { TupleParam } from '@clickhouse/client';
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, isNotNull, isNull, sql } from 'drizzle-orm';
 import { STANDARD_EVENTS, TEST_EVENT_NAME } from '@inlet/shared/analytics-core';
 import type { AppContext } from '../context.js';
 import type { EventStore, QuerySettings } from '../db/clickhouse.js';
@@ -15,6 +15,7 @@ import { toCsv } from '../lib/csv.js';
 import { apiError } from '../lib/errors.js';
 import type { Principal } from './access.js';
 import { eventStoreTime } from './analytics-derive.js';
+import { forceMaskedOut, maskedTables } from './analytics-erasure.js';
 import { invalidateAnalyticsCatalog } from './analytics-ingest.js';
 import {
   SqlParams,
@@ -612,7 +613,35 @@ export async function runEventNameDeletions(ctx: AppContext, nowMs = Date.now())
       .set({ submittedAt: new Date(nowMs), attempts: sql`${analyticsEventNameDeletions.attempts} + 1` })
       .where(eq(analyticsEventNameDeletions.eventNameId, deletion.eventNameId));
   }
+  await clearDeletedNameFiles(ctx, store, nowMs);
   return completed;
+}
+
+/**
+ * AN-056 ("…leave the event store's files within the bound of AN-184"): a completed deletion's
+ * rows are masked, not gone, until a merge rewrites their parts. Piece 10's file step, reused:
+ * once half the operator's bound has passed since the deletion was requested, the partitions
+ * still carrying them are rewritten with `APPLY DELETED MASK`; the deletion is marked
+ * `files_cleared_at` once no file carries a row of the name, and is not checked again.
+ */
+async function clearDeletedNameFiles(ctx: AppContext, store: EventStore, nowMs: number): Promise<void> {
+  const settled = await ctx.db
+    .select()
+    .from(analyticsEventNameDeletions)
+    .where(and(isNotNull(analyticsEventNameDeletions.completedAt), isNull(analyticsEventNameDeletions.filesClearedAt)));
+  for (const deletion of settled) {
+    const id = Number(deletion.eventNameId);
+    const carrying = await maskedTables(
+      store,
+      deletion.databaseKey,
+      NAME_TABLES.map((table) => ({ table, condition: (p: SqlParams) => `event_name_id = ${p.add(id, 'UInt32')}` })),
+    );
+    if (carrying.length === 0) {
+      await ctx.db.update(analyticsEventNameDeletions).set({ filesClearedAt: new Date(nowMs) }).where(eq(analyticsEventNameDeletions.eventNameId, deletion.eventNameId));
+      continue;
+    }
+    await forceMaskedOut(ctx, store, deletion.databaseKey, carrying, nowMs - deletion.requestedAt.getTime());
+  }
 }
 
 async function remainingRows(store: EventStore, databaseKey: number, eventNameId: number): Promise<string[]> {

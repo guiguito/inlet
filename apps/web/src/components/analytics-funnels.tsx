@@ -11,13 +11,13 @@ import {
   type AnalyticsFunnelRun,
   type AnalyticsRange,
 } from '@inlet/shared';
-import { api, ApiError, type AnalyticsTrendAnswer } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 import { profileHref } from '@/lib/analytics-profiles';
 import { funnelsApi, type FunnelAnswer, type FunnelGroup, type FunnelResult, type FunnelStepsAnswer, type FunnelTrendAnswer, type FunnelUnit, type SavedFunnel } from '@/lib/analytics-funnels';
-import { FilterList, LABELS, SELECT, SplitControl, complete, queryErrorSentence } from '@/components/analytics-events';
+import { FilterList, LABELS, SELECT, SplitControl, complete, queryErrorSentence, useDatabaseToday } from '@/components/analytics-events';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { EmptyState } from '@/components/empty-state';
-import { TrendChart } from '@/components/trend-chart';
+import { TrendChart, type ChartAnswer } from '@/components/trend-chart';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -192,6 +192,7 @@ function FunnelEditor({
   const [name, setName] = useState(saved?.name ?? '');
   const [draft, setDraft] = useState<AnalyticsFunnelDefinition>(saved?.definition ?? DEFAULT_DEFINITION);
   const [range, setRange] = useState<AnalyticsRange>(saved?.definition.defaultRange ?? { preset: 'last30Days' });
+  const today = useDatabaseToday(databaseId);
   const [view, setView] = useState<AnalyticsFunnelRun['view']>(saved?.definition.defaultView ?? { kind: 'steps' });
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [dropped, setDropped] = useState<number | null>(null);
@@ -365,10 +366,8 @@ function FunnelEditor({
               value={custom ? 'custom' : range.preset}
               onChange={(event) => {
                 const value = event.target.value;
-                if (value === 'custom') {
-                  const today = new Date().toISOString().slice(0, 10);
-                  setRange({ from: today, to: today });
-                } else setRange({ preset: value as (typeof ANALYTICS_RANGE_PRESETS)[number] });
+                if (value === 'custom') setRange({ from: today(), to: today() });
+                else setRange({ preset: value as (typeof ANALYTICS_RANGE_PRESETS)[number] });
               }}
             >
               {ANALYTICS_RANGE_PRESETS.map((preset) => (
@@ -631,11 +630,14 @@ function StepsView({ answer, onDropped }: { answer: FunnelStepsAnswer; onDropped
   );
 }
 
-/** The trend view as the trend chart draws it: conversion in percent per entry group (AN-086). */
-function trendShape(answer: FunnelTrendAnswer, show: 'overall' | number): AnalyticsTrendAnswer {
+/**
+ * The trend view as the trend chart draws it: conversion in percent per entry group (AN-086). A
+ * group nobody entered has no conversion (null), drawn as a gap rather than a 0% that did not happen.
+ */
+function trendShape(answer: FunnelTrendAnswer, show: 'overall' | number): ChartAnswer {
   const value = (group: FunnelGroup, step: number | 'overall') => {
     const share = step === 'overall' ? group.conversion : group.stepShares[step - 1];
-    return share === null || share === undefined ? 0 : Math.round(share * 1000) / 10;
+    return share === null || share === undefined ? null : Math.round(share * 1000) / 10;
   };
   const series = (label: string, groups: FunnelGroup[], step: number | 'overall', group?: 'value' | 'other' | 'none') => ({
     label,

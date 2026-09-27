@@ -4,7 +4,7 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { XIcon } from 'lucide-react';
 import { ANALYTICS_PLATFORMS, ANALYTICS_RANGE_PRESETS, type AnalyticsRange } from '@inlet/shared';
 import { api, ApiError, type AnalyticsCrashFree, type AnalyticsFigure, type AnalyticsOverview, type AnalyticsOverviewQuery, type AnalyticsShare, type AnalyticsTrendAnswer } from '@/lib/api';
-import { queryErrorSentence } from '@/components/analytics-events';
+import { queryErrorSentence, todayInZone } from '@/components/analytics-events';
 import { EmptyState } from '@/components/empty-state';
 import { TrendChart } from '@/components/trend-chart';
 import { Badge } from '@/components/ui/badge';
@@ -63,7 +63,7 @@ function rangeLabel(range: AnalyticsRange): string {
   return 'preset' in range ? PRESET_LABELS[range.preset] : `${range.from} to ${range.to}`;
 }
 
-export function OverviewPanel({ databaseId, unreachable }: { databaseId: string; unreachable: string }) {
+export function OverviewPanel({ databaseId, timezone, unreachable }: { databaseId: string; timezone: string; unreachable: string }) {
   const [query, setQuery] = useState<AnalyticsOverviewQuery>(DEFAULT_QUERY);
   const overview = useQuery({
     queryKey: ['analytics-overview', databaseId, query],
@@ -81,7 +81,7 @@ export function OverviewPanel({ databaseId, unreachable }: { databaseId: string;
 
   return (
     <div className="mt-4 space-y-4" data-testid="overview">
-      <FilterBar query={query} update={update} apps={apps.data?.values ?? []} environments={knownEnvironments} />
+      <FilterBar query={query} update={update} timezone={timezone} apps={apps.data?.values ?? []} environments={knownEnvironments} />
 
       {overview.error ? (
         <p role="status" className="rounded-md border border-destructive/40 px-3 py-2 text-sm" data-testid="overview-error">
@@ -133,19 +133,26 @@ export function OverviewPanel({ databaseId, unreachable }: { databaseId: string;
 function FilterBar({
   query,
   update,
+  timezone,
   apps,
   environments,
 }: {
   query: AnalyticsOverviewQuery;
   update: (patch: Partial<AnalyticsOverviewQuery>) => void;
+  timezone: string;
   apps: string[];
   environments: string[];
 }) {
   const custom = 'from' in query.range;
-  const today = new Date().toISOString().slice(0, 10);
+  // The custom range starts on today in the database's timezone, the calendar every figure uses.
+  const today = todayInZone(timezone);
   const allEnvironments = environments.length > 1 && environments.every((value) => query.environments.includes(value));
   const chips: { label: string; isDefault: boolean; remove?: () => void }[] = [
-    { label: rangeLabel(query.range), isDefault: 'preset' in query.range && query.range.preset === 'last30Days' },
+    (() => {
+      const isDefault = 'preset' in query.range && query.range.preset === 'last30Days';
+      // A range other than the default can be removed like any other filter, back to the default.
+      return { label: rangeLabel(query.range), isDefault, ...(isDefault ? {} : { remove: () => update({ range: DEFAULT_QUERY.range }) }) };
+    })(),
     ...query.apps.map((app) => ({ label: `App ${app}`, isDefault: false, remove: () => update({ apps: query.apps.filter((value) => value !== app) }) })),
     ...(query.platforms.length === 0
       ? [{ label: 'Every client platform', isDefault: true }]
@@ -430,6 +437,14 @@ function crashFreeText(row: AnalyticsCrashFree): string {
   return row.measured && row.rate !== null ? percent(row.rate) : 'Not measured';
 }
 
+/**
+ * `sessions` counts the sessions that reported a crash module, the rate's denominator; for a
+ * version not measured that is none, which "0" would misstate as no sessions at all.
+ */
+function crashFreeSessions(row: AnalyticsCrashFree): string {
+  return row.measured ? integer(row.sessions) : '—';
+}
+
 function CrashFreeTable({ data }: { data: AnalyticsOverview }) {
   return (
     <Card>
@@ -461,7 +476,7 @@ function CrashFreeTable({ data }: { data: AnalyticsOverview }) {
                       </Badge>
                     ) : null}
                   </TableCell>
-                  <TableCell className="numeric text-right">{integer(row.sessions)}</TableCell>
+                  <TableCell className="numeric text-right">{crashFreeSessions(row)}</TableCell>
                 </TableRow>
               ))}
             </TableBody>

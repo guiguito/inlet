@@ -180,6 +180,8 @@ describe('crash groups, reports, releases and stats', () => {
 
     const csv = await get('/groups/export?format=csv&release=1.1.0');
     expect(csv.headers['content-type']).toContain('text/csv');
+    // One byte-order mark, which `toCsv` writes; the route once added a second (release 8 hardening).
+    expect(csv.body.startsWith('\uFEFFid,state')).toBe(true);
     const lines = csv.body.split('\n').filter(Boolean);
     expect(lines).toHaveLength(2); // header + the one group seen on 1.1.0
     expect(lines[0]).toContain('id,state,regressed,kind');

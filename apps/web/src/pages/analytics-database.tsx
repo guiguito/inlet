@@ -154,7 +154,7 @@ export function AnalyticsDatabasePage({ user }: { user: CurrentUser }) {
                     {entry.panels.map((sub) => (
                       <TabsContent key={sub.value} value={sub.value}>
                         {sub.value === 'overview' ? (
-                          <OverviewPanel databaseId={databaseId} unreachable={EVENT_STORE_UNREACHABLE} />
+                          <OverviewPanel databaseId={databaseId} timezone={database.data.timezone} unreachable={EVENT_STORE_UNREACHABLE} />
                         ) : sub.value === 'events' ? (
                           <EventsPanel databaseId={databaseId} role={role} unreachable={EVENT_STORE_UNREACHABLE} />
                         ) : sub.value === 'funnels' ? (

@@ -1,7 +1,7 @@
 import { CRASH_LIMITS } from '@inlet/shared/crash-core';
 export { MemoryStore } from '../store.js';
 import type { QueueStore } from '../store.js';
-import { capabilities, timeoutSignal } from '../health.js';
+import { capabilities, settleWithin, timeoutSignal } from '../health.js';
 import type { CrashEnvelope, DropReason, SentReport } from './types.js';
 
 /**
@@ -173,7 +173,7 @@ export class Transport {
       });
     }
     if (timeoutMs === undefined) return this.flushing;
-    return Promise.race([this.flushing, this.sleep(timeoutMs)]);
+    return settleWithin(this.flushing, timeoutMs);
   }
 
   close(): void {

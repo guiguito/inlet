@@ -314,7 +314,7 @@ export const analyticsDescriptionSchema = z.string().max(ANALYTICS_LIMITS.descri
  * Compile-time proof that each schema produces the type declared in `analytics-core.ts`
  * (mutual assignability): a key added on either side fails the build here. `Exact` answers
  * `false`, not `never`, and each entry goes through `Assert`, because a tuple holding `never`
- * compiles and `never` satisfies `extends true`, which is why `form.ts`'s version can never fail.
+ * compiles and `never` satisfies `extends true` (`form.ts` and `answers.ts` had that version until release 8's hardening).
  */
 type Exact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 type Assert<T extends true> = T;

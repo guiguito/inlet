@@ -1,3 +1,4 @@
+import { settleWithin } from '../health.js';
 import type { QueueStore } from '../store.js';
 import type { FeedbackError, FinalizePayload, SubmissionIdentity, SubmitOutcome } from './types.js';
 
@@ -186,7 +187,7 @@ export class PendingQueue {
       });
     }
     if (timeoutMs === undefined) return this.flushing;
-    return Promise.race([this.flushing, this.sleep(timeoutMs)]);
+    return settleWithin(this.flushing, timeoutMs);
   }
 
   close(): void {

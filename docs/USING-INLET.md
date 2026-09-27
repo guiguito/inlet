@@ -12,6 +12,7 @@ For the person collecting the feedback. If you are deploying it, read
 - [Reading responses](#reading-responses)
 - [Slack notifications](#slack-notifications)
 - [Crash reports](#crash-reports)
+- [Analytics databases](#analytics-databases)
 - [Honouring an erasure request](#honouring-an-erasure-request)
 - [Sharing access](#sharing-access)
 - [Exporting and deleting](#exporting-and-deleting)
@@ -31,7 +32,8 @@ Three levels, and it is worth getting them straight once.
 A project can also hold **crash databases**, which receive failure reports from an
 application instead of answers from a person. They sit beside the feedback databases on
 the project page, share its API keys and access rules, and are described in
-[Crash reports](#crash-reports).
+[Crash reports](#crash-reports). And it can hold **analytics databases**, which count how
+an application is used from the events it sends; see [Analytics databases](#analytics-databases).
 
 Access is granted at either the project or the feedback-database level, so you can let
 someone read one form's responses without seeing the rest of the project.
@@ -298,11 +300,38 @@ so wherever it shows it.
 ## Analytics databases
 
 An **analytics database** counts how a product is used: which installations are active,
-which versions they run, how they move through a funnel and how many come back. It is built
-from events your apps send, and it lives in its own store, ClickHouse, which the operator
-turns on with the compose profile `analytics` (see [DEPLOYMENT.md](DEPLOYMENT.md)). A
-deployment without it runs everything else unchanged, and creating an analytics database
-there tells you the one step that enables it.
+which versions they run, how they move through a funnel, how many come back, and what one
+person did. It is built from the events your apps send. This part reads in order, from
+turning analytics on to reading the numbers; erasure, which spans every database type, follows
+in [Honouring an erasure request](#honouring-an-erasure-request).
+
+A few words mean one thing throughout:
+
+- An **installation** is one install of your app on one device or browser profile, with a
+  random ID the SDK creates when analytics is first enabled. It is never derived from the
+  device. Installations are the default **counting unit** of every unique figure.
+- A **user ID** is the opaque ID your app sets after sign-in, shared by the SDK's crash,
+  feedback and analytics modules. It is the other counting unit. A user ID and an
+  installation are never merged: the same person on a phone and a laptop is one user ID and
+  two installations.
+- A **session** is a period of activity on one installation. It ends after 30 minutes without
+  activity or 24 hours after it began, and is counted when it sends `app_started`.
+- The **reporting timezone** is the zone the database counts in. A **period** is a calendar
+  day, ISO week (Monday to Sunday), month or year in that zone.
+- The **storage window** is how far back events are kept: 13 months or 500 million events by
+  default, whichever binds first. Every chart, funnel, cohort and profile covers it, and every
+  answer says which dates it covers.
+
+### Enabling analytics
+
+Events live in their own store, the **event store**, a ClickHouse server your operator turns on:
+with the compose profile `analytics`, or by pointing Inlet at a ClickHouse of their own with
+`INLET_CLICKHOUSE_URL` (see [DEPLOYMENT.md](DEPLOYMENT.md)). A deployment without it runs
+everything else unchanged, and trying to create an analytics database there tells you the one
+step that enables it. If the event store later becomes unreachable, every analytics screen says
+so in one sentence and the rest of Inlet works as usual.
+
+### Creating an analytics database
 
 **Project → Databases → New analytics database.** Give it a name, one per product, which
 may ship several apps. The form proposes your browser's timezone as the **reporting
@@ -320,7 +349,71 @@ form proposes its former name (`Europe/Kiev`), which counts exactly the same hou
 The database opens on **Insights → Overview**, with four groups: **Insights** (Overview,
 Events, Funnels, Cohorts), **Users**, **Collect** and **Settings**.
 
-### Overview: reading the home
+### Integrating the SDK, with consent
+
+Your app sends events with `inlet-sdk/analytics`, which has entries for browsers, React Native,
+Electron and Node, or with plain HTTP batches ([API.md](API.md#analytics-ingest)). The project's
+existing publishable key works: an analytics database needs no new credential.
+
+An installation ID stored on a device generally requires consent in the European Union, and
+deciding the lawful basis of that collection is yours. So start the SDK disabled and turn it on
+in your consent callback:
+
+```ts
+import * as analytics from 'inlet-sdk/analytics/browser';
+
+analytics.init({
+  baseUrl: 'https://inlet.example.com',
+  publishableKey: 'ipk_…',
+  analyticsDatabaseId: 'adb_…',
+  app: { version: '1.4.0' },
+  enabled: false, // nothing is stored or sent until consent
+});
+
+// In your consent callback, once the person agrees (and at every start after):
+analytics.setEnabled(true);
+
+analytics.track('checkout_completed', { params: { plan: 'pro', items: 3 } });
+```
+
+On the first enable the SDK creates the installation and sends `app_installed` and
+`app_started`; they appear in **Collect** within seconds. Add `track` calls for the actions that
+matter, `setUserId` after sign-in, and `setExperiment('checkout', 'B')` for an A/B test. While
+analytics is enabled, the SDK's crash and feedback modules attach the same installation ID to
+their reports and submissions, which is what links a profile to its crashes and feedback. The
+[SDK's README](../packages/sdk/README.md#ux-analytics) covers every entry and option, and
+withdrawing consent (`setEnabled(false, { forget: true })`).
+
+### Collect: checking events arrive
+
+**Collect** holds everything an app needs to send events:
+
+- **The database ID and the project's publishable keys**, each with a copy button. Both are
+  safe to ship inside an app; a publishable key can send events and do nothing else.
+- **A snippet per runtime**: browser, React Native, Electron main and renderer, and a Node
+  server, each consent-first as above.
+- **Send a test event.** One click sends a `test_event` through the same path your app
+  uses, in environment `development`, from a test installation that counts in no
+  installation, active, session or cohort figure and takes no slot of the database's
+  500 event names. Use it to check the database accepts events before you ship.
+- **The live feed**: the latest events the database accepted, newest first, refreshed every
+  three seconds, each with its time, name, the start of its installation ID, platform and app
+  version. **Pause** stops the refresh while you read. The feed is kept in the server's memory
+  (the last 500 events), so it starts empty after a restart; stored events are not affected.
+
+Events are checked one by one as they arrive: a batch stores every valid event and reports
+each refused one with its reason, which `inlet-sdk` passes to your `onDrop`. A database accepts
+at most 500 distinct event names, 50 new ones an hour, 100 param keys and 10 categories per
+event name, unless your operator changed those; an event older than the lateness window (30 days
+by default, see [Keeping storage bounded](#keeping-storage-bounded)) is refused. The
+[API reference](API.md#analytics-ingest) lists every rule.
+
+While events are being refused because the database holds as many event names as it may, or
+because more new names arrived within an hour than it accepts, Collect shows a notice above
+the live feed with a link to **data health** (Settings → Storage). Events with names already
+seen are still stored; delete or block names you no longer send in **Events**.
+
+### Overview
 
 **Insights → Overview** answers "how is the product used right now?" on one screen.
 
@@ -328,7 +421,9 @@ Events, Funnels, Cohorts), **Users**, **Collect** and **Settings**.
 today and includes it), an app (shown once the database has seen more than one), a platform,
 an environment and what to count. The filters in force are the chips under the bar, the
 defaults marked as such: every app, every client platform, `production` only, installations.
-Remove the environment chip to read every environment the database has seen. Switch **Count**
+Remove a chip to go back to its default: the range chip returns to the last 30 days, and removing
+the environment chip reads every environment the database has seen. **Dates** in the range list
+starts both ends on today in the database's reporting timezone. Switch **Count**
 to **User IDs** to read active users instead of active installations: it changes the active
 figures only.
 
@@ -373,43 +468,12 @@ report arrives days later, on the next launch. A version reads **Not measured** 
 its sessions started with a crash module enabled: its sessions would otherwise all look
 crash-free. In a browser this also happens when none of the page's scripts lies within the
 crash module's `appRoots`, the fix being to set them (see the SDK's README). Below 100 sessions
-the figure is marked **Low confidence**.
+the figure is marked **Low confidence**. The **Sessions** column counts the sessions that reported a
+crash module, so a version not measured shows **—** there rather than 0.
 
 A database that has received no event yet says so and links to **Collect**.
 
-### Collect: sending events
-
-**Collect** holds everything an app needs to send events:
-
-- **The database ID and the project's publishable keys**, each with a copy button. Both are
-  safe to ship inside an app; a publishable key can send events and do nothing else. The
-  project's existing key works: an analytics database needs no new credential.
-- **A snippet per runtime**: browser, React Native, Electron main and renderer, and a Node
-  server. Each starts the SDK disabled and turns it on with `setEnabled(true)` in your
-  consent callback, because an installation ID stored on a device generally requires consent
-  in the European Union. Deciding the lawful basis of that collection is yours; the SDK
-  stores and sends nothing until you enable it.
-- **Send a test event.** One click sends a `test_event` through the same path your app
-  uses, in environment `development`, from a test installation that counts in no
-  installation, active, session or cohort figure and takes no slot of the database's
-  500 event names. Use it to check the database accepts events before you ship.
-- **The live feed**: the latest events the database accepted, newest first, refreshed every
-  three seconds, each with its time, name, the start of its installation ID, platform and app
-  version. **Pause** stops the refresh while you read. The feed is kept in the server's memory
-  (the last 500 events), so it starts empty after a restart; stored events are not affected.
-
-Events are checked one by one as they arrive: a batch stores every valid event and reports
-each refused one with its reason, which `inlet-sdk` passes to your `onDrop`. A database accepts
-at most 500 distinct event names, 50 new ones an hour, 100 param keys and 10 categories per
-event name, unless your operator changed those; events older than 30 days are refused. The
-[API reference](API.md#analytics-ingest) lists every rule.
-
-While events are being refused because the database holds as many event names as it may, or
-because more new names arrived within an hour than it accepts, Collect shows a notice above
-the live feed with a link to **data health** (Settings → Storage). Events with names already
-seen are still stored; delete or block names you no longer send in **Events**.
-
-### Events: the catalog and its charts
+### Events and trends
 
 **Insights → Events** lists every event name the database has received, with its category,
 its description, when it was last seen and its events, installations and user IDs in the
@@ -427,7 +491,8 @@ event out of the list and the pickers without touching its data. An Admin can al
 a name, which refuses its new events from the next batch while keeping what is stored (the
 way to stop a flood of a name you never meant to send), or **Delete** it, typing its name:
 every stored event of it becomes unreadable at once and the name frees its place among the
-database's 500. If an app sends it again, it comes back as a new event. Standard events can
+database's 500. Its events are removed from the event store in the background, and from its
+files on disk within your operator's erasure bound (30 days by default). If an app sends it again, it comes back as a new event. Standard events can
 be neither blocked nor deleted.
 
 **Reading a chart.** Click an event's name to chart it: unique installations per day over
@@ -459,11 +524,11 @@ passes to `setExperiment('checkout', 'B')`: each variant gets its line, and choo
 metric *Unique user IDs* or adding a filter on the outcome event answers "how many in B
 did it".
 
-When a chart says every query slot is busy, the server is answering other charts; try again
-in a few seconds. When it says the chart took too long, choose a shorter range or a coarser
-interval.
+When a chart, a funnel or a cohort says every query slot is busy, the server is answering other
+queries; try again in a few seconds. When it says the query took too long or needed too much
+memory, choose a shorter range or a coarser interval.
 
-### Funnels: where people stop
+### Funnels
 
 **Insights → Funnels** answers "of the people who start onboarding, how many finish, where do
 the others stop, and is it getting better?" The list shows each saved funnel with its steps,
@@ -477,7 +542,7 @@ chart. Say, "Onboarding": `app_installed`, `signup_completed`, `first_project_cr
 - **Mode.** *Closed* (the default) counts only people who start at step 1. *Open* lets people
   enter at whichever step they reach first, which suits a flow people can join halfway, such as
   a checkout reachable from several screens.
-- **Window.** How long after entering someone may take to finish, from one minute to 90 days,
+- **Window**, the conversion window. How long after entering someone may take to finish, from one minute to 90 days,
   seven days by default. It is counted from the moment they entered, not from the previous step:
   with seven days, someone who starts on Monday must reach the last step by the next Monday.
 - **Count.** Installations (the default) or user IDs. A user-ID funnel ignores events without a
@@ -515,11 +580,15 @@ both weeks, which is why the page says "Each week counts the installations that 
 week, so the weeks need not add up to the whole range." A period is **incomplete** — a dashed
 line with a hollow point, and "(incomplete)" in the table — while its entries' window is still
 open: with a seven-day window, last week's entrants may still convert until seven days after the
-week ends. Do not read a dip in the last points as a decline until they are complete.
+week ends. Do not read a dip in the last points as a decline until they are complete. A period nobody
+entered has no conversion at all: the chart leaves a gap there and its table shows **—**, never
+0%.
 
 A trend over many months reads a lot of events, so it may take a while; the page shows how long
 it has been running. It has its own time limit, two minutes by default, and does not hold up your
-other charts. If it runs out of time, choose a shorter range or a coarser interval.
+other charts. A long range that needs more memory than one query is allowed spills to the event
+store's disk and answers more slowly rather than failing; cohorts do the same. If it runs out of
+time, choose a shorter range or a coarser interval.
 
 **Experiments.** Split by an experiment key to read conversion per variant, taken from each
 person's entering event. The page labels it descriptive: it reports what happened in each
@@ -529,7 +598,7 @@ variant and runs no significance test, so treat small differences with care.
 that starts before the oldest event kept covers what is kept, and says so. If an event a saved
 funnel uses is deleted, that step shows no one and the page says why.
 
-### Cohorts: who comes back
+### Cohorts
 
 **Insights → Cohorts** answers "of the people who installed in a given week, how many came back
 the week after, and the week after that?" The list shows each saved cohort with its start,
@@ -601,7 +670,7 @@ IDs: a user ID stays the same across browsers and reinstalls.
 period, period 0 being the size. If an event a saved cohort uses is deleted, the page says so and
 that start or return has no one.
 
-### Users: looking someone up
+### Users and profiles
 
 Support gets a message from a user, with the user ID your app gave them, or an installation
 ID from a crash report. **Users** finds everything the database knows about them.
@@ -613,8 +682,8 @@ installation it was seen on. Without a search, the page lists the installations 
 recently, newest first, 50 a page, and the filters narrow them to a platform, an app version,
 a country or an environment, as each installation last reported.
 
-Two kinds of installation appear there. A **device** installation is one install of your app on
-one phone, computer or browser profile. A **server** installation, marked *server*, is the one
+Two kinds of installation appear there. A **device** installation is an installation as defined
+above. A **server** installation, marked *server*, is the one
 Inlet makes for events your backend sends with a user ID and no installation ID; its last-seen
 time is its last event. An installation marked *ephemeral* could not keep its ID (a private
 window, blocked storage), so it lasts only as long as that page or process. The test
@@ -675,7 +744,8 @@ either way.
   It holds the events, and not the installation records and first occurrences derived from
   them; a profile's **Export** carries those for one installation or user.
 - **Storage**: what the database keeps, what it uses, and its data health (Admins see the
-  settings; everyone sees data health). See [Keeping storage bounded](#keeping-storage-bounded)
+  settings; everyone sees data health). Erasing a person's data is not here but in the project's
+  settings: see [Honouring an erasure request](#honouring-an-erasure-request). See [Keeping storage bounded](#keeping-storage-bounded)
   and [Data health and incidents](#data-health-and-incidents) below.
 - **Notifications**: the shared Slack panel. An analytics database announces data-health
   incidents only, their opening and their resolution, so there is no content level to choose;
@@ -683,7 +753,7 @@ either way.
 - **Access**: members and invitations for this database alone, as for any other.
 
 When the event store is unreachable, the database's page says so in one sentence; its
-settings still open, and the rest of Inlet works as usual.
+settings and data health still open.
 
 ### Keeping storage bounded
 
@@ -848,7 +918,7 @@ claude mcp add inlet \
   -- node "$PWD/apps/mcp/dist/server.js"
 ```
 
-It authenticates with a secret server key and exposes 71 tools, feedback, crash reports and analytics together. Read-only tools are
+It authenticates with a secret server key and exposes 95 tools, feedback, crash reports and analytics together. Read-only tools are
 marked as such, so an agent can explore without changing anything, and the destructive
 ones require confirmation. Full list in [MCP.md](MCP.md).
 

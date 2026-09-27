@@ -11,7 +11,7 @@ import {
 } from '../db/schema.js';
 import type { OperatorLimits } from '../env.js';
 import { randomToken } from '../lib/crypto.js';
-import { ApiError, apiError } from '../lib/errors.js';
+import { ApiError, apiError, errors } from '../lib/errors.js';
 import { SqlParams, readSkip } from './analytics-query.js';
 import { deleteNotificationRows } from './projects.js';
 
@@ -110,6 +110,11 @@ export async function createAnalyticsDatabase(
 ): Promise<AnalyticsDatabaseRow> {
   const limits = ctx.env.limits;
   return ctx.db.transaction(async (tx) => {
+    // Serialised with `deleteProject`, which locks the project row FOR UPDATE: a creation that
+    // arrives while its project is being deleted waits, then answers 404 rather than failing
+    // its foreign key (release 8 hardening).
+    const project = await tx.execute(sql`select id from projects where id = ${input.projectId} for key share`);
+    if (project.rows.length === 0) throw errors.projectNotFound();
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext('inlet.analytics_databases'))`);
     const [existing] = await tx.select({ n: count() }).from(analyticsDatabases);
     if ((existing?.n ?? 0) >= limits.analyticsDatabasesMax) {

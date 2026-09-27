@@ -325,7 +325,11 @@ function registerErrorHandler(app: FastifyInstance): void {
       return reply.code(499).send();
     }
     if (error instanceof ApiError) {
-      if (error.status >= 500) request.log.error({ err: error }, 'request failed');
+      // The event store down, warming up, or a query past its limit is an expected answer
+      // (AN-005, AN-205), not a fault: at warn, without a stack, so an outage does not fill
+      // the log with errors (release 8 hardening). Every other 5xx stays an error.
+      if (EXPECTED_UNAVAILABILITY.has(error.code)) request.log.warn({ code: error.code }, error.message);
+      else if (error.status >= 500) request.log.error({ err: error }, 'request failed');
       if (error.retryAfterSeconds !== undefined) reply.header('retry-after', String(error.retryAfterSeconds));
       return reply.code(error.status).send(error.toBody());
     }
@@ -361,6 +365,9 @@ function registerErrorHandler(app: FastifyInstance): void {
     });
   });
 }
+
+/** The 503s the analytics routes answer by design; logged at warn by the error handler. */
+const EXPECTED_UNAVAILABILITY: ReadonlySet<string> = new Set(['analytics_unavailable', 'analytics_busy', 'query_limit_exceeded']);
 
 /**
  * Fastify and plugin errors carry their own codes and statuses; map them into the

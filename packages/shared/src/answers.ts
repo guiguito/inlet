@@ -21,8 +21,11 @@ export const answerInputSchema = z.union([
 export const answersInputSchema = z.record(z.string(), answerInputSchema);
 
 /** The schema accepts exactly the four shapes `feedback-core.ts` validates. */
-type Exact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
+// `false` rather than `never`, each entry through `Assert`: a tuple holding `never` compiles,
+// so the earlier form of this check could never fail (release 8 hardening, as `analytics.ts`).
+type Exact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+type Assert<T extends true> = T;
 type _SchemaMatchesTheType = [
-  Exact<z.infer<typeof answerInputSchema>, AnswerInput>,
-  Exact<z.infer<typeof answersInputSchema>, AnswersInput>,
+  Assert<Exact<z.infer<typeof answerInputSchema>, AnswerInput>>,
+  Assert<Exact<z.infer<typeof answersInputSchema>, AnswersInput>>,
 ];

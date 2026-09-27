@@ -79,6 +79,21 @@ export const LABELS = {
   op: { is: 'is', isNot: 'is not', isSet: 'is set', isNotSet: 'is not set', startsWith: 'starts with', contains: 'contains', gt: 'greater than', lt: 'less than', between: 'between' },
 } as const;
 
+/** Today's date in the database's reporting timezone, `YYYY-MM-DD` (AN-002: days are its days). */
+export function todayInZone(timezone: string, now: Date = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+}
+
+/**
+ * Where a custom range starts: today in the database's reporting timezone, read from the page's
+ * cached copy of the database (UTC for the instant before it arrives). Every analytics screen's
+ * "Dates" uses it, as the Overview's does (release 8 hardening).
+ */
+export function useDatabaseToday(databaseId: string): () => string {
+  const timezone = useQuery({ queryKey: ['analytics-database', databaseId], queryFn: () => api.getAnalyticsDatabase(databaseId), staleTime: Infinity }).data?.timezone;
+  return () => todayInZone(timezone ?? 'UTC');
+}
+
 /** One sentence each for the states a query can end in (PRD 8.1, 9.5). */
 export function queryErrorSentence(error: unknown, unreachable: string): string {
   if (error instanceof ApiError) {
@@ -325,6 +340,7 @@ function ChartBuilder({
   unreachable: string;
 }) {
   const catalog = useQuery({ queryKey: ['analytics-events', databaseId, 'picker'], queryFn: () => api.listAnalyticsEvents(databaseId) });
+  const today = useDatabaseToday(databaseId);
   const trend = useQuery({
     queryKey: ['analytics-trend', databaseId, query],
     queryFn: ({ signal }) => api.analyticsTrend(databaseId, query, signal),
@@ -443,10 +459,8 @@ function ChartBuilder({
               value={custom ? 'custom' : (chart.range as { preset: string }).preset}
               onChange={(event) => {
                 const value = event.target.value;
-                if (value === 'custom') {
-                  const today = new Date().toISOString().slice(0, 10);
-                  update({ range: { from: today, to: today } });
-                } else update({ range: { preset: value as (typeof ANALYTICS_RANGE_PRESETS)[number] } });
+                if (value === 'custom') update({ range: { from: today(), to: today() } });
+                else update({ range: { preset: value as (typeof ANALYTICS_RANGE_PRESETS)[number] } });
               }}
             >
               {ANALYTICS_RANGE_PRESETS.map((preset) => (

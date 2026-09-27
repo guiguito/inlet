@@ -15,7 +15,7 @@ import {
 } from '@inlet/shared';
 import { api, ApiError } from '@/lib/api';
 import { cohortsApi, type CohortAnswer, type SavedCohort } from '@/lib/analytics-cohorts';
-import { FilterList, LABELS, SELECT, complete, queryErrorSentence } from '@/components/analytics-events';
+import { FilterList, LABELS, SELECT, complete, queryErrorSentence, useDatabaseToday } from '@/components/analytics-events';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { EmptyState } from '@/components/empty-state';
 import { Badge } from '@/components/ui/badge';
@@ -183,6 +183,7 @@ function CohortEditor({
   const [name, setName] = useState(saved?.name ?? '');
   const [draft, setDraft] = useState<AnalyticsCohortDefinition>(saved?.definition ?? DEFAULT_DEFINITION);
   const [range, setRange] = useState<AnalyticsRange | null>(saved?.definition.defaultRange ?? null);
+  const today = useDatabaseToday(databaseId);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const catalog = useQuery({ queryKey: ['analytics-events', databaseId, 'picker'], queryFn: () => api.listAnalyticsEvents(databaseId) });
   const names = (catalog.data?.events ?? []).map((entry) => entry.name);
@@ -360,10 +361,8 @@ function CohortEditor({
               onChange={(event) => {
                 const value = event.target.value;
                 if (value === 'default') setRange(null);
-                else if (value === 'custom') {
-                  const today = new Date().toISOString().slice(0, 10);
-                  setRange({ from: today, to: today });
-                } else setRange({ preset: value as (typeof ANALYTICS_RANGE_PRESETS)[number] });
+                else if (value === 'custom') setRange({ from: today(), to: today() });
+                else setRange({ preset: value as (typeof ANALYTICS_RANGE_PRESETS)[number] });
               }}
             >
               <option value="default">The last 12 {draft.granularity}s</option>

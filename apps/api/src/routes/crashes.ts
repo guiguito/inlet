@@ -5,6 +5,7 @@ import {
   CRASH_GROUPING_VERSION,
   CRASH_LIMITS,
   LIMITS,
+  NestingTooDeepError,
   crashEnvelopeSchema,
   newId,
   sanitizeDeep,
@@ -93,7 +94,17 @@ export function parseEnvelope(input: unknown): CrashEnvelope {
     throw apiError('invalid_envelope', 'A crash report is a JSON object.');
   }
   // CR-011: U+0000 and lone surrogates would fail the jsonb insert; cleaned before validation.
-  const raw = sanitizeDeep(input);
+  // A value nested past JSON_NESTING_MAX is refused here, before anything walks it
+  // recursively (release 8 hardening: 20,000 levels in a 40 KB body answered 500).
+  let raw: unknown;
+  try {
+    raw = sanitizeDeep(input);
+  } catch (error) {
+    if (!(error instanceof NestingTooDeepError)) throw error;
+    throw apiError('invalid_envelope', 'The crash report is not a valid envelope.', [
+      { path: error.path, code: 'too_deep', message: error.message },
+    ]);
+  }
   if (utf8Length(JSON.stringify(raw)) > CRASH_LIMITS.envelopeMaxBytes) {
     throw apiError('envelope_too_large', `A crash report is at most ${CRASH_LIMITS.envelopeMaxBytes / 1024} KiB serialized.`);
   }

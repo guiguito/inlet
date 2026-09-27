@@ -27,6 +27,7 @@ import {
   runAnalyticsQuery,
   splitExpression,
   todayIn,
+  withSpill,
   zonedMidnight,
   type Covered,
   type FilterScope,
@@ -556,7 +557,9 @@ export async function runFunnel(ctx: AppContext, database: AnalyticsDatabaseRow,
   const { definition, view, range } = prepared;
   const timezone = database.timezone;
 
-  return runAnalyticsQuery(ctx, principal, view.kind === 'trend' ? 'funnelTrend' : 'query', async (store, settings) => {
+  return runAnalyticsQuery(ctx, principal, view.kind === 'trend' ? 'funnelTrend' : 'query', async (store, limits) => {
+    // The per-unit walk spills past half the memory limit rather than fail a long range (9.5).
+    const settings = withSpill(limits);
     const keptFrom = await oldestKeptDay(store, database, settings);
     const coverage = coverageOf(range, keptFrom, todayIn(timezone, nowMs));
     const splitDef = definition.split;
@@ -680,7 +683,8 @@ export async function funnelUnits(ctx: AppContext, database: AnalyticsDatabaseRo
   const runAt = eventStoreTime(runMs);
   const byUser = prepared.definition.unit === 'user';
 
-  const page = await runAnalyticsQuery(ctx, principal, 'query', async (store, settings) => {
+  const page = await runAnalyticsQuery(ctx, principal, 'query', async (store, limits) => {
+    const settings = withSpill(limits);
     const keptFrom = await oldestKeptDay(store, database, settings);
     const coverage = coverageOf(prepared.range, keptFrom, todayIn(database.timezone, runMs));
     if (!coverage.covered) return { covered: coverage.covered, rows: [], summaries: new Map<string, SummaryRow>(), users: new Map<string, string>() };

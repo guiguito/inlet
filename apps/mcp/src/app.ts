@@ -97,6 +97,12 @@ export function createServer(config: McpConfig): McpServer {
         'granularity, range and population filters. Queries share a few slots: an',
         'analytics_busy answer means retry shortly, query_limit_exceeded a shorter range or a',
         'coarser interval.',
+        'get_analytics_overview answers the home screen in one call. run_analytics_funnel finds',
+        'where units stop (closed, a 7-day window from entry, by default), and',
+        'list_analytics_funnel_units lists who dropped at a step, ready for get_analytics_profile,',
+        'which links an installation or a user ID to the crash reports and submissions carrying',
+        'it. To delete someone’s data, call preview_erasure first, then erase_identity with the ID',
+        'repeated. get_analytics_storage says what the storage window keeps at the measured volume.',
       ].join('\n'),
     },
   );

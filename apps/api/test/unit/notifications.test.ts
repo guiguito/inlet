@@ -11,7 +11,7 @@ import {
   type FormDefinition,
   type StoredAnswers,
 } from '@inlet/shared';
-import { buildSlackMessage, type SlackMessageInput } from '../../src/services/slack-message.js';
+import { buildCrashSlackMessage, buildSlackMessage, type SlackMessageInput } from '../../src/services/slack-message.js';
 
 /** Slack notification rendering and validation (FR-159 to FR-166). */
 
@@ -220,6 +220,28 @@ describe('buildSlackMessage', () => {
     expect(JSON.stringify(message.blocks[0])).toContain(
       '<https://inlet.example/databases/fdb_beta00000/submissions/sub_one000000|Open in Inlet>',
     );
+  });
+
+  it('escapes the database name in the default heading, so a name cannot carry Slack markup (release 8 hardening)', () => {
+    const message = buildSlackMessage(input({ databaseName: 'Beta <!channel> & <@U123>' }));
+    expect(message.text).toBe('New response in Beta &lt;!channel&gt; &amp; &lt;@U123&gt;');
+    expect(JSON.stringify(message)).not.toContain('<!channel>');
+    // The operator's own title is theirs, markup included.
+    expect(buildSlackMessage(input({ settings: { ...input().settings, messageTitle: '<!here> triage' } })).text).toBe('<!here> triage');
+  });
+
+  it('escapes the database name in the crash headings too', () => {
+    const crash = (kind: 'crash_group_opened' | 'crash_group_regressed') =>
+      buildCrashSlackMessage({
+        kind,
+        databaseName: 'Desktop <!channel>',
+        groupUrl: 'https://inlet.example/crash-databases/cdb_x/groups/cg_x',
+        group: { kind: 'exception', exceptionType: 'TypeError', topFrame: 'run', module: null, count: 1, affectedUsers: 1, firstSeenAt: new Date('2026-09-09T14:02:11.000Z'), lastRelease: '1.4.0', resolvedInRelease: null },
+        settings: { messageTitle: null, channel: null, username: null, iconEmoji: null },
+      });
+    expect(crash('crash_group_opened').text).toBe('New crash group in Desktop &lt;!channel&gt;');
+    expect(crash('crash_group_regressed').text).toBe('Crash regression in Desktop &lt;!channel&gt;');
+    expect(JSON.stringify(crash('crash_group_opened'))).not.toContain('<!channel>');
   });
 
   it('carries the answers, with the labels the respondent saw', () => {

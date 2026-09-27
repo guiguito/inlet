@@ -443,6 +443,17 @@ host, raise them in `.env`:
 The server settings themselves are in `deploy/clickhouse/config.xml`, mounted into the
 container, if you need to change anything else.
 
+**Temporary disk for long funnels and cohorts.** A funnel or a cohort over a long range holds an
+array per installation while it aggregates, and past half of `INLET_ANALYTICS_QUERY_MEMORY_BYTES`
+ClickHouse writes that aggregation to its temporary directory instead of refusing the query with
+`query_limit_exceeded` (DECISIONS 33.12a). The answer is the same; it takes longer. The bundled
+service keeps that directory at ClickHouse's default, `/var/lib/clickhouse/tmp/`, inside the
+`clickhousedata` volume, so it uses the same disk as the events. Keep free space on that volume of
+at least the query memory limit times the query slots — 2.25 GiB at the defaults (three slots of
+768 MiB), about 24 GB on the reference host at 8 GB a query — beyond what the events take; the
+files are deleted as soon as each query ends. On your own ClickHouse, the same applies to its
+`tmp_path`.
+
 ### The two users
 
 Inlet connects to ClickHouse as two users, defined in `deploy/clickhouse/users.xml`:
@@ -562,6 +573,12 @@ What the server's analytics worker does, all in the API process, none of it on a
   of 5,000, then the record. An unreachable event store only delays the drops.
 - **Every minute, incidents** from the refusal counters (see Slack notifications below).
 - **Every 30 seconds, erasures.** See [Erasure on disk](#erasure-on-disk) below.
+- **Every 30 seconds, event-name deletions.** A deleted event name's rows are removed with a
+  lightweight `DELETE`, submitted without waiting; like an erasure's, those rows then stay masked
+  in the files until a merge rewrites them, so once half of `INLET_ANALYTICS_ERASURE_BOUND_DAYS`
+  has passed since the deletion the worker rewrites the partitions still carrying them with
+  `APPLY DELETED MASK` (AN-056, AN-184), and records in PostgreSQL
+  (`analytics_event_name_deletions.files_cleared_at`) when no file holds them.
 
 **A deletion that keeps failing.** A lightweight `DELETE` needs memory in proportion to the
 part it rewrites; on a small memory ceiling it may fail again and again, and ClickHouse keeps
@@ -714,6 +731,13 @@ as its method and its **route pattern** (`/v1/crash-databases/:databaseId/report
 its URL, and without the client's address or port, so no identifier from a path or a
 query string, and no ingest request's address, reaches your logs.
 
+Levels: a request that fails on Inlet's side (a 5xx) is logged at `error` with its stack. The
+three answers analytics gives by design — `503 analytics_unavailable` while the event store is
+down or in the two seconds after it becomes ready, `analytics_busy` when every query slot is
+taken, `query_limit_exceeded` when a query passes its time or memory limit — are logged at `warn`
+with their code and message and no stack, so a ClickHouse outage does not fill the log with
+errors. Alert on `error`; watch the `warn` rate for a store that stays down.
+
 Three workers run inside the API process and log what they do: one purges screenshot
 objects after a deletion, one delivers Slack notifications with backoff, and one runs
 the crash-report retention pass at start and then hourly, evicting reports past a crash
@@ -767,3 +791,14 @@ URL.
 
 **The malware profile will not pull on Apple Silicon.** Expected — see
 [Apple Silicon](#apple-silicon).
+
+**ClickHouse logs `Listen [::]:8123 failed … Address family for hostname not supported`.**
+Harmless: the image tries IPv6 and IPv4, and Docker Desktop's network has no IPv6. It listens
+on IPv4, which is how Inlet reaches it.
+
+**Analytics did not appear right after adding the profile.** `docker compose --profile
+analytics up -d` on a running stack needs no restart of Inlet: it retries the event store in the
+background, at most a minute apart, and lists `analytics` once ClickHouse answers and its
+migrations have run (22 seconds in the Release 8 check, DECISIONS §33.12c). If Inlet restarts
+while ClickHouse is down, existing analytics databases answer `503 analytics_unavailable` and
+only creating one answers `analytics_not_enabled`, until ClickHouse is back.

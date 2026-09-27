@@ -90,7 +90,7 @@ INLET_URL=https://inlet.example.com INLET_SECRET_KEY=isk_... node apps/mcp/dist/
 | --- | --- |
 | `INLET_URL` | Your deployment's base URL. Required. |
 | `INLET_SECRET_KEY` | A secret server key (`isk_…`). Required. A publishable key is refused at startup with an explanation. |
-| `INLET_TIMEOUT_MS` | How long to wait for Inlet. Default 30000. |
+| `INLET_TIMEOUT_MS` | How long to wait for Inlet, in milliseconds. Default 30000. Analytics calls (every `adb_…` route, `preview_erasure` and `erase_identity`) wait at least 150000, since a funnel trend may run for the operator's funnel-trend limit (120 s by default) before the server answers; if you raise that limit (`INLET_ANALYTICS_FUNNEL_TREND_TIME_S`), set this above it, which lengthens every call's wait. |
 
 This process writes only protocol traffic to stdout, so diagnostics go to stderr.
 
@@ -223,8 +223,9 @@ on one device or browser profile, with a random ID the SDK creates; it is the de
 of every unique count, and a user ID the integrator sets after sign-in is the other. Every
 analytics answer covers the database's storage window (13 months or 500 million events by
 default) and states the range it covers, and a range preset such as `last30Days` ends today
-and includes it. The server's instructions say the same, so an agent reads it before it
-calls anything. The database tools, the test event, the live feed, the Overview, the catalog
+and includes it. The server's instructions say the same, and name the loop an agent runs —
+the Overview, a funnel and the units that dropped, their profiles and linked crashes and
+feedback, and the preview before an erasure — so an agent reads it before it calls anything. The database tools, the test event, the live feed, the Overview, the catalog
 and Lexicon tools, trends, profiles, funnels, cohorts, storage and data health, the event export and the
 project's erasure below exist now (UX Analytics PRD section 8.3).
 
@@ -340,7 +341,7 @@ shorter range or a coarser interval).
 | `delete_analytics_funnel` | The funnel's exact name as `confirm`; the tool reads the funnel first and refuses a name that does not match. Only the saved definition goes. |
 | `delete_analytics_cohort` | The cohort's exact name as `confirm`; the tool reads the cohort first and refuses a name that does not match. Only the saved definition goes; the standard Retention cohort answers `standard_cohort_immutable`. |
 | `erase_identity` | The same ID again as `confirm`, and `databases`, the IDs to erase in from `preview_erasure`. Deletes the crash reports (and the user ID's group-user associations, affected users adjusted, counts unchanged) and submissions (with screenshots) carrying the ID or the installations erased with a user ID, and the analytics events and derived records, unreadable at once and removed from the event store within the operator's bound (30 days by default). Answers what it deleted per database, `deferred` for an analytics database the event store could not reach. Recorded with its actor and counts, never the ID. |
-| `delete_analytics_event` | The event's exact name as `confirm`. Its events are unreadable at once and removed from the event store in the background; its slot under the limit is freed; the name comes back as a new event if an app sends it again. Not for standard events. |
+| `delete_analytics_event` | The event's exact name as `confirm`. Its events are unreadable at once and removed from the event store in the background, and from its files within the operator's erasure bound (30 days by default, AN-184); its slot under the limit is freed; the name comes back as a new event if an app sends it again. Not for standard events. |
 
 `list_members`, `invite_member`, `set_member_role`, `remove_member`, `list_invitations`,
 `revoke_invitation`, `get_slack_notifications`, `update_slack_notifications`,

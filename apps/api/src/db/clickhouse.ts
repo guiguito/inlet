@@ -45,7 +45,10 @@ export type EventStoreState = 'not_configured' | 'pending' | 'ready';
  * and the two a statement may add to stay within them: aggregation in the table's order and
  * external aggregation (cohorts, DECISIONS 33.8).
  */
-export type QuerySettings = Pick<ClickHouseSettings, 'max_execution_time' | 'max_memory_usage' | 'max_threads' | 'optimize_aggregation_in_order' | 'max_bytes_before_external_group_by'>;
+export type QuerySettings = Pick<
+  ClickHouseSettings,
+  'max_execution_time' | 'max_memory_usage' | 'max_threads' | 'optimize_aggregation_in_order' | 'max_bytes_before_external_group_by' | 'max_bytes_before_external_sort'
+>;
 
 /** A query's parameters, bound server-side by name: `{databaseKey:UInt32}` takes `params.databaseKey`. */
 export type QueryParams = Record<string, unknown>;

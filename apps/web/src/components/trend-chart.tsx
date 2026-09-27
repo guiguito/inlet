@@ -1,5 +1,5 @@
 import { useId } from 'react';
-import type { AnalyticsTrendAnswer } from '@/lib/api';
+import type { AnalyticsTrendAnswer, AnalyticsTrendPoint } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 /**
@@ -15,8 +15,17 @@ import { cn } from '@/lib/utils';
  * - Optional markers (the Overview's app versions, AN-142): a dashed vertical line on the period
  *   each starts, and the same list as text under the drawing.
  *
+ * - A gap (a point whose value is null: a funnel's entry group with no entries, whose conversion
+ *   is undefined rather than 0%) has no point, breaks the line, and reads "—" in the table.
+ *
  * Every label is user-authored or data (event names, split values) and is rendered as text.
  */
+
+/** A trend answer whose points may be gaps (`value: null`); every trend answer is one. */
+export type ChartPoint = Omit<AnalyticsTrendPoint, 'value'> & { value: number | null };
+export type ChartAnswer = Omit<AnalyticsTrendAnswer, 'series'> & {
+  series: (Omit<AnalyticsTrendAnswer['series'][number], 'points'> & { points: ChartPoint[] })[];
+};
 
 /** Eleven distinguishable strokes for ten split values and Other; None reuses the muted one. */
 const COLORS = ['#2563eb', '#dc2626', '#16a34a', '#d97706', '#7c3aed', '#0891b2', '#db2777', '#65a30d', '#ea580c', '#4f46e5', '#737373'];
@@ -34,7 +43,7 @@ export function keptFromNote(keptFrom: string): string {
 
 export type ChartMarker = { day: string; label: string };
 
-export function TrendChart({ answer, markers = [], className }: { answer: AnalyticsTrendAnswer; markers?: ChartMarker[]; className?: string }) {
+export function TrendChart({ answer, markers = [], className }: { answer: ChartAnswer; markers?: ChartMarker[]; className?: string }) {
   const id = useId();
   const periods = answer.series[0]?.points ?? [];
   const width = 760;
@@ -42,7 +51,7 @@ export function TrendChart({ answer, markers = [], className }: { answer: Analyt
   const pad = { top: 12, right: 12, bottom: 24, left: 44 };
   const innerW = width - pad.left - pad.right;
   const innerH = height - pad.top - pad.bottom;
-  const max = Math.max(1, ...answer.series.flatMap((series) => series.points.map((point) => point.value)));
+  const max = Math.max(1, ...answer.series.flatMap((series) => series.points.flatMap((point) => (point.value === null ? [] : [point.value]))));
   const step = periods.length > 1 ? innerW / (periods.length - 1) : innerW;
   const x = (index: number) => pad.left + (periods.length > 1 ? index * step : innerW / 2);
   const y = (value: number) => pad.top + innerH - (value / max) * innerH;
@@ -127,6 +136,7 @@ export function TrendChart({ answer, markers = [], className }: { answer: Analyt
             <g key={`${series.label}-${seriesIndex}`} data-testid="trend-line">
               {series.points.slice(1).map((point, index) => {
                 const previous = series.points[index]!;
+                if (previous.value === null || point.value === null) return null;
                 return (
                   <line
                     key={point.start}
@@ -140,17 +150,19 @@ export function TrendChart({ answer, markers = [], className }: { answer: Analyt
                   />
                 );
               })}
-              {series.points.map((point, index) => (
-                <circle
-                  key={point.start}
-                  cx={x(index)}
-                  cy={y(point.value)}
-                  r={point.incomplete ? 3 : 2}
-                  stroke={color}
-                  strokeWidth={1.25}
-                  fill={point.incomplete ? 'var(--background, white)' : color}
-                />
-              ))}
+              {series.points.map((point, index) =>
+                point.value === null ? null : (
+                  <circle
+                    key={point.start}
+                    cx={x(index)}
+                    cy={y(point.value)}
+                    r={point.incomplete ? 3 : 2}
+                    stroke={color}
+                    strokeWidth={1.25}
+                    fill={point.incomplete ? 'var(--background, white)' : color}
+                  />
+                ),
+              )}
             </g>
           );
         })}
@@ -188,7 +200,7 @@ export function TrendChart({ answer, markers = [], className }: { answer: Analyt
                 </th>
                 {answer.series.map((series, index) => (
                   <td key={`${series.label}-${index}`} className="numeric px-3 py-1.5 text-right">
-                    {format(series.points[row]?.value ?? 0)}
+                    {series.points[row]?.value === null ? '—' : format(series.points[row]?.value ?? 0)}
                   </td>
                 ))}
               </tr>

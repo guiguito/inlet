@@ -6,7 +6,7 @@ import { identityUuidSchema } from '@inlet/shared';
 import type { AppContext } from '../context.js';
 import { crashGroups, crashReleases, crashReports } from '../db/schema.js';
 import { apiError } from '../lib/errors.js';
-import { CSV_BOM, toCsv } from '../lib/csv.js';
+import { toCsv } from '../lib/csv.js';
 import { requireCrashDatabase } from '../services/access.js';
 import { requireManagementPrincipal } from '../services/principal.js';
 import { databaseIdParam, errorsFor } from './schemas.js';
@@ -613,7 +613,7 @@ export function crashReadRoutes(ctx: AppContext): FastifyPluginAsyncZod {
               Object.entries(g.byRelease).map(([k, v]) => `${k}=${v}`).join(' '), Object.entries(g.byOs).map(([k, v]) => `${k}=${v}`).join(' '),
             ]),
           );
-          return reply.type('text/csv; charset=utf-8').header('content-disposition', `attachment; filename="${base}.csv"`).send(CSV_BOM + csv);
+          return reply.type('text/csv; charset=utf-8').header('content-disposition', `attachment; filename="${base}.csv"`).send(csv);
         }
         return reply
           .type('application/json; charset=utf-8')

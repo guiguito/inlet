@@ -2,9 +2,19 @@
 
 ## Unreleased
 
-UX analytics, and the identity it shares. **Nothing changes for an application that does
-not install the analytics module**: its crash reports and submissions carry exactly what
-0.2.0 sent, and nothing new is written to the device.
+UX analytics, and the identity it shares.
+
+**What an existing application sees.** Upgrading from 0.2.0 without installing the analytics
+module changes one thing: a Node process that awaits `flush(timeoutMs)` exits as soon as its
+queue is sent instead of when the timeout runs out (below). Its crash reports and submissions
+carry exactly what 0.2.0 sent, and nothing new is written to the device. Everything else below
+applies once you initialise `inlet-sdk/analytics`, and most of it only while analytics is
+enabled.
+
+- **`flush(timeoutMs)` no longer holds a Node process open**, in every module. The timeout's
+  timer used to outlive the flush, so a script or command-line tool that ended with
+  `await flush(10_000)` lived the full ten seconds after its queue was sent; the timer now ends
+  with the flush. Found by the release's end-to-end tests of the Node entry in device mode.
 
 - **`inlet-sdk/analytics`**, with `/browser`, `/node`, `/electron`, `/electron-renderer`
   and `/react-native` entries (UX Analytics AN-220 to AN-242): `init`, `track`, `screen`, `setUserId`, `setAttribution`, `setExperiment`,
@@ -13,7 +23,7 @@ not install the analytics module**: its crash reports and submissions carry exac
   consent callback. Events are checked with the server's own rules before they are queued.
   Standard events (`app_installed`, `app_updated`, `app_started`, `session_crashed`,
   `screen_viewed`), sessions shared by the tabs of an origin, a persistent queue in IndexedDB
-  or on disk, `keepalive` delivery when a page closes. The browser entry is 15.4 KB minified
+  or on disk, `keepalive` delivery when a page closes. The browser entry is 15.5 KB minified
   and gzipped. Needs a deployment whose `/v1/health` lists `analytics`; until then events
   wait, and the SDK asks again every ten minutes. `setExperiment` refuses the keys
   `__proto__`, `constructor` and `prototype` through `debug`, as the server refuses them as

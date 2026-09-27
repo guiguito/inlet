@@ -718,6 +718,24 @@ export async function querySettings(ctx: AppContext, store: EventStore, kind: Qu
   };
 }
 
+/**
+ * 9.5, AN-089: the funnel and cohort statements spill their aggregation (and any large sort) to
+ * the event store's temporary disk past half the query's memory, rather than answer
+ * `query_limit_exceeded` once a long range's per-unit arrays outgrow the limit (DECISIONS 33.7
+ * measured about 140 bytes per step occurrence). The answer is the same either way; only the
+ * time changes. A lower threshold already set (the cohort members' quarter) is kept.
+ */
+export function withSpill(settings: QuerySettings): QuerySettings {
+  const half = Math.floor(Number(settings.max_memory_usage ?? 0) / 2);
+  if (half <= 0) return settings;
+  const lower = (current: string | number | undefined) => String(current !== undefined && Number(current) > 0 ? Math.min(Number(current), half) : half);
+  return {
+    ...settings,
+    max_bytes_before_external_group_by: lower(settings.max_bytes_before_external_group_by),
+    max_bytes_before_external_sort: lower(settings.max_bytes_before_external_sort),
+  };
+}
+
 /** What a slot query reads through: `store.query`, bound to the request's abort signal. */
 export type ReadStore = Pick<EventStore, 'query'>;
 
