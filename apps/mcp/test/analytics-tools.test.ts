@@ -112,11 +112,85 @@ describe('analytics tools', () => {
     ]);
   });
 
+  it('registers the catalog, Lexicon and trend tools, and builds each request (AN-050 to AN-069, AN-204)', async () => {
+    const calls: Call[] = [];
+    const { handlers } = register(calls, {
+      '/v1/analytics-databases/adb_1/exports/catalog?format=json': { analyticsDatabaseId: 'adb_1', events: Array.from({ length: 1_500 }, (_, i) => ({ name: `e${i}` })) },
+    });
+    await handlers.get('list_analytics_events')!({ analyticsDatabaseId: 'adb_1', q: 'check', includeHidden: true, cursor: 'abc' });
+    await handlers.get('get_analytics_event')!({ analyticsDatabaseId: 'adb_1', name: 'checkout:done' });
+    await handlers.get('list_analytics_filter_values')!({ analyticsDatabaseId: 'adb_1', param: 'plan', event: 'checkout_completed' });
+    await handlers.get('query_analytics_trends')!({ analyticsDatabaseId: 'adb_1', definition: { series: [{ event: '*', metric: 'users' }] }, format: 'csv' });
+    await handlers.get('update_analytics_event')!({ analyticsDatabaseId: 'adb_1', name: 'checkout_completed', description: 'Paid.', hidden: false });
+    await handlers.get('update_analytics_event_param')!({ analyticsDatabaseId: 'adb_1', name: 'checkout_completed', key: 'plan', description: null });
+    await handlers.get('block_analytics_event')!({ analyticsDatabaseId: 'adb_1', name: 'spam', blocked: true });
+    await handlers.get('delete_analytics_event')!({ analyticsDatabaseId: 'adb_1', name: 'old_flow', confirm: 'old_flow' });
+    const first = JSON.parse(textOf(await handlers.get('export_analytics_catalog')!({ analyticsDatabaseId: 'adb_1' })));
+    const second = JSON.parse(textOf(await handlers.get('export_analytics_catalog')!({ analyticsDatabaseId: 'adb_1', cursor: first.nextCursor })));
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([
+      'GET /v1/analytics-databases/adb_1/events?includeParams=true&limit=1000&q=check&includeHidden=true&cursor=abc',
+      'GET /v1/analytics-databases/adb_1/events/checkout%3Adone',
+      'GET /v1/analytics-databases/adb_1/filters?param=plan&event=checkout_completed',
+      'POST /v1/analytics-databases/adb_1/queries/trends?format=csv',
+      'PATCH /v1/analytics-databases/adb_1/events/checkout_completed',
+      'PATCH /v1/analytics-databases/adb_1/events/checkout_completed/params/plan',
+      'PUT /v1/analytics-databases/adb_1/events/spam/blocked',
+      'DELETE /v1/analytics-databases/adb_1/events/old_flow?confirm=old_flow',
+      'GET /v1/analytics-databases/adb_1/exports/catalog?format=json',
+      'GET /v1/analytics-databases/adb_1/exports/catalog?format=json',
+    ]);
+    expect(calls[3]!.body).toEqual({ series: [{ event: '*', metric: 'users' }] });
+    expect(calls[4]!.body).toEqual({ description: 'Paid.', hidden: false });
+    expect(calls[6]!.body).toEqual({ blocked: true });
+    // AN-204: at most 1,000 rows a call, with a cursor.
+    expect(first).toMatchObject({ total: 1_500, nextCursor: '1000' });
+    expect(first.events).toHaveLength(1_000);
+    expect(second.events).toHaveLength(500);
+    expect(second.nextCursor).toBeNull();
+  });
+
+  it('refuses to delete an event without its exact name (FD-022)', async () => {
+    const calls: Call[] = [];
+    const { handlers } = register(calls);
+    const wrong = await handlers.get('delete_analytics_event')!({ analyticsDatabaseId: 'adb_1', name: 'old_flow', confirm: 'old-flow' });
+    expect(wrong.isError).toBe(true);
+    expect(textOf(wrong)).toContain('confirmation_mismatch');
+    expect(calls).toEqual([]);
+  });
+
+  it('states the defaults and semantics in the query tools’ descriptions (AN-201)', () => {
+    const { configs } = register([]);
+    const trends = configs.get('query_analytics_trends')!.description!;
+    for (const phrase of [
+      'the last 30 days by day',
+      'end today and include it',
+      'reads `production` only',
+      'unique installations',
+      'never a sum of daily counts',
+      'ISO weeks',
+      '`incomplete` when its period contains now',
+      'states the range it `covered`',
+      'range_outside_retention',
+      'analytics_busy',
+      'Other',
+    ]) {
+      expect(trends, phrase).toContain(phrase);
+    }
+    // A series names its metric (the schema has no default), and a background event naming a
+    // device installation counts it (AN-047).
+    expect(trends).toContain('each series names its metric');
+    expect(trends).toContain('a background event naming a device installation counts it');
+    expect(configs.get('list_analytics_events')!.description).toContain('At most 1,000 per call');
+    expect(configs.get('delete_analytics_event')!.description).toContain('exact event name');
+    expect(configs.get('export_analytics_catalog')!.description).toContain('At most 1,000 events per call');
+  });
+
   it('tells an agent what an installation is, that answers state their range, and that presets include today', () => {
     const server = createServer({ baseUrl: 'http://inlet.test', secretKey: 'isk_test' });
     const instructions = (server.server as unknown as { _instructions?: string })._instructions ?? '';
     expect(instructions).toContain('An installation is one install of an app');
     expect(instructions).toContain('states the range it covers');
     expect(instructions).toContain('ends\ntoday and includes it');
+    expect(instructions).not.toContain('by default counting');
   });
 });

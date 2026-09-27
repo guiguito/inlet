@@ -3441,6 +3441,31 @@ rather than the trap's own source line.
 **Size: 15.4 KB minified and gzipped** for `inlet-sdk/analytics/browser` (15.1 KB in 11a; this
 piece's changes to the client, the identity and the IndexedDB queue).
 
+**From the verification (September 27, 2026).** Four defects, fixed where every caller goes
+through, each with a test in `packages/sdk/test/analytics-native-verify.test.ts` that failed
+first:
+
+- *Main checks a window's event name as it will be queued.* The event rules strip U+0000
+  before they read a name, so `session_crashed\u0000` passed the standard-name check and was
+  queued as `session_crashed`, letting a window mark the live session crashed. The name is
+  sanitised before the check. A denylist has to see what the allowlist downstream sees.
+- *`setEnabled` waits in its place.* Before an asynchronous store loads it now joins the calls
+  that wait, instead of awaiting the load beside them, so `setEnabled(true); track(…)` in a
+  consent callback at startup keeps the event and `setEnabled(false); track(…)` drops it.
+- *A closed client writes nothing.* Its `track` drops as `disabled` and its sticky setters no
+  longer write the state: its queue and state are whole documents in the store the next client
+  uses, and its write dropped what that client had stored.
+- *The five-experiment cap counts own keys only.* `key in experiments` read `constructor` and
+  `toString` as already set, so a sixth passed and every later event failed the rules.
+
+Proven besides: the build fails on a Node import in the renderer entry or in a module the
+browser-safe entries share, and on a React Native entry reading `window` or `localStorage` at
+load (a copy of the package with the fault injected); Metro 0.80.12 on React Native 0.74.7,
+with package `exports` off, bundles every React Native-facing entry from the packed tarball
+for iOS and Android; the declarations of the three new entries compile in a consumer with
+`skipLibCheck` false, under NodeNext with Node's types and under bundler resolution without
+them, and through the Metro directory shim's `types`.
+
 ### 33.3 Ingest and Collect (piece 3, September 27, 2026)
 
 **One pass per batch, in this order**, in `apps/api/src/services/analytics-ingest.ts`: the
@@ -3598,3 +3623,219 @@ because its store is ready the moment it connects; one test sets it back.
 PostgreSQL 18 and ClickHouse 26.8, 60 batches, the first ten ignored): median 80 ms, 95th
 percentile 92 ms, against the 300 ms budget of 9.5; most of it is the asynchronous insert's
 adaptive flush timeout. A batch of 50 duplicates answers in about the same time.
+
+### 33.4 Catalog, Lexicon and trends (piece 4, September 27, 2026)
+
+**The query layer is one module every later read goes through**,
+`apps/api/src/services/analytics-query.ts`: the slots and per-query limits
+(`runAnalyticsQuery`), the filter compiler, ranges, periods and coverage, the erasure and
+deletion skip (`readSkip`), the name resolver and the counting conditions. Trends
+(`analytics-trends.ts`) and the catalog (`analytics-catalog.ts`) are its first users; pieces 5
+to 10 build on it rather than beside it.
+
+**Query slots: an in-process scheduler with lanes** (`analytics-slots.ts`, AN-205). One API
+instance (Foundations §4) makes a process-local scheduler exact; nothing needs a lock table.
+Capacity is the operator's `INLET_ANALYTICS_QUERY_SLOTS`, read at every query, so a test or a
+restart with a new value takes effect at once. Credentials together hold at most capacity − 1,
+which is what "one slot kept for signed-in users" means when the others are free: a user can
+also use every slot when no key is querying. Each caller (a credential by its ID, a signed-in
+user by theirs, whatever the transport: MCP comes back through `app.inject` as the same key)
+holds at most one slot per lane, `query` and `funnelTrend`, so piece 7's two-minute funnel
+trend does not lock its caller out of every other screen. A caller's further queries in a lane
+wait behind its first, in order; the queue is served first come first served, skipping any
+waiter that cannot run yet, so one busy caller never holds up another. Ten seconds without a
+slot answers `503 analytics_busy` with `Retry-After: 5`. The event store's readiness is checked
+before the wait, so an outage answers `analytics_unavailable` at once. Rejected: a counting
+semaphore per caller type (it cannot express "one per caller" and "a caller's queries in
+order" together), and ClickHouse's own `max_concurrent_queries_for_user` (every API query
+arrives as the same reader, so it cannot tell a key from a person, and it refuses rather than
+queues).
+
+**Per-query limits.** Every slot query runs with `max_execution_time` (the operator's 30 s, or
+the funnel trend's limit for that lane), `max_memory_usage` and `max_threads`.
+`INLET_ANALYTICS_QUERY_THREADS = 0` resolves once per event store as half of
+`getSetting('max_threads')` read through the reader (so the reader's profile, 4 locally,
+gives 2), then a concrete number is sent with every query. A breach answers
+`query_limit_exceeded` through piece 1's mapping; the test sets the memory limit to 1,000 bytes.
+The catalog refresh and the deletion job run under the time and memory limits but hold no slot
+(workers never wait on one, 9.5).
+
+**The filter compiler** turns the 9.2 filters into one condition with every value bound
+(`SqlParams` numbers them `{p0:Type}`) and every column from an allowlist in the module; a
+test puts SQL-shaped values in every field and asserts none reaches the text. Same field and
+key → OR, different → AND. Choices the PRD leaves open: `isNot` on a dimension keeps the events
+without a value (`country NOT IN ['FR']` keeps `''`); a param's `is` compares the text ingest
+stored (`String(value)`), so `3` matches `3` whichever type it was sent as; `gt` and `lt`
+compare `toFloat64OrNull`, so a non-numeric value matches neither; `contains` is case-sensitive,
+as the stored value is; an experiment's `is` requires the key to be present, so an empty variant
+never matches events without the experiment. Install attribution reads the installation records
+once, as a set of installation IDs (`installation_id IN (SELECT … FROM installations … HAVING
+…)`), and a split by it joins the attribution onto the inner rows: either way the inner level of
+the query stays on the projection, since `installation_id` is one of its keys. An installation
+ID that is not a UUID is the one value the schema cannot check; the compiler refuses it with
+`invalid_query` at its path, before a slot is taken, even for a series whose event is unknown.
+
+**Two levels, and what `EXPLAIN` showed.** Every series is `SELECT bucket, installation_id,
+installation_kind, user_id, count() … GROUP BY` those (plus the split value) inside, and
+`sum(c)`, `uniqExactIf(installation_id, kind = 'device')` and `uniqExactIf(user_id, user_id !=
+'' AND kind != 'test')` outside, so one statement yields every metric and a unit active on
+several days of a period counts once. The integration test runs the generated SQL of a named
+event by day (a dimension filter), by week (an experiment split), by month (an install-age
+filter and a version split) and of any event (a `country` filter) under
+`force_optimize_projection = 1`, which fails with PROJECTION_NOT_USED if the optimizer would read
+the events, and reads `EXPLAIN`: `ReadFromMergeTree (by_event_day)` for a named event; for any
+event the optimizer picked `by_event_day` on one small part and may pick `by_day` on large ones,
+both being rollups. The same check on a param filter fails, as it must (params are not a
+projection key). Hour buckets read `effective_time`, which is not a projection key: an hourly
+chart reads the events, over seven days at most.
+
+**Splits** rank values by the series metric over the whole range (a second outer grouping of
+the same inner rows, `GROUP BY v`), then group each period's rows into the ten values, `other`
+and `none` with `multiIf(v = '', 'none', has(top, v), 'value', 'other')`, so Other is one set of
+units (`uniqExactIf` over its rows) and never a sum of lines. An empty value is None, a param
+included (an empty string param reads as none). Other is drawn when more than ten values exist,
+None when its metric over the range is not zero.
+
+**Ranges, periods and coverage.** Periods are generated by the API, zeros included. Day, week,
+month and year buckets come from the stored `local_day`; hours are
+`toStartOfHour(effective_time, {tz})`, the zone a bound parameter (verified: 26.8 accepts a
+parameter there), and the API steps absolute hours from the zone's local midnight, which
+gives 25 hours on the day DST ends, 23 on the day it starts, and hours on the half hour in
+Asia/Kolkata, matching what ClickHouse answers (both checked in tests; zones whose DST shift is
+not a whole hour, such as Lord Howe's, would misalign and are not handled). `last12Months` is
+the current calendar month and the eleven before it, so a monthly chart has twelve points; the
+PRD says only "the last 12 months". Coverage is from the oldest day kept — the later of
+`min(local_day)` over the database's events, answered by the parts' own min/max index
+(`_minmax_count_projection` in `EXPLAIN`, no event read), and `kept_from` — to today. A range
+wholly before it is `range_outside_retention` with `covered: null`; one wholly in the future
+covers nothing and has no notice. `incomplete` marks the period containing now (and hours not
+begun), and any period the covered range does not hold whole, which includes the days before
+the oldest one kept: AN-066's "a period the covered range cuts", read so that a chart never
+draws as complete a period it has no data for.
+
+**The erasure and deletion skip.** `readSkip(ctx, key)` loads, once per database until
+`invalidateReadSkip(key)`, the pending erasures and the IDs of deleted names whose rows remain,
+and gives each read its conditions: on `events`, `NOT ((installation_id IN … OR user_id = …) AND
+received_time < …)` per erasure and `event_name_id NOT IN …`; on the installation-scoped tables,
+whose aggregated states carry no received time, the erased installations are left out whole
+until the pending erasure is gone (more hidden, never less). With nothing pending each is `1`
+and the projections answer; while something is pending, `received_time` and the deleted IDs
+are not projection keys, so that database's reads scan events until the worker finishes
+(correct, slower). Rejected: filtering in the API after the query, which cannot correct a
+unique count.
+
+**Names by ID.** A name resolves to its ID from PostgreSQL at each query (one indexed read of
+the few names a definition holds), so deleting the row retires the ID for every read at once
+with no cache to invalidate; ingest keeps its own bounded cache, which deletion and blocking
+invalidate (`invalidateAnalyticsCatalog`). `resolveEventNames` answers `current`, `deleted` (the
+name is in `analytics_event_name_deletions`) or `unknown`, which is how pieces 7 and 8 answer a
+saved step with `event_deleted` rather than "never seen". "Any event" does not resolve names, so
+the skip's `event_name_id NOT IN` is what keeps a deleted name's rows out of it.
+
+**The catalog** is answered from PostgreSQL and filtered, searched (name and description, the
+platform's description for a standard event without one, case-insensitively) and sorted in
+memory: a database holds at most a few thousand names. The category filter keeps names that
+ever used the category (`analytics_event_categories`) or whose latest is it. The refresh pass
+(every five minutes, `catalogIntervalMs`) claims each database with a transaction-scoped
+advisory lock (not a row lock on the database, which would make a rename wait) and writes only
+its own columns: the 24-hour figures from one query over the last 24 hours of effective time
+(`countIf(kind != 'test' OR name = test_event)`, so the test installation counts only in
+`test_event`); last seen and the latest category from the newest local day of each name among
+the days an event could have arrived for since (the lateness window plus two days, and all days
+for a name never refreshed), read two-level from the projection, then the newest effective time
+within that one day, which the sort key prunes to. Last seen only moves forward.
+
+**Event detail and filter values.** The top values are one `ARRAY JOIN mapKeys(params),
+mapValues(params)` over the name's last seven local days, `LIMIT 10 BY key`, in every
+environment (a value seen only in development is still a value the team wants to name); filter
+values cover every environment too, since they fill the environment filter itself. Both hold a
+slot. Experiment filter values: without a key, the keys; with one, its variants.
+
+**Event-name deletion** (AN-056). The request deletes the name's row, its params and categories
+under ingest's catalog lock and records `analytics_event_name_deletions (event_name_id,
+database_key, name, requested_at, submitted_at, attempts, completed_at)` in the same
+transaction (migration `0003`). The worker's pass (every 30 s, `deletionsIntervalMs`) counts the
+name's rows left in `events`, `installation_first` and `user_first` (a primary-key read, and a
+lightweight delete already applied hides its rows); none left, and it stamps `completed_at`.
+Otherwise, unless `system.mutations` shows an unfinished mutation for that ID (the stored command
+is the statement with its parameters substituted, `event_name_id = _CAST(77, 'UInt32')`), it
+submits a lightweight `DELETE` per table with `lightweight_deletes_sync = 0`, so neither the
+request nor the worker waits the minutes such a delete takes at scale. Counting rows is the
+source of truth, so a restart before or after the submission, an outage, or a batch that raced
+the deletion and stored rows under the retired ID are all finished by a later pass (each case is
+a test). The record is kept once complete, which is how the resolver says `deleted`. Rejected:
+a synchronous `DELETE` in the request (it would answer after minutes, or time out at the
+writer's 30 s and be reported as an outage), and tracking by mutation ID alone (lost with the
+process if the submission's answer never arrives).
+
+**Exports.** `?format=csv|json` on the trend route downloads one row per period and series
+(`series, event, metric, splitValue, periodStart, periodLabel, value, incomplete, coveredFrom,
+coveredTo`); JSON carries the same rows with the definition. The catalog export has one CSV row
+per name with its params in one column. `query_analytics_trends` returns a whole answer, which
+at five series of a daily year can exceed 1,000 points: AN-204's cap is read as applying to
+lists of events and rows with a cursor, and a trend is one answer; a question for the owner.
+
+**Measured, as an indication only.** On a seed of 22.5 million events over 90 days
+(`SEED_DAYS=90 SEED_ACTIVE=5000 SEED_EVENTS=50`, merged), this laptop, the local ClickHouse at
+its 4 GB ceiling, `max_threads = 2`, median of five runs of the SQL `runTrend` sends, for a
+charted event of 790,000 events: one series by day over 90 days, unique installations, 30 ms
+(`by_event_day`; budget 500 ms at the reference workload); by week 23 ms; split by app version,
+both statements, 68 ms (budget 1.5 s); a param filter over the 90 days 49 ms (reads the events;
+budget 20 s over 13 months); any event by day 62 ms, which on these parts the optimizer answers
+from `by_day`. The reference workload holds about 180 times as many events; section 33.1's
+scaling applies. The seed script's own erasure measurement ran out of memory at the 4 GB ceiling
+here, as 33.1 found for the `rebuild` mode.
+
+**Two follow-ups from pieces 3 and 11b.** `@inlet/shared/analytics-core` refuses the param and
+experiment keys `__proto__`, `constructor` and `prototype` with `invalid_event` at their path
+(`RESERVED_OBJECT_KEYS`), and the batch route parses JSON in its own encapsulated context with
+Fastify's prototype-poisoning actions set to `ignore`, so such a key costs its event, not its
+batch; every other route keeps Fastify's refusal (tested). The SDK's `setExperiment`, and so
+the Electron main path that applies a window's, refuses the same three keys through `debug`.
+The Collect tab's Electron renderer snippet shows the preload bridge (`window.inletAnalytics`
+through `contextBridge`) exactly as the SDK README documents it.
+
+**From the verification (September 27, 2026).** Three defects, fixed where every caller goes
+through, each with a test in `apps/api/test/integration/analytics-query-verify.test.ts` that
+failed first:
+
+- *A range's dates are bounded by the event store's `Date`, 1970-01-01 to 2149-06-06.* A range
+  ending in 9999 by year never ended the period loop (the year after 9999 was read back as
+  1001) and ran the API process out of memory, taking every capability down with one Viewer's
+  request; by day it answered a 500 after building millions of periods; a year below 100 was
+  read as 19xx by `Date.UTC`. `resolveRange` refuses such dates with `invalid_query` at
+  `range.from` or `range.to`, so funnels and cohorts inherit the bound. Rejected: clamping
+  silently (a chart would not cover what was asked, and say nothing), and a cap on the number
+  of periods, which is a product rule the PRD does not state (the widest range, by day, is
+  65,000 points a series, about 5 MB).
+- *Install-age bounds are clamped to the column.* A `UInt16` query parameter wraps: 65,536
+  read as 0 and 70,000 as 4,464, so `between [0, 65536]` counted day-0 events only. No stored
+  age exceeds 65,535, so the upper bound is clamped and a lower bound above it matches nothing.
+- *A split ranks its values in the event store.* Every distinct value came back to the API to
+  be ranked, which for a param of a million values is a million rows parsed in the process; the
+  ranking is now `ORDER BY` the series metric, rounded as the answer rounds it, `LIMIT 12`
+  (None, the ten lines, and one more to know there is an Other).
+
+Proven besides, against the real event store: every figure of a constructed week (device,
+server and test installations, a background event naming a device installation, a second
+environment, two installations of one user) by day, by week, per metric, for any event and
+split by platform and version, equal to hand-computed values; the two-level queries equal to a
+raw one-level `uniqExact` over the events with `optimize_use_projections` on and off; an
+erasure pending hides exactly its rows received before it in events, splits and any event, and
+the plan of a query then reads no projection; hourly periods equal to ClickHouse's own buckets
+on DST days in Paris, Santiago (DST at midnight) and St John's (−03:30), and in Kolkata and
+Kathmandu; ISO week 53 and years across 2020–2021; SQL-shaped keys, fields and operators
+refused at the schema and values never in the text; `gt`/`lt` skip non-numeric stored values;
+a name deletion unreadable at once in any event, finished by the worker after a failed
+submission, the resolver telling `deleted` from `unknown`, and `test_event` deletable; the
+catalog, live feed, Lexicon writes, block, delete and export answering while every slot is
+held; three queries each from two keys and a user, sent together, all answering. In a
+browser: a Viewer's drawer offers no action, a Creator's describe and hide only; the three
+query states each show their sentence; the chart's drawing is hidden from assistive
+technology and its table named.
+
+Left open: a client that disconnects keeps its place in its lane, and a query already running
+runs to its time limit, since neither the slots nor `store.query` take an abort signal; with
+queries of several seconds a user who changes a chart three times quickly may see
+`analytics_busy` on the last. The catalog's cursor is an offset, not Appendix E's position and
+first-page time, so a name added or a refresh between two pages can move an entry across them.

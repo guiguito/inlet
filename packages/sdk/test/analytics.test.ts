@@ -216,6 +216,21 @@ describe('sticky attribution and experiments (AN-224)', () => {
     expect(server.events('x')[0]!.experiments).toEqual({ e1: 'b', e2: 'a', e3: 'a', e4: 'a', e5: 'a' });
     expect(server.events('y')[0]!.experiments).toEqual({ e1: 'a', e3: 'a', e4: 'a', e5: 'a' });
   });
+
+  it('refuses __proto__, constructor and prototype as experiment keys through debug, so later events stay valid', async () => {
+    page();
+    const server = new FakeInlet();
+    const debug: string[] = [];
+    const drops: AnalyticsDropReason[] = [];
+    const client = initBrowser(options(server, { debug: (message) => debug.push(message), onDrop: (reason) => drops.push(reason) }), { queue: new SharedQueue() });
+    client.setExperiment('checkout', 'B');
+    for (const key of ['__proto__', 'constructor', 'prototype']) client.setExperiment(key, 'x');
+    client.track('after');
+    await client.flush();
+    for (const key of ['__proto__', 'constructor', 'prototype']) expect(debug.some((message) => message.includes(`"${key}" cannot be an experiment key`)), key).toBe(true);
+    expect(drops).toEqual([]);
+    expect(server.events('after')[0]!.experiments).toEqual({ checkout: 'B' });
+  });
 });
 
 describe('track (AN-222, AN-234, AN-235)', () => {

@@ -1,4 +1,9 @@
 import type {
+  AnalyticsFilter,
+  AnalyticsInterval,
+  AnalyticsMetric,
+  AnalyticsRange,
+  AnalyticsSplit,
   ColorScheme,
   CornerRadius,
   EmbeddingMode,
@@ -404,6 +409,58 @@ export type AnalyticsBatchAnswer = {
 /** AN-058: one event of the live feed. */
 export type AnalyticsLiveEvent = { name: string; time: string; installationId: string; platform: string; appVersion: string };
 
+/** AN-050, Appendix E "Catalog entry". */
+export type AnalyticsCatalogEntry = {
+  name: string;
+  category: string | null;
+  description: string | null;
+  hidden: boolean;
+  blocked: boolean;
+  standard: boolean;
+  firstSeen: string;
+  lastSeen: string | null;
+  last24h: { events: number; installations: number; users: number };
+  computedAt: string | null;
+};
+
+export type AnalyticsEventParam = { key: string; types: string[]; description: string | null; firstSeen: string };
+
+/** AN-052: an event with its params and their top values over the last seven days. */
+export type AnalyticsEventDetail = AnalyticsCatalogEntry & {
+  categories: string[];
+  params: (AnalyticsEventParam & { topValues: { value: string; events: number }[] })[];
+  topValuesFrom: string;
+  topValuesTo: string;
+};
+
+/** Section 9.2: a trend definition as the interface sends it. */
+export type AnalyticsTrendDefinition = {
+  range: AnalyticsRange;
+  interval: AnalyticsInterval;
+  series: { event: string; metric: AnalyticsMetric; label?: string; filters: AnalyticsFilter[] }[];
+  filters: AnalyticsFilter[];
+  split?: AnalyticsSplit;
+};
+
+/** AN-060 to AN-067, Appendix E "Trend". */
+export type AnalyticsTrendPoint = { start: string; label: string; value: number; incomplete: boolean };
+export type AnalyticsTrendAnswer = {
+  range: { from: string; to: string };
+  interval: AnalyticsInterval;
+  timezone: string;
+  keptFrom: string | null;
+  series: {
+    label: string;
+    event: string;
+    metric: AnalyticsMetric;
+    value?: string | null;
+    group?: 'value' | 'other' | 'none';
+    covered: { from: string; to: string } | null;
+    notice: 'range_outside_retention' | null;
+    points: AnalyticsTrendPoint[];
+  }[];
+};
+
 // --- Crash Reports (Release 6) -------------------------------------------------
 
 export type CrashDatabase = {
@@ -569,6 +626,48 @@ export const api = {
     request<{ events: AnalyticsLiveEvent[]; cursor: string }>(
       `/v1/analytics-databases/${databaseId}/live${after ? `?after=${encodeURIComponent(after)}` : ''}`,
     ),
+  // --- Catalog, Lexicon and trends (AN-050 to AN-069) ---
+  listAnalyticsEvents: (databaseId: string, query: { q?: string; category?: string; includeHidden?: boolean; sort?: 'name' | 'lastSeen' | 'events24h' } = {}) =>
+    request<{ events: AnalyticsCatalogEntry[]; nextCursor: string | null; total: number }>(
+      `/v1/analytics-databases/${databaseId}/events${crashQuery({ q: query.q, category: query.category, includeHidden: query.includeHidden ? 'true' : undefined, sort: query.sort })}`,
+    ),
+  getAnalyticsEvent: (databaseId: string, name: string) =>
+    request<AnalyticsEventDetail>(`/v1/analytics-databases/${databaseId}/events/${encodeURIComponent(name)}`),
+  updateAnalyticsEvent: (databaseId: string, name: string, patch: { description?: string | null; hidden?: boolean }) =>
+    request<AnalyticsCatalogEntry>(`/v1/analytics-databases/${databaseId}/events/${encodeURIComponent(name)}`, { method: 'PATCH', body: patch }),
+  updateAnalyticsEventParam: (databaseId: string, name: string, key: string, description: string | null) =>
+    request<AnalyticsEventParam>(`/v1/analytics-databases/${databaseId}/events/${encodeURIComponent(name)}/params/${encodeURIComponent(key)}`, { method: 'PATCH', body: { description } }),
+  blockAnalyticsEvent: (databaseId: string, name: string, blocked: boolean) =>
+    request<AnalyticsCatalogEntry>(`/v1/analytics-databases/${databaseId}/events/${encodeURIComponent(name)}/blocked`, { method: 'PUT', body: { blocked } }),
+  deleteAnalyticsEvent: (databaseId: string, name: string, confirm: string) =>
+    request<{ deleted: true }>(`/v1/analytics-databases/${databaseId}/events/${encodeURIComponent(name)}?confirm=${encodeURIComponent(confirm)}`, { method: 'DELETE' }),
+  analyticsFilterValues: (databaseId: string, query: { dimension?: string; key?: string; param?: string; event?: string }) =>
+    request<{ values: string[]; truncated: boolean }>(`/v1/analytics-databases/${databaseId}/filters${crashQuery(query)}`),
+  analyticsTrend: (databaseId: string, definition: AnalyticsTrendDefinition, signal?: AbortSignal) =>
+    request<AnalyticsTrendAnswer>(`/v1/analytics-databases/${databaseId}/queries/trends`, { method: 'POST', body: definition, ...(signal ? { signal } : {}) }),
+  /** AN-069: the export is a POST (the definition does not fit an address), so it is fetched and saved as a file. */
+  downloadAnalyticsTrend: async (databaseId: string, definition: AnalyticsTrendDefinition, format: 'csv' | 'json') => {
+    const response = await fetch(`/v1/analytics-databases/${databaseId}/queries/trends?format=${format}`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(definition),
+    });
+    if (!response.ok) {
+      const body = safeJson(await response.text()) as { error?: { code?: string; message?: string } } | null;
+      throw new ApiError(response.status, body?.error?.code ?? 'internal_error', body?.error?.message ?? 'The export failed.');
+    }
+    const name = /filename="([^"]+)"/.exec(response.headers.get('content-disposition') ?? '')?.[1] ?? `trend.${format}`;
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = name;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  },
+  analyticsCatalogExportUrl: (databaseId: string, format: 'csv' | 'json') => `/v1/analytics-databases/${databaseId}/exports/catalog?format=${format}`,
 
   // --- Crash databases ---
   listCrashDatabases: (projectId: string) =>

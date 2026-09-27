@@ -72,11 +72,24 @@ analytics.setEnabled(true);`,
     },
     {
       runtime: 'Electron renderer',
-      code: `import { createElectronRenderer } from 'inlet-sdk/analytics/electron-renderer';
+      note: 'The preload script is required: without window.inletAnalytics the renderer sends nothing. Keep context isolation on and expose only the two analytics channels.',
+      code: `// preload.ts, with context isolation on: expose only the two analytics channels.
+import { contextBridge, ipcRenderer } from 'electron';
+contextBridge.exposeInMainWorld('inletAnalytics', {
+  send: (channel: string, message: unknown) => {
+    if (channel === 'inlet:analytics') ipcRenderer.send(channel, message);
+  },
+  on: (channel: string, listener: (payload: unknown) => void) => {
+    if (channel === 'inlet:analytics:ids') ipcRenderer.on(channel, (_event, payload) => listener(payload));
+  },
+});
+
+// In the window:
+import { createElectronRenderer } from 'inlet-sdk/analytics/electron-renderer';
 
 // Holds no key and makes no request: every call goes to the main process, which adds the
 // installation, the session and the context itself.
-const analytics = createElectronRenderer();
+const analytics = createElectronRenderer(); // uses window.inletAnalytics
 
 // In your consent callback; it reaches the main process:
 analytics.setEnabled(true);

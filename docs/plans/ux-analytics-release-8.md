@@ -61,14 +61,14 @@ pieces land; a piece that departs from one says so in its report and in that sec
 | 1 | Event store foundation | ClickHouse in local services, CI and compose (profile `analytics`); client, readiness, migrations, schema; `/v1/health`; harness; the 8.1 spike and storage measurement | verified and committed (`04ba43c`; DECISIONS 33.1) |
 | 2 | Contract and analytics databases | `@inlet/shared` analytics contract; PostgreSQL tables; create, read, rename, delete; fourth access scope; operator limits; project page, switcher, database shell with Settings; MCP database tools | verified and committed (DECISIONS 33.2) |
 | 3 | Ingest and Collect | The batch route and every derivation at ingest; rate limits; country; catalog writes; live feed; test event; counters; the analytics worker; Collect tab; its tools | verified and committed (DECISIONS 33.3) |
-| 4 | Catalog, Lexicon and trends | Query layer (slots, limits, filters, ranges, periods, coverage, the erasure skip); catalog, event detail, filter values, hide, block, delete; trends and their export; catalog export; Events tab; tools | pending |
+| 4 | Catalog, Lexicon and trends | Query layer (slots, limits, filters, ranges, periods, coverage, the erasure skip); catalog, event detail, filter values, hide, block, delete; trends and their export; catalog export; Events tab; tools | verified and committed (DECISIONS 33.4) |
 | 5 | Overview | Every figure of AN-140, sessions, retention D1/D7/D30, crash-free sessions; Overview tab; tool | pending |
 | 6 | Profiles and links | AN-120 to AN-126, AN-154, FR-066; the shared helper that finds crash reports and submissions carrying an ID; Users tab; Usage profile links; tools | pending |
 | 7 | Funnels | AN-080 to AN-089, including the drill-down's crash and feedback flags through piece 6's helper; Funnels tab; tools | pending |
 | 8 | Cohorts | AN-100 to AN-109; Cohorts tab; tools | pending |
 | 9 | Storage, retention and data health | AN-004 removal worker, AN-160 to AN-169, AN-190 to AN-192, the orphan sweep; Settings → Storage; the Collect notice; tools | pending |
 | 10 | Erasure and event export | FD-033 across crash, feedback and analytics (CR-047, FR-064A); AN-183 to AN-185; AN-210, AN-212; project settings and profile screens; tools | pending |
-| 11 | `inlet-sdk/analytics` | AN-150, AN-151, AN-220 to AN-242, AN-230; CR-111, CR-119; crash and feedback attach rules; build, size and purity checks; Metro | 11a verified and committed (6bfa07c, DECISIONS 33.11a); 11b built, in verification |
+| 11 | `inlet-sdk/analytics` | AN-150, AN-151, AN-220 to AN-242, AN-230; CR-111, CR-119; crash and feedback attach rules; build, size and purity checks; Metro | verified and committed (11a 6bfa07c, 11b d30ed9b; DECISIONS 33.11a, 33.11b); end-to-end against the running API left to piece 12 |
 | 12 | Full verification | Every acceptance criterion of PRD section 12 against the running product; the scaled load test; docs, PRD status, DECISIONS, Docker with the profile | pending |
 
 Profiles come before funnels and cohorts so that the funnel drill-down (AN-088) reuses the
@@ -611,6 +611,105 @@ the notice for `event_name_limit`/`event_name_rate` above the live feed.
 **MCP.** `send_analytics_test_event`, `get_analytics_live_events` (at most 500 per call, the
 whole feed, with a cursor).
 
+### From piece 4: the query layer, the catalog and trends
+
+**Modules.** `apps/api/src/services/analytics-query.ts` (the layer every analytics read goes
+through), `analytics-slots.ts` (the scheduler), `analytics-trends.ts`, `analytics-catalog.ts`;
+routes in `routes/analytics-events.ts` (`analyticsEventRoutes`, registered after
+`analyticsRoutes`). Put later reads beside them and use the layer; do not write a second one.
+
+**Running a query** — `runAnalyticsQuery(ctx, principal, kind, (store, settings) => …)`: checks
+the store's readiness, takes one of the caller's slots (`kind` is `'query'`, or
+`'funnelTrend'` for piece 7's trend view, which gets the funnel trend's time limit and a lane of
+its own), and hands `settings` (`max_execution_time`, `max_memory_usage`, `max_threads`) to pass
+to every `store.query` inside. Every query of AN-205's list goes through it: piece 5's Overview,
+piece 6's prefix search, recent installations and a profile's event list (not a profile read by
+exact ID), piece 7's runs and drill-downs, piece 8's runs, piece 10's erasure previews and one
+call per export page. Never for the catalog list, the live feed, management routes, ingest or
+workers. The scheduler itself is `querySlots` (a `QuerySlots`); `querySlotTimings.waitMs` is the
+ten-second wait, which tests shorten; `querySlots.acquire({ id, user }, kind)` holds a slot by
+hand, as the slot tests do to play a long query. `queryCaller(principal)` names the caller.
+
+**Building SQL** — `new SqlParams()`, `p.add(value, 'Type')` → `{pN:Type}`. Never interpolate.
+- `compileFilters(filters, p, { databaseKey, skip }, path)` → one condition over `events` (`1`
+  when empty), AN-062's semantics, `invalid_query` at `path.N.values.M` for a bad installation
+  ID. Filters on the installation records for cohorts' population filters are a different
+  thing (install dimensions); piece 8 may reuse the column allowlist but not this function as is.
+- `environmentDefault(filters, p)` — `production` only unless an `environment` filter is named;
+  pass every filter list that applies (global and the series', step or population's).
+- `splitExpression(split, p)` and `installAttributionTable(scope, p)` — a split's value; piece 7's
+  split uses them.
+- Counting: `DEVICE_INSTALLATION` (unique installations), `COUNTED_USER` (unique user IDs),
+  `ANY_EVENT_ROWS` (any event and every active figure), `namedEventRows(name, id, p)` (a name's
+  rows; the test installation only for `test_event`). Write unique counts in two levels (inner
+  `count()` grouped by projection keys, outer `uniqExactIf`), as `seriesSource` does; its test
+  (`analytics-trends.test.ts`, "the rollups answer") shows how to prove a new shape reads a
+  projection with `force_optimize_projection`.
+- `bucketExpression(interval, p, timezone)` — a period's bucket, matching `Period.key`.
+
+**Ranges, periods, coverage** — `resolveRange(range, timezone, nowMs)` → `{from, to}`
+(`last12Months` = this calendar month and the eleven before; dates outside `RANGE_BOUNDS`,
+the event store's `Date` from 1970-01-01 to 2149-06-06, are `invalid_query` at `range.from` /
+`range.to`, so every query that resolves its range through it is bounded); `checkInterval(range, interval)`
+(hour ≤ 7 days); `todayIn(timezone, nowMs)`, `addDays`, `mondayOf`, `isoWeekLabel`,
+`zonedMidnight`, `offsetMinutes`; `buildPeriods(range, interval, timezone, nowMs, covered)` →
+`{ key, start, label, incomplete }[]` (piece 7's trend groups and piece 8's cohort periods can
+use it for day, week and month; their "incomplete" rules differ — a funnel group adds the window,
+a cohort cell its own period — so they compute that themselves); `oldestKeptDay(store, database,
+settings)` and `coverageOf(range, keptFrom, today)` → `{ covered, notice, keptFrom }`. Every
+answer states `covered`, as Appendix E asks.
+
+**The erasure skip** — `readSkip(ctx, databaseKey)` → a `ReadSkip` with `.events(p)`,
+`.installations(p, column?)` and `.users(p, column?)`, each `1` when nothing is pending. Every
+read of `events`, the rollups, `installations`, `installation_users` and the first-occurrence
+tables must apply the matching one. **Piece 10 calls `invalidateReadSkip(databaseKey)`** after
+inserting or deleting a pending erasure (the cache is per database and never expires), and takes
+the erasure's time from ingest's clock as piece 3's seams say. The skip also carries the IDs of
+deleted names pending removal. `resetAnalyticsQueryState()` (the harness calls it) clears the
+slots and the cache.
+
+**Names** — `resolveEventNames(db, databaseKey, names)` → `Map<name, { status: 'current', id,
+standard, hidden, blocked } | { status: 'deleted' } | { status: 'unknown' }>`. Pieces 7 and 8:
+a saved step whose name is `deleted` answers no units and the warning `event_deleted`; `unknown`
+is a name never seen (the PRD does not ask for a warning). Piece 5's top events hide `hidden`
+names unless asked (AN-054).
+
+**Deleted names** — `analytics_event_name_deletions` (PostgreSQL, keyed by database key, no
+foreign key): one row per deleted name, `completed_at` once the event store holds none of its
+rows. **Piece 9's database removal must delete these rows too** (the harness truncates them).
+The job is `runEventNameDeletions(ctx)` (worker pass `name deletions`, `deletionsIntervalMs`).
+Piece 10's erasure worker can follow the same pattern: count what is left, submit an
+asynchronous lightweight `DELETE` unless `system.mutations` shows one running, never wait.
+
+**The catalog** — `listCatalog`, `presentEntry` (Appendix E's catalog entry, the platform's
+description for a standard event), `eventDetail`, `refreshAnalyticsCatalog` (worker pass
+`catalog`, `catalogIntervalMs`). Piece 5's top events of the last 24 hours can read
+`events_24h` from the catalog, or query; the catalog's figures are at most five minutes old.
+
+**Worker options** added: `catalogIntervalMs` (5 min), `deletionsIntervalMs` (30 s).
+
+**Web.** `apps/web/src/components/trend-chart.tsx` — `TrendChart({ answer })`: lines in plain SVG,
+the incomplete period dashed with a hollow point, the shaded band before `keptFrom` with
+`keptFromNote`, and the table of every value per period (the accessible table). Piece 7's
+funnel trend view can pass a trend-shaped answer or reuse `seriesColor`. The chart builder and
+the drawer are `components/analytics-events.tsx` (`EventsPanel`), whose state is the address's
+`chart` parameter (the trend definition as JSON, filters being typed kept, only complete ones
+sent). `queryErrorSentence(error, EVENT_STORE_UNREACHABLE)` gives the one sentence for
+`analytics_unavailable`, `analytics_busy` and `query_limit_exceeded`; use it on every analytics
+screen. `lib/api.ts` has the calls and `AnalyticsTrendDefinition`, `AnalyticsTrendAnswer`,
+`AnalyticsCatalogEntry`, `AnalyticsEventDetail`.
+
+**MCP.** `list_analytics_events`, `get_analytics_event`, `list_analytics_filter_values`,
+`query_analytics_trends`, `update_analytics_event`, `update_analytics_event_param`,
+`block_analytics_event`, `delete_analytics_event`, `export_analytics_catalog`, and the server
+instructions' paragraph on the catalog, trends and slots. `QUERY_SEMANTICS` in
+`analytics-tools.ts` is the AN-201 paragraph every query tool's description includes: reuse it.
+
+**Shared contract.** `RESERVED_OBJECT_KEYS` / `isReservedObjectKey` in
+`@inlet/shared/analytics-core`: `__proto__`, `constructor` and `prototype` are refused as param
+and experiment keys; the batch route parses its body in its own context with prototype-poisoning
+checks off (every other route keeps them).
+
 ## Left out, and why
 
 Each piece appends what it did not build and the reason.
@@ -731,6 +830,29 @@ session another tab rotated to. Left, for a decision or for 11b:
   `installElectronMain` resolved asks once (`hello`) at `createElectronRenderer` and is answered
   only if main is listening by then; later changes reach it by the push to every `webContents`.
 
+**Verification of piece 11b (September 27, 2026).** Defects fixed, with tests in
+`packages/sdk/test/analytics-native-verify.test.ts` (DECISIONS 33.11b, "From the
+verification"): a window's standard event name hidden behind U+0000 (`session_crashed\u0000`)
+passed main's check and became the standard event once the event rules stripped the character;
+`setEnabled` called before an asynchronous store loaded ran after the calls queued behind it,
+so a startup consent callback's `setEnabled(true); track(…)` dropped the event and
+`setEnabled(false); track(…)` stored it; a closed client's `track` and sticky setters still
+wrote its own view of the queue and state over the next client's (React Native, Node device,
+Electron main); a sixth experiment named like an `Object` method (`constructor`, `toString`)
+passed the five-experiment cap and made every later event invalid. Left:
+
+- **Calls made before an asynchronous store loads take their time and user ID when they run**,
+  not when they were made: a few tens of milliseconds at a React Native start, and a
+  `setUserId` or `reset` made in that window applies to a `track` made before it.
+- **`installElectronMain` twice without `uninstall()`** leaves the first IPC listener on the
+  closed client; its events now drop as `disabled`, but a window's `forget` still runs on both.
+- **The React Native store drops past its byte budget without `onDrop`**: an event dropped
+  there is only not persisted, and is still sent this run if the network allows (crash and
+  feedback behave the same).
+- **Piece 4's refusal of `__proto__`, `constructor` and `prototype` as keys**, once it lands in
+  `packages/shared/src/analytics-core.ts`, should also refuse them in the client's
+  `setExperiment`, or such a sticky experiment makes every later event invalid.
+
 ### From piece 3
 
 - **The Collect notice** while events are refused for the name limit or the hourly allowance
@@ -750,3 +872,34 @@ session another tab rotated to. Left, for a decision or for 11b:
   gives 1 month for an event on August 31 against an install on August 30, which AN-032 makes
   0 (both in August); AN-034's "never updates an existing entry" needs the observed-types
   exception; see the piece 3 report for the exact wording.
+
+### From piece 4
+
+- **Measured budgets at scale** (9.5): timings on a 22.5-million-event seed on this laptop are in
+  DECISIONS 33.4 as an indication; piece 12's load test measures the budgets.
+- **A trend over MCP is one answer, not paged** at 1,000 rows (AN-204 read as applying to lists of
+  events and rows); a five-series daily trend over a year can exceed 1,000 points. For the owner.
+- **Zones whose daylight-saving shift is not a whole hour** (Lord Howe Island) misalign hourly
+  buckets by half an hour on the change day; the half-hour and 45-minute offsets themselves work.
+- **Reads while an erasure or a name deletion is pending scan events** for that database, since
+  `received_time` and the deleted IDs are not projection keys; correct, slower until the worker
+  finishes (piece 10 should keep erasures short-lived for that reason).
+- **Installation-scoped reads hide an erased installation whole** while its pending erasure
+  exists, including state from events it sent after the erasure; piece 10 decides how those
+  states are rebuilt once the rows are deleted.
+- **The e2e flow "add a filtered second series, split by app version"**: a split needs one series
+  (AN-063), so the test checks the two series, removes the second, then splits.
+- **The catalog export over MCP is JSON only**, paged; the CSV is the HTTP route.
+- **README line "It is deliberately not an analytics product"** predates Release 8; piece 12's
+  documentation pass should reword it.
+- **From the verification** (DECISIONS 33.4): no cap on the number of periods a range holds
+  (the widest, 1970 to 2149 by day, is about 65,000 points a series, and an MCP trend returns
+  them whole); a product rule if wanted. A client that disconnects keeps its place in its slot
+  lane and a running query runs to its limit: cancelling needs an abort signal through
+  `QuerySlots.acquire` and `store.query`. The catalog cursor is an offset, not Appendix E's
+  position and first-page time.
+- **PRD amendments for the orchestrator** (not applied here): see the piece 4 report — AN-064's
+  `last12Months`, AN-066's incomplete periods before the oldest day kept, AN-052's top values over
+  every environment, 7.2's `confirm` on the name deletion and `includeParams` on the catalog, and
+  9.1's params row ("keys `__proto__`, `constructor` and `prototype` refused"), which the
+  orchestrator already planned.

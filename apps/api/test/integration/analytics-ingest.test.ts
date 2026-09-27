@@ -170,6 +170,39 @@ describe('analytics ingest', () => {
       expect(await storedRows(h, db.databaseKey)).toHaveLength(2);
     });
 
+    it('rejects only the event with a __proto__, constructor or prototype key, storing the rest of its batch; no other route relaxes the parser', async () => {
+      const valid = event();
+      const body = (key: string, where: 'params' | 'experiments') =>
+        `{"sentAt":"${new Date().toISOString()}","events":[${JSON.stringify(event())},${JSON.stringify(event()).replace('{', `{"${where}":{"${key}":${where === 'params' ? '{"polluted":true}' : '"B"'}},`)},${JSON.stringify(valid)}]}`;
+      for (const [key, where] of [['__proto__', 'params'], ['constructor', 'params'], ['__proto__', 'experiments'], ['prototype', 'experiments']] as const) {
+        const response = await h.app.inject({
+          method: 'POST',
+          url: `/v1/analytics-databases/${db.id}/batch`,
+          headers: { authorization: `Bearer ${db.key}`, 'content-type': 'application/json' },
+          payload: body(key, where),
+        });
+        expect(response.statusCode, `${key} in ${where}: ${response.body}`).toBe(200);
+        expect(response.json().rejected).toEqual([{ index: 1, code: 'invalid_event', field: `${where}.${key}` }]);
+        expect(response.json().accepted + response.json().duplicates).toBe(2);
+      }
+      expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+      // Elsewhere Fastify still refuses such a body whole.
+      const elsewhere = await h.app.inject({
+        method: 'POST',
+        url: '/v1/projects',
+        headers: { cookie: h.cookie, 'content-type': 'application/json' },
+        payload: '{"name":"x","__proto__":{"a":1}}',
+      });
+      expect(elsewhere.statusCode).toBe(400);
+      const constructor = await h.app.inject({
+        method: 'POST',
+        url: '/v1/projects',
+        headers: { cookie: h.cookie, 'content-type': 'application/json' },
+        payload: '{"name":"x","constructor":{"prototype":{"a":1}}}',
+      });
+      expect(constructor.statusCode).toBe(400);
+    });
+
     it('stores 98 of 100 events, reporting the unknown field and the bad name at their indexes', async () => {
       const events = Array.from({ length: 100 }, () => event());
       events[17] = { ...event(), channel: 'beta' } as never;

@@ -15,7 +15,9 @@ not install the analytics module**: its crash reports and submissions carry exac
   `screen_viewed`), sessions shared by the tabs of an origin, a persistent queue in IndexedDB
   or on disk, `keepalive` delivery when a page closes. The browser entry is 15.4 KB minified
   and gzipped. Needs a deployment whose `/v1/health` lists `analytics`; until then events
-  wait, and the SDK asks again every ten minutes.
+  wait, and the SDK asks again every ten minutes. `setExperiment` refuses the keys
+  `__proto__`, `constructor` and `prototype` through `debug`, as the server refuses them as
+  param and experiment keys on every event.
 - **Electron** (AN-238): `installElectronMain` from `inlet-sdk/analytics/electron` keeps the
   identity, the queue and the key in the main process under `<userData>/inlet`, defaults the
   app version and ID to the application's own, and reports the operating system's version

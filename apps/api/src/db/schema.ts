@@ -965,6 +965,29 @@ export const analyticsEventCategories = pgTable(
 );
 
 /**
+ * AN-056: an event name deleted from the catalog. Deleting the name's row retired its ID, so
+ * its events are unreadable at once; this row is how the worker knows which event-store rows
+ * to delete, and finishes after a restart or an outage (the name's rows are counted again on
+ * every pass). Kept once done (`completed_at`), so a saved funnel or cohort naming the name
+ * can be told `event_deleted` rather than "never seen" (pieces 7 and 8).
+ */
+export const analyticsEventNameDeletions = pgTable(
+  'analytics_event_name_deletions',
+  {
+    eventNameId: bigint('event_name_id', { mode: 'number' }).primaryKey(),
+    databaseKey: integer('database_key').notNull(),
+    name: text('name').notNull(),
+    requestedAt: timestamp('requested_at', { withTimezone: true }).notNull().defaultNow(),
+    /** When the event-store deletes were last submitted; they run without the API waiting. */
+    submittedAt: timestamp('submitted_at', { withTimezone: true }),
+    attempts: integer('attempts').notNull().default(0),
+    /** Set once no row of the name remains in the event store. */
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+  },
+  (table) => [index('analytics_event_name_deletions_key_idx').on(table.databaseKey, table.name)],
+);
+
+/**
  * AN-006, AN-168: per database and hour, what was refused, removed, truncated or dropped,
  * and what was accepted, since the `invalid_events` incident needs the hour's total
  * (AN-169). Written by the worker from counters in memory; kept eight days.

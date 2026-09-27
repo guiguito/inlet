@@ -620,6 +620,25 @@ describe('sticky experiments, probed (AN-224, AN-238)', () => {
       restore();
     }
   });
+
+  it('a window’s setExperiment with a reserved key is refused in main, and events keep flowing', async () => {
+    const restore = electronProcess();
+    try {
+      const server = new FakeInlet();
+      const drops: string[] = [];
+      const { electron, window } = fakeElectron(tempDir());
+      const client = await installElectronMain({ ...base(server), onDrop: (reason) => drops.push(reason) }, { electron });
+      window().renderer.setExperiment('checkout', 'B');
+      for (const key of ['__proto__', 'constructor', 'prototype']) window().renderer.setExperiment(key, 'x');
+      client.track('after');
+      await client.flush();
+      expect(drops).toEqual([]);
+      expect(server.events('after')[0]!.experiments).toEqual({ checkout: 'B' });
+      client.uninstall();
+    } finally {
+      restore();
+    }
+  });
 });
 
 describe('React Native sessions over AsyncStorage (PRD 12 "SDK", AN-229)', () => {

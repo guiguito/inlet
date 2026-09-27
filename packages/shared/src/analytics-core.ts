@@ -189,6 +189,16 @@ export type AnalyticsWarningCode = (typeof ANALYTICS_WARNING_CODES)[number];
 export const EVENT_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/;
 export const EXPERIMENT_KEY_PATTERN = /^[A-Za-z0-9_.-]{1,40}$/;
 export const PARAM_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_.]{0,39}$/;
+/**
+ * Param and experiment keys the patterns allow but no event may carry: a JSON parser's
+ * prototype-poisoning guard refuses a whole body that holds one (Fastify answers
+ * `malformed_json`), so one such key would lose every other event of its batch, and an SDK that
+ * kept one sticky would make every later event invalid. Refused per event instead.
+ */
+export const RESERVED_OBJECT_KEYS: readonly string[] = ['__proto__', 'constructor', 'prototype'];
+export function isReservedObjectKey(key: string): boolean {
+  return RESERVED_OBJECT_KEYS.includes(key);
+}
 /** RFC 3339 with an offset: a `Z` or `±hh:mm`, fractional seconds optional. */
 const TIMESTAMP_PATTERN = /^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:[Zz]|[+-](\d{2}):(\d{2}))$/;
 /** BCP 47 in its common shape: a language subtag, then subtags of 1 to 8 letters or digits. */
@@ -409,9 +419,10 @@ function accept(raw: unknown): EventValidation {
     for (const [key, variant] of entries) {
       const field = `experiments.${key}`;
       if (!EXPERIMENT_KEY_PATTERN.test(key)) throw invalid(field, 'An experiment key has 1 to 40 letters, digits, "_", "." or "-".');
+      if (isReservedObjectKey(key)) throw invalid(field, `"${key}" cannot be an experiment key.`);
       out.push([key, string(variant, field, ANALYTICS_LIMITS.experimentVariantMaxLength, false)]);
     }
-    // Object.fromEntries, so a key the pattern allows, `__proto__` included, is kept as a key.
+    // Object.fromEntries, so every key is kept as a key, never a prototype.
     if (entries.length > 0) event.experiments = Object.fromEntries(out);
   }
 
@@ -423,6 +434,7 @@ function accept(raw: unknown): EventValidation {
     for (const [key, value] of entries) {
       const field = `params.${key}`;
       if (!PARAM_KEY_PATTERN.test(key)) throw invalid(field, 'A param key starts with a letter or "_" and has at most 40 letters, digits, "_" or ".".');
+      if (isReservedObjectKey(key)) throw invalid(field, `"${key}" cannot be a param key.`);
       if (typeof value === 'string') {
         if (value.length > ANALYTICS_LIMITS.paramValueMaxLength) {
           warnings.push({ code: 'truncated', field });

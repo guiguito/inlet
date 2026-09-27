@@ -1,6 +1,6 @@
 import { Transform } from 'node:stream';
 import { z } from 'zod';
-import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
+import type { FastifyPluginAsyncZod, ZodTypeProvider } from 'fastify-type-provider-zod';
 import { desc, eq } from 'drizzle-orm';
 import {
   ANALYTICS_DEFAULTS,
@@ -300,69 +300,81 @@ export function analyticsRoutes(ctx: AppContext): FastifyPluginAsyncZod {
     );
     // --- Ingest (AN-010 to AN-025, section 7.1) ---------------------------------------
 
-    app.post(
-      '/analytics-databases/:databaseId/batch',
-      {
-        bodyLimit: BATCH_BODY_LIMIT,
-        // FD-030, AN-020: every installation of an application shares one publishable key, so
-        // the per-key request ceiling would refuse a fleet; the route counts events instead.
-        config: { rateLimit: false },
-        // AN-010: a declared length over the bound is refused before the body is read, and a
-        // body sent without one (chunked) is counted as it arrives, in bytes as sent, and refused
-        // once read: not by serializing the parsed body again, which a deeply nested value
-        // cannot survive (a 500), and not mid-stream, which a client may see as a reset.
-        preParsing: async (request, _reply, payload) => {
-          const declared = request.headers['content-length'];
-          if (declared !== undefined) {
-            if (Number(declared) > ANALYTICS_LIMITS.batchMaxBytes) throw batchTooLarge();
-            return payload; // Fastify refuses a body longer than it declared
+    // The batch route parses JSON in its own encapsulated context, where a `__proto__` or
+    // `constructor` key is kept as the plain own property `JSON.parse` makes of it instead of
+    // refusing the whole body with `malformed_json`: `validateEvent` rebuilds every object with
+    // `Object.fromEntries` and refuses such a key as `invalid_event` at its path, so only the
+    // event carrying it is lost, not the valid events beside it. Every other route keeps
+    // Fastify's refusal.
+    await app.register(async (plugin) => {
+      const ingest = plugin.withTypeProvider<ZodTypeProvider>();
+      ingest.removeContentTypeParser('application/json');
+      ingest.addContentTypeParser('application/json', { parseAs: 'string' }, ingest.getDefaultJsonParser('ignore', 'ignore'));
+
+      ingest.post(
+        '/analytics-databases/:databaseId/batch',
+        {
+          bodyLimit: BATCH_BODY_LIMIT,
+          // FD-030, AN-020: every installation of an application shares one publishable key, so
+          // the per-key request ceiling would refuse a fleet; the route counts events instead.
+          config: { rateLimit: false },
+          // AN-010: a declared length over the bound is refused before the body is read, and a
+          // body sent without one (chunked) is counted as it arrives, in bytes as sent, and refused
+          // once read: not by serializing the parsed body again, which a deeply nested value
+          // cannot survive (a 500), and not mid-stream, which a client may see as a reset.
+          preParsing: async (request, _reply, payload) => {
+            const declared = request.headers['content-length'];
+            if (declared !== undefined) {
+              if (Number(declared) > ANALYTICS_LIMITS.batchMaxBytes) throw batchTooLarge();
+              return payload; // Fastify refuses a body longer than it declared
+            }
+            const counted = new Transform({
+              transform(chunk: Buffer, _encoding, next) {
+                chunkedBytes.set(request.raw, (chunkedBytes.get(request.raw) ?? 0) + chunk.length);
+                next(null, chunk);
+              },
+            });
+            payload.on('error', (error) => counted.destroy(error));
+            return payload.pipe(counted);
+          },
+          schema: {
+            tags: ['Analytics ingest'],
+            summary: 'Send a batch of analytics events',
+            description: [
+              'AN-010 to AN-025. A publishable or secret key of the owning project. The body is `sentAt`, the client’s time of sending, and `events`, 1 to 100 events of the envelope in PRD section 9.1, at most 256 KiB as UTF-8.',
+              'Every valid event is stored even when others are rejected. The answer lists each rejected event and each warning by its index. Idempotent: an event already stored (the same `eventId`, name, installation and effective time) is answered as a duplicate and stored once.',
+              'When `sentAt` is more than 60 s from the server’s clock, every timestamp is corrected by that difference rounded to the minute (`clock_corrected`). Refused whole with `429 rate_limit_exceeded` beyond the key’s limits and `503 analytics_unavailable` while the event store is down, both with `Retry-After`. Open cross-origin (FD-015).',
+            ].join('\n\n'),
+            security: [{ projectKey: [] }],
+            params: databaseIdParam,
+            body: z.unknown(),
+            response: { 200: batchAnswerSchema, ...errorsFor(400, 401, 403, 404, 413, 429, 503) },
+          },
+        },
+        async (request) => {
+          const credential = await requireProjectCredential(ctx, request);
+          const database = await requireClientAnalyticsDatabase(ctx.db, credential, request.params.databaseId);
+          if ((chunkedBytes.get(request.raw) ?? 0) > ANALYTICS_LIMITS.batchMaxBytes) throw batchTooLarge();
+          const batch = parseBatch(request.body);
+          // AN-020: the address is a key in memory for a minute at most, never stored.
+          if (!ctx.env.INLET_DISABLE_RATE_LIMITS) {
+            const wait = ceiling.check(request.ip);
+            if (wait !== null) {
+              countRefusedBatch(database.key, batch.events.length);
+              throw new ApiError('rate_limit_exceeded', 'Too many requests from this address; slow down.', undefined, { retryAfterSeconds: wait });
+            }
           }
-          const counted = new Transform({
-            transform(chunk: Buffer, _encoding, next) {
-              chunkedBytes.set(request.raw, (chunkedBytes.get(request.raw) ?? 0) + chunk.length);
-              next(null, chunk);
-            },
+          return ingestAnalyticsBatch(ctx, {
+            database,
+            credentialId: credential.id,
+            rateKey: credential.id,
+            sentAt: batch.sentAt,
+            events: batch.events,
+            country: () => country.countryOf(request),
           });
-          payload.on('error', (error) => counted.destroy(error));
-          return payload.pipe(counted);
         },
-        schema: {
-          tags: ['Analytics ingest'],
-          summary: 'Send a batch of analytics events',
-          description: [
-            'AN-010 to AN-025. A publishable or secret key of the owning project. The body is `sentAt`, the client’s time of sending, and `events`, 1 to 100 events of the envelope in PRD section 9.1, at most 256 KiB as UTF-8.',
-            'Every valid event is stored even when others are rejected. The answer lists each rejected event and each warning by its index. Idempotent: an event already stored (the same `eventId`, name, installation and effective time) is answered as a duplicate and stored once.',
-            'When `sentAt` is more than 60 s from the server’s clock, every timestamp is corrected by that difference rounded to the minute (`clock_corrected`). Refused whole with `429 rate_limit_exceeded` beyond the key’s limits and `503 analytics_unavailable` while the event store is down, both with `Retry-After`. Open cross-origin (FD-015).',
-          ].join('\n\n'),
-          security: [{ projectKey: [] }],
-          params: databaseIdParam,
-          body: z.unknown(),
-          response: { 200: batchAnswerSchema, ...errorsFor(400, 401, 403, 404, 413, 429, 503) },
-        },
-      },
-      async (request) => {
-        const credential = await requireProjectCredential(ctx, request);
-        const database = await requireClientAnalyticsDatabase(ctx.db, credential, request.params.databaseId);
-        if ((chunkedBytes.get(request.raw) ?? 0) > ANALYTICS_LIMITS.batchMaxBytes) throw batchTooLarge();
-        const batch = parseBatch(request.body);
-        // AN-020: the address is a key in memory for a minute at most, never stored.
-        if (!ctx.env.INLET_DISABLE_RATE_LIMITS) {
-          const wait = ceiling.check(request.ip);
-          if (wait !== null) {
-            countRefusedBatch(database.key, batch.events.length);
-            throw new ApiError('rate_limit_exceeded', 'Too many requests from this address; slow down.', undefined, { retryAfterSeconds: wait });
-          }
-        }
-        return ingestAnalyticsBatch(ctx, {
-          database,
-          credentialId: credential.id,
-          rateKey: credential.id,
-          sentAt: batch.sentAt,
-          events: batch.events,
-          country: () => country.countryOf(request),
-        });
-      },
-    );
+      );
+    });
 
     app.post(
       '/analytics-databases/:databaseId/test-event',

@@ -176,7 +176,16 @@ test.describe('the MCP server', () => {
           'update_crash_group_state',
           'update_crash_retention',
           // UX Analytics (UX Analytics PRD section 8.3): the database tools of Release 8's piece 2,
-          // the test event and the live feed of piece 3.
+          // the test event and the live feed of piece 3, the catalog, Lexicon and trends of piece 4.
+          'block_analytics_event',
+          'delete_analytics_event',
+          'export_analytics_catalog',
+          'get_analytics_event',
+          'list_analytics_events',
+          'list_analytics_filter_values',
+          'query_analytics_trends',
+          'update_analytics_event',
+          'update_analytics_event_param',
           'create_analytics_database',
           'delete_analytics_database',
           'get_analytics_database',

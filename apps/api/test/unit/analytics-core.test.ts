@@ -315,11 +315,19 @@ describe('validateEvent', () => {
     // A name smuggled in a prototype is not the event's name.
     expect(rejected(validateEvent(json('"__proto__":{"name":"smuggled"}')))).toMatchObject({ code: 'unknown_field', field: '__proto__' });
     expect(rejected(validateEvent({ ...valid(), app: JSON.parse('{"version":"1","__proto__":{"a":1}}') }))).toMatchObject({ code: 'unknown_field', field: 'app.__proto__' });
-    // A param or experiment key that the patterns allow is kept, not silently lost.
-    const { event } = accepted(validateEvent({ ...valid(), params: JSON.parse('{"__proto__":"x","n":1}'), experiments: JSON.parse('{"__proto__":"B"}') }));
-    expect(Object.entries(event.params!)).toEqual([['__proto__', 'x'], ['n', 1]]);
-    expect(Object.entries(event.experiments!)).toEqual([['__proto__', 'B']]);
     expect(rejected(validateEvent({ ...valid(), params: JSON.parse('{"__proto__":{"a":1}}') }))).toMatchObject({ code: 'invalid_event', field: 'params.__proto__' });
+  });
+
+  it('refuses __proto__, constructor and prototype as param and experiment keys, naming the path', () => {
+    // A JSON parser's prototype-poisoning guard refuses a whole body holding one of them, so each
+    // is refused here, one event at a time, rather than losing its batch.
+    for (const key of ['__proto__', 'constructor', 'prototype']) {
+      expect(rejected(validateEvent({ ...valid(), params: JSON.parse(`{"${key}":"x","n":1}`) }))).toMatchObject({ code: 'invalid_event', field: `params.${key}` });
+      expect(rejected(validateEvent({ ...valid(), experiments: JSON.parse(`{"${key}":"B"}`) }))).toMatchObject({ code: 'invalid_event', field: `experiments.${key}` });
+    }
+    // Keys that merely contain them stay valid.
+    const { event } = accepted(validateEvent({ ...valid(), params: { constructorName: 'x', proto: 1 }, experiments: { prototype2: 'B' } }));
+    expect(Object.keys(event.params!)).toEqual(['constructorName', 'proto']);
   });
 
   it('allows exactly 8 KiB and refuses one byte more', () => {

@@ -1087,7 +1087,9 @@ An analytics database counts how a product is used, from the events its apps sen
 (UX Analytics PRD). It needs the analytics event store, ClickHouse, which a deployment
 enables with `docker compose --profile analytics up -d` or `INLET_CLICKHOUSE_URL` (see
 [DEPLOYMENT.md](DEPLOYMENT.md)). Databases, [ingest](#analytics-ingest), the test event and
-the live feed are available now; queries and the rest arrive with later pieces of Release 8.
+the live feed, the [event catalog and its Lexicon](#the-event-catalog-and-the-lexicon) and
+[trends](#trends) are available now; the Overview, profiles, funnels, cohorts, storage and
+erasure arrive with later pieces of Release 8.
 
 ```
 POST /v1/projects/prj_5waxfxyby3st/analytics-databases
@@ -1259,8 +1261,8 @@ optional field is read as the field's absence; a param value may not be `null`.
 | `userId` | unless `installationId` | 128 characters | Placeholders dropped |
 | `sessionId` | no | UUID | |
 | `attribution` | no | 128 characters, truncated | The acquisition source |
-| `experiments` | no | 5 entries; key `^[A-Za-z0-9_.-]{1,40}$`; variant 40 characters | Experiment to variant |
-| `params` | no | 25 entries; key `^[A-Za-z_][A-Za-z0-9_.]{0,39}$`; a string of 256 characters (truncated), a finite number or a boolean | No nesting, arrays or null |
+| `experiments` | no | 5 entries; key `^[A-Za-z0-9_.-]{1,40}$`, not `__proto__`, `constructor` or `prototype`; variant 40 characters | Experiment to variant |
+| `params` | no | 25 entries; key `^[A-Za-z_][A-Za-z0-9_.]{0,39}$`, not `__proto__`, `constructor` or `prototype`; a string of 256 characters (truncated), a finite number or a boolean | No nesting, arrays or null |
 | `app` | yes | `version` 64, `build` 64, `id` 64 | `id` tells apart the apps of one product |
 | `platform` | no | `web`, `ios`, `android`, `macos`, `windows`, `linux`, `server`, `other` | Defaults to `other`; `server` marks a background event |
 | `os` | no | `name` 32, `version` 64 | |
@@ -1349,6 +1351,217 @@ Pass `cursor` back as `after` to get only the events accepted since, so a client
 every few seconds sees each event once; `limit` (1 to 500) takes the most recent events
 without `after`, and with it pages through a backlog, oldest first taken. The feed holds the last 500 events per database in the server's memory: it is
 empty after a restart, and a duplicate never appears twice. It takes no query slot.
+
+A batch never loses its valid events to one bad key: an event whose param or experiment key
+is `__proto__`, `constructor` or `prototype` is rejected alone, as `invalid_event` with its
+`field` (`params.__proto__`), where a JSON parser guarding against prototype poisoning would
+otherwise refuse the whole body.
+
+### The event catalog and the Lexicon
+
+```
+GET    /v1/analytics-databases/{id}/events?q&category&includeHidden&includeParams&sort&limit&cursor   Viewer or above
+GET    /v1/analytics-databases/{id}/events/{name}                      Viewer or above; a query slot
+PATCH  /v1/analytics-databases/{id}/events/{name}                      {description?, hidden?}; Creator or Admin
+PATCH  /v1/analytics-databases/{id}/events/{name}/params/{key}         {description}; Creator or Admin
+PUT    /v1/analytics-databases/{id}/events/{name}/blocked              {blocked}; database or project Admin
+DELETE /v1/analytics-databases/{id}/events/{name}?confirm={name}       database or project Admin
+GET    /v1/analytics-databases/{id}/exports/catalog?format=csv|json    Viewer or above
+```
+
+The **catalog** lists every event name the database has received, from PostgreSQL: it takes
+no query slot and answers while the event store is down.
+
+```json
+{
+  "events": [
+    {
+      "name": "checkout_completed",
+      "category": "purchase",
+      "description": "An order paid in full.",
+      "hidden": false,
+      "blocked": false,
+      "standard": false,
+      "firstSeen": "2026-09-01T08:12:00.000Z",
+      "lastSeen": "2026-09-27T09:58:41.120Z",
+      "last24h": { "events": 18240, "installations": 3120, "users": 2210 },
+      "computedAt": "2026-09-27T10:00:00.000Z"
+    }
+  ],
+  "nextCursor": null,
+  "total": 1
+}
+```
+
+- `category` is the category of the name's latest event. `lastSeen`, `category` and
+  `last24h` (events, unique device installations and unique user IDs over the last 24 hours)
+  are refreshed by a background pass at least every five minutes and stamped `computedAt`;
+  they are empty until its first pass.
+- `q` matches a case-insensitive substring of the name or the description; `category` keeps
+  the names that have used that category; hidden names are left out unless
+  `includeHidden=true`; `includeParams=true` adds each name's params with their types and
+  descriptions. `sort` is `name` (the default), `lastSeen` or `events24h`, each then by name.
+  At most 1,000 a page: pass `nextCursor` back as `cursor`.
+- Standard events show the platform's own description until the team writes one.
+
+**One event** (`GET …/events/{name}`) adds its categories and its params, each with its
+observed types, its description and the ten most frequent values over the last seven days,
+today included, in every environment (`topValues`, with `topValuesFrom` and `topValuesTo`).
+The top values read the event store, so this route holds a query slot. A hidden event reads
+the same. An unknown name is `404 event_not_found`.
+
+**Descriptions** are at most 500 characters; `null` or an empty string clears one. They are
+returned wherever the event is listed, to the API and to MCP, so an agent reads the tracking
+plan before it queries. **Hidden** events are still ingested, stored and queryable by name;
+they leave the catalog list and the pickers.
+
+**Blocking** makes ingest refuse the name's events with `event_blocked` from the next batch
+on; the name keeps its entry and its slot under the event-name limit, and what is stored
+stays. **Deleting** needs the exact name as `confirm` (`400 confirmation_mismatch`
+otherwise). The name's catalog and Lexicon entries go at once, which retires its ID: its
+events are unreadable when the call answers, and its slot under the limit is free. A
+background job then removes its rows from the event store without the call waiting, and
+finishes after a restart. If a client sends the name again, it comes back as a new event.
+Standard events can be neither blocked nor deleted (`409 standard_event_undeletable`).
+
+The **catalog export** holds every name, hidden ones included, with its flags, 24-hour
+figures, descriptions and params: CSV has one row per name (its params in one column as
+`key (types): description; …`), JSON the same entries in full.
+
+### Filter values
+
+```
+GET /v1/analytics-databases/{id}/filters?dimension=appVersion
+GET /v1/analytics-databases/{id}/filters?dimension=experiment&key=checkout
+GET /v1/analytics-databases/{id}/filters?param=plan&event=checkout_completed
+```
+
+```json
+{ "values": ["1.3.2", "1.4.0"], "truncated": false }
+```
+
+Distinct values, without counts, sorted, at most 1,000 (`truncated` says there are more), to
+fill filter controls. A `dimension` (`platform`, `platformVersion`, `runtime`, `app`,
+`appVersion`, `environment`, `country`, `attribution`, `installAttribution`, `category`,
+`experiment`) covers the whole storage window; `experiment` lists experiment keys, and with
+`key` that experiment's variants. A `param` of an `event` covers the last seven days. Viewer
+or above; a query slot.
+
+### Trends
+
+```
+POST /v1/analytics-databases/{id}/queries/trends[?format=csv|json]    Viewer or above; a query slot
+```
+
+The body is a trend definition (UX Analytics PRD 9.2). Everything but `series` has a default:
+
+```json
+{
+  "range": { "preset": "last30Days" },
+  "interval": "day",
+  "series": [
+    { "event": "checkout_completed", "metric": "installations", "label": "1.4.0",
+      "filters": [{ "field": "appVersion", "op": "is", "values": ["1.4.0"] }] },
+    { "event": "checkout_completed", "metric": "installations", "label": "1.3.2",
+      "filters": [{ "field": "appVersion", "op": "is", "values": ["1.3.2"] }] }
+  ],
+  "filters": [{ "field": "platform", "op": "is", "values": ["ios", "android"] }]
+}
+```
+
+- **Range**: `{ "from": "2026-09-01", "to": "2026-09-27" }`, dates in the database's
+  reporting timezone, both included, between `1970-01-01` and `2149-06-06` (the days the
+  event store can hold; others are `400 invalid_query` at `range.from` or `range.to`); or a
+  `preset`, ending today and including it, today
+  being computed in that zone: `today`, `yesterday`, `last7Days`, `last30Days` (the default),
+  `last90Days`, `last12Months` (this calendar month and the eleven before it), `thisMonth`,
+  `thisYear`.
+- **Interval**: `hour` (a range of at most seven days, else `400 invalid_query`), `day` (the
+  default), `week` (ISO weeks, Monday to Sunday), `month` or `year`.
+- **Series**: one to five. `event` is an event name or `*`, any event: every event of a device
+  installation that is not a background event, of every name and category, hidden ones
+  included. `metric` is `events`, `installations` (unique installations: server installations
+  and the test installation never count), `users` (unique non-empty user IDs) or
+  `perInstallation` (events divided by unique installations). A unique count counts each unit
+  once per period, however many days it was active; it is never a sum of daily counts, so one
+  user ID on two installations counts two installations and one user. A background event
+  (`platform: "server"`) counts in its event's totals, unique installations (of the device
+  installation it names) and users, and never in `*`. The test installation counts only in
+  `test_event`'s totals.
+- **Filters** on a series apply to it; `filters` beside `series` apply to every series.
+  Fields and operators: `platform`, `runtime`, `app`, `environment`, `country`, `userId`,
+  `installationId`, `attribution`, `installAttribution` (the installation's first
+  attribution), `category` and `experiment` (with `key`; the values are variants) take `is`,
+  `isNot`, `isSet`, `isNotSet`; `appVersion` and `platformVersion` add `startsWith`;
+  `installAgeDays`, `installAgeWeeks` and `installAgeMonths` take `between` with the lowest
+  and highest, both included; `param` (with `key`) takes `is`, `isNot`, `contains`, `isSet`,
+  `isNotSet`, and `gt` and `lt` with a number. Filters on the same field (and key) combine
+  with or, on different fields with and. **A definition that names no `environment` filter
+  counts `production` events only.**
+- **Split** (one series only): `{ "field": "appVersion" }`, or an experiment or a param with
+  its `key`: a line for each of the ten values with the largest metric over the range, then
+  `Other`, every remaining value counted as one set (an installation active on two of them
+  counts once), and `None`, events without a value, only when it is not zero.
+
+The answer has one point per period of the range, zeros included:
+
+```json
+{
+  "range": { "from": "2026-08-29", "to": "2026-09-27" },
+  "interval": "day",
+  "timezone": "Europe/Paris",
+  "keptFrom": "2026-09-01",
+  "series": [
+    {
+      "label": "1.4.0",
+      "event": "checkout_completed",
+      "metric": "installations",
+      "covered": { "from": "2026-09-01", "to": "2026-09-27" },
+      "notice": null,
+      "points": [
+        { "start": "2026-08-29", "label": "2026-08-29", "value": 0, "incomplete": true },
+        { "start": "2026-09-01", "label": "2026-09-01", "value": 412, "incomplete": false },
+        { "start": "2026-09-27", "label": "2026-09-27", "value": 96, "incomplete": true }
+      ]
+    }
+  ]
+}
+```
+
+- **Coverage.** Every series states the range it `covered`: from the oldest day the database
+  keeps (`keptFrom`, its oldest stored event, or the start of the oldest week retention kept)
+  to today. Days before it have no data. A range wholly before it answers every series empty,
+  with `covered: null` and `notice: "range_outside_retention"`, not an error.
+- **Incomplete periods.** A point is `incomplete` when its period contains now, has not
+  begun, or is cut by the covered range: the first and last week of a range that starts or
+  ends mid-week, and the days before the oldest one kept.
+- **Labels.** Days are `2026-09-21`, weeks `2026-W39` (the ISO week-year and number), months
+  `2026-09`, years `2026`. Hours are hours of absolute time labelled with the zone's offset,
+  `2026-10-25T02:00+02:00` then `2026-10-25T02:00+01:00`, so a day on which daylight saving
+  time ends has 25 and the day it starts 23.
+- **A split** answers one series per line, with `value` (null for Other and None) and
+  `group` (`value`, `other` or `none`), Other and None last.
+- **An unknown or deleted event** answers an empty series, not an error. A definition outside
+  the contract is `400 invalid_query` with each problem's `path` (`series.0.metric`,
+  `range.to`, `series.1.filters.0.values.0` for an installation ID that is not a UUID).
+- **Exports.** `?format=csv` or `?format=json` downloads the result instead, one row per
+  period and series: `series, event, metric, splitValue, periodStart, periodLabel, value,
+  incomplete, coveredFrom, coveredTo`, the chart's own values.
+
+### Query slots and limits
+
+Every analytics query — trends, an event's top values, filter values, and later the
+Overview, funnels, cohorts, profile searches and exports — holds one of the server's query
+slots while it runs: three by default (`INLET_ANALYTICS_QUERY_SLOTS`), one of them kept for
+signed-in users so that an agent's key never locks out the interface. Each credential and
+each signed-in user holds one slot at a time (and a second only for a funnel's trend view);
+its further queries wait behind its first. A query that finds no slot within ten seconds
+answers `503 analytics_busy` with `Retry-After`: retry shortly. Each query then runs under
+the event store's limits, 30 seconds (`INLET_ANALYTICS_QUERY_TIME_S`), a memory limit
+(`INLET_ANALYTICS_QUERY_MEMORY_BYTES`) and a thread limit (`INLET_ANALYTICS_QUERY_THREADS`);
+one that exceeds them answers `503 query_limit_exceeded`: ask for a shorter range or a
+coarser interval. The catalog list, the live feed, the Lexicon's changes and ingest never take
+a slot, and the rules are the same over MCP.
 
 ## Errors
 

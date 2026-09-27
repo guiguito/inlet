@@ -37,6 +37,7 @@ import { memberRoutes } from './routes/members.js';
 import { crashRoutes } from './routes/crashes.js';
 import { crashReadRoutes } from './routes/crash-reads.js';
 import { analyticsRoutes } from './routes/analytics.js';
+import { analyticsEventRoutes } from './routes/analytics-events.js';
 import { requireAnalyticsDatabase, requireCrashDatabase } from './services/access.js';
 import { mcpRoutes } from './routes/mcp.js';
 import { projectRoutes } from './routes/projects.js';
@@ -135,6 +136,8 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
       );
       // UX Analytics, Release 8: analytics databases (AN-001 to AN-005).
       await v1.register(analyticsRoutes(ctx));
+      // The catalog, the Lexicon, filter values and trends (AN-050 to AN-069).
+      await v1.register(analyticsEventRoutes(ctx));
       // And a third time for analytics databases (AN-190). Their messages announce data-health
       // incidents only, so `contentLevel` is stored like any database's and never read for them.
       await v1.register(

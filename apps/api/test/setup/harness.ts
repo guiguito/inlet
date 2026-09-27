@@ -10,6 +10,7 @@ import { loadEnv } from '../../src/env.js';
 import { MalwareScanner } from '../../src/lib/malware.js';
 import { Storage } from '../../src/lib/storage.js';
 import { analyticsIngestTimings, resetAnalyticsIngestState } from '../../src/services/analytics-ingest.js';
+import { resetAnalyticsQueryState } from '../../src/services/analytics-query.js';
 import { bootstrapAdmin } from '../../src/services/bootstrap.js';
 import { ADMIN_EMAIL, ADMIN_PASSWORD, TEST_ENV } from './config.js';
 
@@ -33,6 +34,7 @@ const TABLES = [
   'analytics_database_removals',
   'analytics_pending_erasures',
   'analytics_dropped_counts',
+  'analytics_event_name_deletions',
   'analytics_event_categories',
   'analytics_event_params',
   'analytics_event_names',
@@ -118,6 +120,8 @@ export async function createHarness(
       // The analytics in-memory state (caches, keys in flight, rate limits, floors, live feed,
       // counters), so no test inherits another's (UX Analytics 11).
       resetAnalyticsIngestState();
+      // The query layer's (slots, the erasure and deletion skip cache).
+      resetAnalyticsQueryState();
       await bootstrapAdmin(ctx);
       harness.cookie = await signIn(app, ADMIN_EMAIL, ADMIN_PASSWORD);
     },

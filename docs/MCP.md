@@ -224,9 +224,25 @@ of every unique count, and a user ID the integrator sets after sign-in is the ot
 analytics answer covers the database's storage window (13 months or 500 million events by
 default) and states the range it covers, and a range preset such as `last30Days` ends today
 and includes it. The server's instructions say the same, so an agent reads it before it
-calls anything. The database tools, the test event and the live feed below exist now; the
-query, catalog, profile, storage and erasure tools arrive with later pieces of Release 8
-(UX Analytics PRD section 8.3).
+calls anything. The database tools, the test event, the live feed, the catalog and Lexicon
+tools and trends below exist now; the Overview, profile, funnel, cohort, storage and erasure
+tools arrive with later pieces of Release 8 (UX Analytics PRD section 8.3).
+
+An agent should read the catalog first (`list_analytics_events`): it is the tracking plan,
+every event and param with the team's descriptions. Then `query_analytics_trends` answers
+most questions. Its description states the defaults so the agent needs nothing else: the
+last 30 days by day; presets end today and include it; only `production` events unless a
+filter names an environment; unique installations counted once per period, never a sum of
+days; ISO weeks labelled `2026-W39`; a point is `incomplete` while its period is under way
+or when the data kept only partly covers it; every series states the range it `covered`, and
+a range before the storage window answers `range_outside_retention`. A split by `appVersion`
+compares releases, and a split by an `experiment` key reads an A/B test.
+
+Every analytics query tool holds one of the server's query slots, as the same HTTP route
+would: a key runs one query at a time, and one slot is kept for signed-in people, so an agent
+cannot starve the interface. `analytics_busy` means no slot came within ten seconds (retry
+shortly); `query_limit_exceeded` means the query ran past its time or memory limit (ask for a
+shorter range or a coarser interval).
 
 ### Reading
 
@@ -234,6 +250,11 @@ query, catalog, profile, storage and erasure tools arrive with later pieces of R
 | --- | --- |
 | `list_analytics_databases`, `get_analytics_database` | The analytics databases of a project; one of them with its reporting timezone, country derivation, storage settings in force, the deployment's limits, and `eventStore`, whether the event store answers now. Both work while it does not. |
 | `get_analytics_live_events` | The latest events the database accepted, newest first, with name, effective time, installation ID, platform and app version: the last 500 since the server started, empty after a restart. At most 500 per call with a `cursor`; pass it back as `after` to get only what arrived since. Takes no query slot. |
+| `list_analytics_events` | The catalog with its Lexicon: each event's latest category, description, params (types and descriptions), first and last seen, and its events, unique installations and unique user IDs in the last 24 hours as of `computedAt`. `q` searches names and descriptions, whatever their case; hidden events only with `includeHidden`; sorted by name, `lastSeen` or `events24h`. At most 1,000 per call with `nextCursor`. No query slot. |
+| `get_analytics_event` | One event, hidden or not: its params with types, descriptions and the ten most frequent values of each over the last seven days. A query slot. |
+| `list_analytics_filter_values` | Distinct values, without counts, at most 1,000: of a `dimension` over the storage window (an `experiment` lists keys, with `key` its variants), or of a `param` of an `event` over the last seven days. A query slot. |
+| `query_analytics_trends` | One to five series (an event or `*`, a metric, filters, a label), global filters, an optional split, a range and an interval, the definition of UX Analytics 9.2; answers each series' points with `covered`, `notice` and `incomplete`. `format` `csv` or `json` returns the export, one row per period and series. A query slot. |
+| `export_analytics_catalog` | Every event name, hidden ones included, with its Lexicon, as JSON, 1,000 per call with `nextCursor`. The whole catalog as CSV is `GET /exports/catalog?format=csv` over HTTP. |
 
 ### Writing
 
@@ -242,12 +263,16 @@ query, catalog, profile, storage and erasure tools arrive with later pieces of R
 | `create_analytics_database` | Takes a name and a `timezone`, an IANA name such as `Europe/Paris` that can never be changed; offsets such as `UTC+2` are refused with `timezone_invalid`. Refused with `analytics_not_enabled` on a deployment without the event store, and `analytics_database_limit` when it holds its limit. The project's existing publishable key will ingest into it. |
 | `update_analytics_database` | Renames it, or switches country derivation, which applies to events received afterwards. |
 | `send_analytics_test_event` | Sends one `test_event` (category `test`, environment `development`) through the ingest path, from the database's test installation, which counts in no unique, active, new-installation, session or cohort figure; it takes no slot of the event-name limit. Answers like ingest, with the `eventId`, and shows up in `get_analytics_live_events`. |
+| `update_analytics_event` | An event's `description` (at most 500 characters; null clears it) and `hidden`, which leaves it out of the catalog and pickers but keeps it stored and queryable by name. |
+| `update_analytics_event_param` | A param's `description`. |
+| `block_analytics_event` | `blocked: true` refuses the name's new events from the next batch, keeping what is stored and its slot under the event-name limit; `false` lets them in again. Not for standard events (`standard_event_undeletable`). |
 
 ### Destructive
 
 | Tool | What it demands |
 | --- | --- |
 | `delete_analytics_database` | The database's exact name as `confirm`. Read `get_deletion_impact` first: it reports events, installations and user IDs (null while the event store is unreachable, which does not block deletion), funnels and cohorts. |
+| `delete_analytics_event` | The event's exact name as `confirm`. Its events are unreadable at once and removed from the event store in the background; its slot under the limit is freed; the name comes back as a new event if an app sends it again. Not for standard events. |
 
 `list_members`, `invite_member`, `set_member_role`, `remove_member`, `list_invitations`,
 `revoke_invitation`, `get_slack_notifications`, `update_slack_notifications`,

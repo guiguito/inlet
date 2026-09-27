@@ -1,4 +1,5 @@
 import type { AppContext } from '../context.js';
+import { refreshAnalyticsCatalog, runEventNameDeletions } from './analytics-catalog.js';
 import { flushAnalyticsCounters } from './analytics-ingest.js';
 
 /**
@@ -7,14 +8,19 @@ import { flushAnalyticsCounters } from './analytics-ingest.js';
  * runs once at a time; a pass that fails is logged and runs again at its next tick, leaving
  * the data as it was.
  *
- * Piece 3 adds the first pass, the counters of AN-006. Later pieces add theirs to `passes`
- * below — the catalog refresh (piece 4), retention, removal and incidents (piece 9), erasure
- * completion (piece 10) — with an interval in `AnalyticsWorkerOptions` so a test can shorten it.
+ * Piece 3 adds the first pass, the counters of AN-006; piece 4 the catalog refresh (AN-051)
+ * and the event-name deletion job (AN-056). Later pieces add theirs to `passes` below —
+ * retention, removal and incidents (piece 9), erasure completion (piece 10) — with an
+ * interval in `AnalyticsWorkerOptions` so a test can shorten it.
  */
 
 export type AnalyticsWorkerOptions = {
   /** AN-006: at least every ten seconds. */
   countersIntervalMs?: number;
+  /** AN-051: at least every five minutes. */
+  catalogIntervalMs?: number;
+  /** AN-056: how often deleted names' rows are checked on and their deletes submitted. */
+  deletionsIntervalMs?: number;
 };
 
 type Pass = { name: string; intervalMs: number; run: (ctx: AppContext) => Promise<unknown> };
@@ -23,6 +29,10 @@ export function startAnalyticsWorker(ctx: AppContext, options: AnalyticsWorkerOp
   const passes: Pass[] = [
     // AN-006: the counters accumulated in memory, added to their hour's row.
     { name: 'counters', intervalMs: options.countersIntervalMs ?? 10_000, run: (context) => flushAnalyticsCounters(context.db) },
+    // AN-051: last seen, the latest category and the 24-hour figures of every name.
+    { name: 'catalog', intervalMs: options.catalogIntervalMs ?? 5 * 60_000, run: (context) => refreshAnalyticsCatalog(context) },
+    // AN-056: the event-store rows of deleted names, removed without the request waiting.
+    { name: 'name deletions', intervalMs: options.deletionsIntervalMs ?? 30_000, run: (context) => runEventNameDeletions(context) },
   ];
 
   const timers: NodeJS.Timeout[] = [];

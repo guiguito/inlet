@@ -317,8 +317,8 @@ your browser's zone, which happens with a zone renamed recently such as `Europe/
 form proposes its former name (`Europe/Kiev`), which counts exactly the same hours.
 
 The database opens on **Insights → Overview**, with four groups: **Insights** (Overview,
-Events, Funnels, Cohorts), **Users**, **Collect** and **Settings**. For now **Collect** and
-**Settings** are where the work is.
+Events, Funnels, Cohorts), **Users**, **Collect** and **Settings**. For now **Events**,
+**Collect** and **Settings** are where the work is.
 
 ### Collect: sending events
 
@@ -346,6 +346,60 @@ each refused one with its reason, which `inlet-sdk` passes to your `onDrop`. A d
 at most 500 distinct event names, 50 new ones an hour, 100 param keys and 10 categories per
 event name, unless your operator changed those; events older than 30 days are refused. The
 [API reference](API.md#analytics-ingest) lists every rule.
+
+### Events: the catalog and its charts
+
+**Insights → Events** lists every event name the database has received, with its category,
+its description, when it was last seen and its events, installations and user IDs in the
+last 24 hours. Those figures are recomputed every five minutes, and the list says as of when.
+Search matches any part of a name or a description, whatever its case; the category chips
+narrow the list; **Show hidden** brings back the events your team hid. Standard events
+(`app_installed`, `app_started` and the others the SDK sends) come with a description of the
+platform's.
+
+**The Lexicon.** Open an event's details (the ⓘ button) to read its params, with the types
+they have been seen with and their ten most frequent values over the last seven days. A
+Creator writes what the event and each param mean; those descriptions are what an AI agent
+reads before it queries, so a few words there save wrong answers later. **Hide** takes an
+event out of the list and the pickers without touching its data. An Admin can also **Block**
+a name, which refuses its new events from the next batch while keeping what is stored (the
+way to stop a flood of a name you never meant to send), or **Delete** it, typing its name:
+every stored event of it becomes unreadable at once and the name frees its place among the
+database's 500. If an app sends it again, it comes back as a new event. Standard events can
+be neither blocked nor deleted.
+
+**Reading a chart.** Click an event's name to chart it: unique installations per day over
+the last 30 days, today included. Each point is one period of the reporting timezone, and a
+unique count counts an installation once per period, so a weekly chart counts an
+installation active on three days of a week once, not three times. The period still under
+way is drawn dashed with a hollow point, because its number will still grow; so is a period
+the data only partly covers. Only `production` events count unless you add an environment
+filter. Days before the oldest event the database keeps are shaded, with a note saying from
+when events are kept: an empty stretch there means no data, not no activity. Below the chart,
+a table gives every value per period.
+
+**Building a chart.** Up to five series, each an event (or *Any event*, every event of a
+device that is not sent from a backend), a metric (events, unique installations, unique user
+IDs, or events per installation) and its own filters; filters under *Filters on every series*
+apply to all of them. Filters on the same field widen (`1.4.0` or `1.3.2`), filters on
+different fields narrow (`1.4.0` and `iOS`); the value box suggests the values the database
+holds. Choose the range and the interval (hours for up to seven days, days, ISO weeks, months
+or years). The address holds the whole chart: bookmark it, or paste it to a teammate, and it
+opens the same. **Export CSV** or **Export JSON** saves one row per period and series, the
+numbers the chart shows.
+
+**Splits and the experiment readout.** With a single series, **Split by** draws a line for
+each value of a dimension, an experiment or a param: the ten largest over the range, then
+*Other* for the rest, counted as one group so an installation seen on two of those versions
+counts once, and *None* for events without a value. Split by app version to compare
+releases. To read an A/B test, split by **Experiment** and type its key, the one your app
+passes to `setExperiment('checkout', 'B')`: each variant gets its line, and choosing the
+metric *Unique user IDs* or adding a filter on the outcome event answers "how many in B
+did it".
+
+When a chart says every query slot is busy, the server is answering other charts; try again
+in a few seconds. When it says the chart took too long, choose a shorter range or a coarser
+interval.
 
 ### Settings
 
@@ -410,7 +464,7 @@ claude mcp add inlet \
   -- node "$PWD/apps/mcp/dist/server.js"
 ```
 
-It authenticates with a secret server key and exposes 62 tools, feedback, crash reports and analytics together. Read-only tools are
+It authenticates with a secret server key and exposes 71 tools, feedback, crash reports and analytics together. Read-only tools are
 marked as such, so an agent can explore without changing anything, and the destructive
 ones require confirmation. Full list in [MCP.md](MCP.md).
 

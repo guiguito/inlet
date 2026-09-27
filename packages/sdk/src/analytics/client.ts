@@ -3,6 +3,7 @@ import {
   ANALYTICS_LIMITS,
   EXPERIMENT_KEY_PATTERN,
   STANDARD_CATEGORY,
+  isReservedObjectKey,
   normalizeUuid,
   truncateText,
   uuidV4,
@@ -679,6 +680,12 @@ export class AnalyticsClient {
   private putExperiment(key: string, variant: string): void {
     if (!EXPERIMENT_KEY_PATTERN.test(key)) {
       this.debug(`setExperiment: "${key}" is not an experiment key (1 to 40 letters, digits, "_", "." or "-"); refused.`);
+      return;
+    }
+    // The server refuses these keys on every event (a JSON parser's prototype guard), so a sticky
+    // one would make every later event invalid.
+    if (isReservedObjectKey(key)) {
+      this.debug(`setExperiment: "${key}" cannot be an experiment key; refused.`);
       return;
     }
     // Own keys only: `constructor` or `toString` would otherwise read as already set and pass

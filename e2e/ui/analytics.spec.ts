@@ -162,6 +162,8 @@ test('Collect shows the ID, the keys and consent-first snippets, and a test even
   await expect(page.getByText('generally requires consent in the European Union')).toBeVisible();
   await expect(page.getByText('enabled: false').first()).toBeVisible();
   await expect(page.getByText('setEnabled(true)').first()).toBeVisible();
+  // The renderer sends nothing without the preload bridge, so its snippet shows it.
+  await expect(page.getByText("contextBridge.exposeInMainWorld('inletAnalytics'", { exact: false })).toBeVisible();
   await expect(page.getByTestId('live-feed-empty')).toBeVisible();
 
   await page.getByRole('button', { name: 'Send a test event' }).click();
