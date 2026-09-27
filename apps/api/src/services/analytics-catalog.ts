@@ -74,39 +74,76 @@ export type CatalogSort = (typeof CATALOG_SORTS)[number];
 /** AN-204: at most 1,000 entries a page. */
 export const CATALOG_PAGE_MAX = 1_000;
 
-function encodeCursor(offset: number): string {
-  return Buffer.from(JSON.stringify({ o: offset })).toString('base64url');
+/**
+ * Appendix E: a cursor carries the position of the next page — the sort's value and the name of
+ * the last entry shown — and the time of the first page. A later page starts strictly after that
+ * position in the list's order and leaves out names first seen after the first page, so a name
+ * that arrives while a reader pages, or an entry the page before already showed, is never shown
+ * twice; an offset moved every later entry by one whenever a name arrived before it.
+ */
+type CatalogCursor = { sort: CatalogSort; key: number | string | null; name: string; firstPageMs: number };
+
+/** The value an entry is ordered by under `sort`, before its name. */
+function sortKey(entry: CatalogEntry, sort: CatalogSort): number | string | null {
+  if (sort === 'events24h') return entry.last24h.events;
+  if (sort === 'lastSeen') return entry.lastSeen ?? '';
+  return null;
 }
 
-function decodeCursor(cursor: string | undefined): number {
-  if (!cursor) return 0;
+/** The catalog's order (AN-050): `events24h` and `lastSeen` descending, then the name ascending. */
+function compareAt(sort: CatalogSort, a: { key: number | string | null; name: string }, b: { key: number | string | null; name: string }): number {
+  const byName = a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+  if (sort === 'events24h') return (b.key as number) - (a.key as number) || byName;
+  if (sort === 'lastSeen') return String(b.key).localeCompare(String(a.key)) || byName;
+  return byName;
+}
+
+function encodeCursor(cursor: CatalogCursor): string {
+  return Buffer.from(JSON.stringify({ s: cursor.sort, k: cursor.key, n: cursor.name, t: cursor.firstPageMs })).toString('base64url');
+}
+
+function decodeCursor(cursor: string | undefined, sort: CatalogSort): CatalogCursor | null {
+  if (!cursor) return null;
   try {
-    const offset = (JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as { o?: unknown }).o;
-    if (typeof offset === 'number' && Number.isInteger(offset) && offset >= 0) return offset;
+    const raw = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as { s?: unknown; k?: unknown; n?: unknown; t?: unknown };
+    const keyFits = sort === 'events24h' ? typeof raw.k === 'number' : sort === 'lastSeen' ? typeof raw.k === 'string' : raw.k === null;
+    if (raw.s === sort && keyFits && typeof raw.n === 'string' && typeof raw.t === 'number' && Number.isFinite(raw.t)) {
+      return { sort, key: raw.k as CatalogCursor['key'], name: raw.n, firstPageMs: raw.t };
+    }
   } catch {
     // fall through
   }
-  throw apiError('invalid_query', 'That cursor is not one this list returned.', [{ path: 'cursor', code: 'custom', message: 'Pass the cursor a previous page returned.' }]);
+  throw apiError('invalid_query', 'That cursor is not one this list returned.', [{ path: 'cursor', code: 'custom', message: 'Pass the cursor a previous page returned, with the same sort.' }]);
 }
 
 /**
  * AN-050: every name of the database with its Lexicon and 24-hour figures, from PostgreSQL. A
  * database holds at most a few thousand names (AN-021), so search, the category filter and the
- * sort run over the whole list in memory; the page is then cut from it.
+ * sort run over the whole list in memory; the page is then cut from it at the cursor's position.
  */
 export async function listCatalog(
   ctx: AppContext,
   database: AnalyticsDatabaseRow,
   options: { q?: string; category?: string; includeHidden?: boolean; includeParams?: boolean; sort?: CatalogSort; limit?: number; cursor?: string },
+  nowMs = Date.now(),
 ): Promise<{ events: (CatalogEntry & { params?: Omit<EventParam, 'topValues'>[] })[]; nextCursor: string | null; total: number }> {
+  const sort = options.sort ?? 'name';
+  const cursor = decodeCursor(options.cursor, sort);
   const rows = await ctx.db.select().from(analyticsEventNames).where(eq(analyticsEventNames.databaseKey, database.key));
+  // The time of the first page is the newest first-seen time it could read: ingest stamps names
+  // with its received time, which only moves forward (DECISIONS 33.3), so a name first seen
+  // later is one that arrived after the first page, whatever the wall clock says.
+  const firstPageMs = cursor?.firstPageMs ?? Math.max(nowMs, ...rows.map((row) => row.firstSeenAt.getTime()));
   // AN-053: with `includeParams`, each entry carries its params' descriptions, so an agent reads
   // the tracking plan from the list before it queries.
   const params = options.includeParams ? await paramsByName(ctx, database, rows) : null;
-  let entries: (CatalogEntry & { params?: Omit<EventParam, 'topValues'>[] })[] = rows.map((row) => ({
-    ...presentEntry(row),
-    ...(params ? { params: params.get(Number(row.id)) ?? [] } : {}),
-  }));
+  let entries: (CatalogEntry & { params?: Omit<EventParam, 'topValues'>[] })[] = rows
+    // The list as of the first page: a name first seen since is left for the next read.
+    .filter((row) => row.firstSeenAt.getTime() <= firstPageMs)
+    .map((row) => ({
+      ...presentEntry(row),
+      ...(params ? { params: params.get(Number(row.id)) ?? [] } : {}),
+    }));
   if (!options.includeHidden) entries = entries.filter((entry) => !entry.hidden);
   if (options.category !== undefined) {
     const categories = await ctx.db
@@ -119,17 +156,17 @@ export async function listCatalog(
   }
   const q = options.q?.trim().toLocaleLowerCase();
   if (q) entries = entries.filter((entry) => entry.name.toLocaleLowerCase().includes(q) || (entry.description ?? '').toLocaleLowerCase().includes(q));
-  const byName = (a: CatalogEntry, b: CatalogEntry) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
-  const sort = options.sort ?? 'name';
-  entries.sort((a, b) => {
-    if (sort === 'events24h') return b.last24h.events - a.last24h.events || byName(a, b);
-    if (sort === 'lastSeen') return (b.lastSeen ?? '').localeCompare(a.lastSeen ?? '') || byName(a, b);
-    return byName(a, b);
-  });
-  const offset = decodeCursor(options.cursor);
+  const at = (entry: CatalogEntry) => ({ key: sortKey(entry, sort), name: entry.name });
+  entries.sort((a, b) => compareAt(sort, at(a), at(b)));
+  const rest = cursor ? entries.filter((entry) => compareAt(sort, at(entry), cursor) > 0) : entries;
   const limit = Math.min(options.limit ?? CATALOG_PAGE_MAX, CATALOG_PAGE_MAX);
-  const page = entries.slice(offset, offset + limit);
-  return { events: page, nextCursor: offset + limit < entries.length ? encodeCursor(offset + limit) : null, total: entries.length };
+  const page = rest.slice(0, limit);
+  const last = page.at(-1);
+  return {
+    events: page,
+    nextCursor: rest.length > limit && last ? encodeCursor({ sort, ...at(last), firstPageMs }) : null,
+    total: entries.length,
+  };
 }
 
 // --- One event (AN-052, AN-053, AN-055) ---------------------------------------------------------
@@ -186,7 +223,7 @@ export const TOP_VALUES_PER_PARAM = 10;
  * frequent values of each over the last seven days — the one part that reads the event store,
  * holding a query slot (AN-205).
  */
-export async function eventDetail(ctx: AppContext, database: AnalyticsDatabaseRow, principal: Principal, name: string, nowMs = Date.now()) {
+export async function eventDetail(ctx: AppContext, database: AnalyticsDatabaseRow, principal: Principal, name: string, nowMs = Date.now(), signal?: AbortSignal) {
   const event = await findName(ctx, database, name);
   const params = await ctx.db
     .select()
@@ -216,7 +253,7 @@ export async function eventDetail(ctx: AppContext, database: AnalyticsDatabaseRo
       p.values,
       settings,
     );
-  });
+  }, signal);
   const byKey = new Map<string, EventParam['topValues']>();
   for (const row of top) {
     const list = byKey.get(row.key) ?? [];
@@ -331,7 +368,7 @@ export type FilterValuesRequest =
  * window (an experiment without a key lists the experiment keys, with one its variants), or of
  * one event's param key over the last seven days. A slot query.
  */
-export async function filterValues(ctx: AppContext, database: AnalyticsDatabaseRow, principal: Principal, request: FilterValuesRequest, nowMs = Date.now()) {
+export async function filterValues(ctx: AppContext, database: AnalyticsDatabaseRow, principal: Principal, request: FilterValuesRequest, nowMs = Date.now(), signal?: AbortSignal) {
   const skip = await readSkip(ctx, database.key);
   let eventId: number | null = null;
   if ('param' in request) {
@@ -370,7 +407,7 @@ export async function filterValues(ctx: AppContext, database: AnalyticsDatabaseR
       statement = `SELECT ${column} AS v FROM events WHERE ${base} GROUP BY v HAVING v != '' ORDER BY v LIMIT ${limit}`;
     }
     return store.query<{ v: string }>(statement, p.values, settings);
-  });
+  }, signal);
   return { values: rows.slice(0, FILTER_VALUES_MAX).map((row) => row.v), truncated: rows.length > FILTER_VALUES_MAX };
 }
 

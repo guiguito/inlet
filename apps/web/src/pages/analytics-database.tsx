@@ -7,6 +7,8 @@ import { api, ApiError, type AnalyticsLiveEvent, type CurrentUser } from '@/lib/
 import { ANALYTICS_CONSENT_NOTE, analyticsSnippets } from '@/lib/analytics-snippets';
 import { AccessPanel } from '@/components/access-panel';
 import { EventsPanel } from '@/components/analytics-events';
+import { OverviewPanel } from '@/components/analytics-overview';
+import { UsersPanel } from '@/components/analytics-users';
 import { AppShell } from '@/components/app-shell';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { CopyField } from '@/components/copy-field';
@@ -28,7 +30,7 @@ import { pluralize } from '@/lib/format';
  * One analytics database (UX Analytics PRD section 8.1): Insights (Overview, Events,
  * Funnels, Cohorts), Users, Collect and Settings (General, Storage, Notifications, Access).
  * It opens on Insights → Overview. Piece 2 builds the shell and Settings, piece 3 Collect, piece
- * 4 Events; the other panels say what they will hold until the pieces that build them replace them.
+ * 4 Events, piece 5 Overview; the other panels say what they will hold until the pieces that build them replace them.
  */
 const TABS = [
   {
@@ -57,10 +59,8 @@ const TABS = [
 
 /** What each panel not yet built will show, in one sentence. */
 const COMING: Record<string, string> = {
-  overview: 'Active installations, sessions, retention and crash-free sessions will appear here.',
   funnels: 'Funnels will appear here.',
   cohorts: 'Cohorts, the standard Retention cohort first, will appear here.',
-  users: 'Installation and user profiles will appear here.',
   storage: 'The storage settings, usage and data health will appear here.',
 };
 
@@ -144,8 +144,8 @@ export function AnalyticsDatabasePage({ user }: { user: CurrentUser }) {
               <TabsContent key={entry.value} value={entry.value}>
                 {entry.value === 'collect' ? (
                   <CollectPanel databaseId={databaseId} projectId={database.data.projectId} />
-                ) : entry.panels.length === 0 ? (
-                  placeholder(entry.value)
+                ) : entry.value === 'users' ? (
+                  <UsersPanel databaseId={databaseId} unreachable={EVENT_STORE_UNREACHABLE} />
                 ) : (
                   <Tabs value={panel ?? entry.panels[0].value} onValueChange={(next) => show(entry.value, next)}>
                     <TabsList>
@@ -157,7 +157,9 @@ export function AnalyticsDatabasePage({ user }: { user: CurrentUser }) {
                     </TabsList>
                     {entry.panels.map((sub) => (
                       <TabsContent key={sub.value} value={sub.value}>
-                        {sub.value === 'events' ? (
+                        {sub.value === 'overview' ? (
+                          <OverviewPanel databaseId={databaseId} unreachable={EVENT_STORE_UNREACHABLE} />
+                        ) : sub.value === 'events' ? (
                           <EventsPanel databaseId={databaseId} role={role} unreachable={EVENT_STORE_UNREACHABLE} />
                         ) : sub.value === 'general' ? (
                           <GeneralSettings database={database.data} userId={user.id} />

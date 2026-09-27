@@ -64,7 +64,12 @@ const MAX_PARTITIONS_PER_INSERT_BLOCK = 1000;
  * rounds above 2^53, and a server's profile may say either; stated here, every read gets
  * exact strings whatever the server's defaults.
  */
-const READ_SETTINGS: ClickHouseSettings = { output_format_json_quote_64bit_integers: 1 };
+const READ_SETTINGS: ClickHouseSettings = {
+  output_format_json_quote_64bit_integers: 1,
+  // A read whose client went away is cancelled, not run to its time limit (AN-205; measured:
+  // without it, an aborted statement kept running in `system.processes`, DECISIONS 33.5).
+  cancel_http_readonly_queries_on_client_close: 1,
+};
 
 /**
  * A read's time limit is ClickHouse's to enforce (UX Analytics 9.5): the client waits for
@@ -127,18 +132,35 @@ export class EventStore {
     return this.currentState === 'ready';
   }
 
-  /** A read, as the reader, answered as JSON rows. 64-bit integers arrive as strings. */
-  async query<Row = Record<string, unknown>>(sql: string, params: QueryParams = {}, settings: QuerySettings = {}): Promise<Row[]> {
+  /**
+   * A read, as the reader, answered as JSON rows. 64-bit integers arrive as strings.
+   *
+   * `signal` is the caller's (a client that went away, AN-205): it and the read timeout end the
+   * request. The client stops listening to its abort signal once the answer starts streaming,
+   * so the result is closed by hand then; either way the connection drops, and ClickHouse
+   * cancels the statement (`cancel_http_readonly_queries_on_client_close`, READ_SETTINGS)
+   * rather than running it to its time limit. An abort by the caller throws its reason.
+   */
+  async query<Row = Record<string, unknown>>(sql: string, params: QueryParams = {}, settings: QuerySettings = {}, signal?: AbortSignal): Promise<Row[]> {
+    const timeout = AbortSignal.timeout(readTimeoutMs(settings));
+    const abort = signal ? AbortSignal.any([timeout, signal]) : timeout;
     try {
       const result = await this.reader.query({
         query: sql,
         query_params: params,
         clickhouse_settings: settings,
         format: 'JSONEachRow',
-        abort_signal: AbortSignal.timeout(readTimeoutMs(settings)),
+        abort_signal: abort,
       });
-      return await result.json<Row>();
+      const close = () => result.close();
+      abort.addEventListener('abort', close, { once: true });
+      try {
+        return await result.json<Row>();
+      } finally {
+        abort.removeEventListener('abort', close);
+      }
     } catch (error) {
+      if (signal?.aborted) throw signal.reason;
       throw mapEventStoreError(error);
     }
   }

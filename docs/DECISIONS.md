@@ -3839,3 +3839,244 @@ runs to its time limit, since neither the slots nor `store.query` take an abort 
 queries of several seconds a user who changes a chart three times quickly may see
 `analytics_busy` on the last. The catalog's cursor is an offset, not Appendix E's position and
 first-page time, so a name added or a refresh between two pages can move an entry across them.
+
+### 33.5 Overview (piece 5, September 27, 2026)
+
+**One answer, one slot.** `GET …/overview` (`routes/analytics-overview.ts`,
+`services/analytics-overview.ts`) runs its eight event-store statements, and the oldest-day
+read, one after the other inside a single `runAnalyticsQuery`, so the whole home screen holds
+one slot (AN-205) and never three. The catalog (top events and the notices) and the event-name
+IDs of `app_started` and `session_crashed` are read from PostgreSQL before the slot is taken.
+Rejected: statements in parallel inside the slot (it would put several statements per caller
+on the event store, which is what the slot is there to prevent), and one route per figure
+(the interface would hold three slots for one screen, and the web's own concurrency would
+decide the order).
+
+**How each figure is computed.** Filters are 9.2 filters built from the query (`app`,
+`platform` when named; `environment`, `production` by default) and compiled by piece 4's
+`compileFilters`; the installation records and the sessions expose their install or session
+dimensions under the same column names, so one compiler serves events, installations,
+sessions and `version_first`.
+
+- *Active figures, the chart, stickiness* — one set of inner rows over the rollup,
+  `(local_day, installation_id, user_id, count())` for `ANY_EVENT_ROWS` (device installations,
+  no background event) from 59 days before today (or the range's start, if earlier) to today;
+  one statement gives WAU, MAU and their previous windows with `uniqExactIf`, a second the
+  daily counts, from which the last complete day, today, the chart and stickiness come. The
+  unit is `uniqExactIf(installation_id, …)` or `uniqExactIf(user_id, user_id != '' AND …)`.
+  Stickiness divides the mean over the days the 30-day window covers (not always 30) by MAU,
+  so a database younger than a month is not diluted by days it could not have had.
+- *The last 60 minutes and "today so far" one day earlier* — effective time is not a rollup
+  key, so these read the events of yesterday and today (`local_day` prunes the rest). "The
+  same figure one day earlier" for today so far is read as yesterday up to the same time of
+  day — as long past yesterday's midnight as now is past today's — not the whole of yesterday,
+  which would always look larger (the PRD's words allow both; see the amendment below). Not
+  "now minus 24 hours": the day after a daylight-saving change that starts an hour off, and
+  just after midnight it falls before yesterday began and reads 0 (found in verification).
+- *New installations* — the installation records, `minIfMerge(install)` for the install day and
+  install dimensions, `kind = 'device' AND NOT ephemeral`, grouped by install day over the
+  previous and the current range at once.
+- *D1, D7, D30* — the same members joined to their `app_started` days
+  (`groupArray(local_day)` per installation over the two-level rollup read), `countIf` per N of
+  members whose `day + N < today` and of those with `has(days, day + N)`. Returns count on any
+  platform and in any environment and include a background `app_started` of the installation
+  (AN-103, AN-047); the value is null while no member's Nth day has ended.
+- *Sessions and crash-free sessions* — `sessionsSource`: `argMin((local_day, app_id, platform,
+  environment, app_version, params['crashReporting'] = 'true'), (received_time, effective_time,
+  event_id))` per session ID over the `app_started` of device installations that are not
+  background events, read from a day before the window to a day after it (a session lasts at
+  most 24 hours; two `app_started` of one session further apart need a broken client clock),
+  then filtered on the session's own day and dimensions. `crashedSessions` is the set of session
+  IDs any `session_crashed` names from the day before the window on, however late it arrived.
+  One statement returns sessions grouped by day, version, `crashReporting` and flagged; the
+  totals, the per-day counts, the previous range, the overall rate and the five versions with
+  the most sessions are sums in the API. A session without an app version counts in the overall
+  figure and in no version row.
+- *Shares* — the distinct installations active in the last 7 days (rollup) joined to
+  `maxIfMerge(latest)`, grouped with `GROUPING SETS ((app_version), (platform), (country))` in
+  one statement (`grouping(x) = 0` on the rows grouped by x, the SQL standard's reading, which
+  26.8 follows); ten values and Other in the API, so each installation counts once per table.
+- *Versions first seen* — a new table, below.
+- *Top events and notices* — the catalog's 24-hour figures (AN-143 names the catalog):
+  `no_events` when the database has no catalog entry at all, `no_app_started` once the catalog
+  has been refreshed and shows events and no `app_started` in the last 24 hours.
+
+**`version_first` (ClickHouse migration `0002_version_first.sql`).** The marker of AN-142 from
+the events would read every rollup row of the storage window, since no sort key leads with the
+app version: on the reference workload about 400 million rows for one marker line, several
+seconds of a one-second budget. The new table keeps `min(local_day)` per database, app,
+platform, environment and app version, fed by a materialized view from `events_ingest` with the
+active figures' rule (device installations, no background event), a few hundred rows per
+database; the Overview reads it whole and filters it like the events. It outlives the events of
+its first day, as the first occurrences do. After retention has dropped weeks, a version whose
+first day is the oldest day kept has no marker, since it may be older. Rejected: scanning the
+rollup (the cost above), and markers from `app_installed`/`app_updated` (an integrator sending
+its own events need not send them). The table is partitioned by database, so **piece 9's database
+removal must drop its partition** with the others, and the seed script and the harness now know
+it.
+
+**What `EXPLAIN` showed** (the 22.5-million-event seed of 33.4, 90 days, `max_threads = 2`): the
+two active statements `ReadFromMergeTree (by_day)`, 45 ms each; the last hour and today so far
+the events, 24 ms; new installations the `installations` table, 22 ms; retention
+`installations` and `by_event_day`, 36 ms; sessions the events of `app_started`, 318 ms; shares
+`by_day` and `installations`, 33 ms; `version_first`, 5 ms. The whole Overview, the oldest-day
+read included, took a median of 490 ms over five runs, for either unit. The sessions statement
+dominates because the seed's event-name ID 1, which stands for `app_started`, is its most
+frequent name (13% of all events, 3.7 rows per session); a real `app_started` is about one row
+per session. An integration test runs the active rows under `force_optimize_projection = 1`.
+Measured on a laptop, as an indication: the reference workload holds about 180 times as many
+events, and the two statements that read the whole `installations` table (new installations,
+retention) grow with the installations a database has ever had; piece 12's load test decides
+whether they need a table keyed by install day.
+
+**Previous periods (AN-141).** A range figure's previous period is the range of the same length
+just before; it is `null` unless it begins on or after the oldest day kept, and an empty
+database has none. The last hour's previous 60 minutes are available when they begin on or after
+the first instant of the oldest day kept, in the reporting timezone. A figure whose own period the window holds none of has `value` null too.
+
+**Piece 4's follow-ups.**
+
+- *A client that goes away frees its slot and its statement.* `clientGoneSignal(reply)` fires
+  when the response's connection closes before it was written in full; trends, event detail,
+  filter values and the Overview pass it to `runAnalyticsQuery`, which gives it to
+  `QuerySlots.acquire` (a waiter leaves the queue at once and the queue drains) and binds it to
+  `store.query`. `@clickhouse/client` stops listening to its abort signal once the answer starts
+  streaming, so `store.query` also closes the result by hand; and ClickHouse keeps running a
+  read whose HTTP client went away unless told otherwise — measured: with
+  `cancel_http_readonly_queries_on_client_close = 0` an aborted `sleepEachRow` statement stayed in
+  `system.processes` to its end, with `1` it left within 300 ms — so the reader sends that setting
+  with every read (the read-only users run with `readonly = 2`, which allows it). The error
+  handler answers such a request 499 and logs it at info. `app.inject` (the remote MCP) ends
+  its responses in full and never aborts. Rejected: `KILL QUERY` by query ID from the writer
+  (it needs a privilege a deployment's writer may lack, and one more round trip), and leaving
+  the statement to its time limit (a user who changes a chart three times would meet
+  `analytics_busy`). The read timeout now closes a streaming result too, which it never did.
+- *At most 1,000 periods per range* (AN-064, 9.2): `checkInterval(range, interval, path,
+  rangePath)` counts the periods the range touches (`periodCount`) and refuses more than 1,000
+  with `invalid_query` at `range`; the Overview checks by day. Funnels and cohorts call the same
+  function with their interval or granularity.
+- *The catalog cursor is a position.* It carries the sort, the last entry's sort value and
+  name, and the time of the first page; a later page starts strictly after that position and
+  leaves out names first seen after that time. The time is the newest first-seen time the first
+  page could read (ingest's received time, which only moves forward), so a name stamped a
+  millisecond ahead of the wall clock is not mistaken for a late one. Under `sort=name` a list
+  read page by page shows each name once whatever arrives or refreshes; under `lastSeen` and
+  `events24h`, an entry the refresh moves across the reader's position between two pages can
+  still be skipped or shown twice — the refresh keeps no earlier values, so no cursor can say
+  where the entry stood. Rejected: an in-memory snapshot of each first page's order (state per
+  reader for a rare case), and the offset (every later entry moved when a name arrived). The web
+  catalog now follows `nextCursor` until the last page, so a database allowed 5,000 names shows
+  them all.
+
+**PRD amendments for the orchestrator** (not applied here):
+
+- AN-141, "daily … active units from the same figure one day … earlier": add "; for today so far,
+  the same figure at the same time yesterday".
+- AN-140, after "D1, D7 and D30 retention of the standard cohort, where DN is …": add "(null
+  while no installation installed in the range has reached the end of its Nth day)".
+- Appendix E "Overview": "each figure of AN-140 with its `value`, its `previous` … and the range
+  it `covered` (null, with a null value, when the storage window holds none of its period)";
+  and "`crashFree` overall and by version, each with `rate` (null when not measured), `sessions`
+  (the sessions counted, those reporting a crash module), `measured` and `lowConfidence`".
+- Appendix E "Cursors": after "so that a list read page by page while events arrive shows each
+  item once", add "; for the catalog sorted by last seen or by 24-hour events, an entry whose
+  figures a refresh changes between two pages may move across the cursor".
+
+### 33.6 Profiles and links (piece 6, September 27, 2026)
+
+**One cross-capability lookup** (`apps/api/src/services/identity-links.ts`). Profiles (AN-124),
+the funnel drill-down's flags (AN-088, piece 7) and the erasure preview (piece 10) all ask the
+same question — what do this project's crash and feedback databases hold that carries these
+installation or user IDs — so one module answers it, and the three cannot disagree on what
+"carries" or "can read" means. `findIdentityLinks(ctx, principal, projectId, { installationIds,
+userIds })` answers the crash groups having retained reports carrying any of them (database,
+group, title, the number of such reports, the last received time) and the submissions carrying
+any of them (database, submission, received time, first free-text answer), newest first, 100 of
+each with a `truncated` flag; `identityFlags(…)` is the cheap "has any" form, one indexed
+`SELECT DISTINCT` per column and capability. Only databases of that project the principal can
+read count, resolved with the existing `listAccessibleCrashDatabaseIds` and
+`listAccessibleDatabaseIds` (FD-007's effective roles), so a database the reader cannot read
+contributes nothing, not even a count. It reads PostgreSQL alone, through the identity indexes
+already on `crash_reports` and `submissions` (CR-118, FR-062), so a profile's links work however
+the event store is doing. The group title is the one the crash screens show (`exceptionType` or
+the kind, then the top frame or module). The first free-text answer follows the pinned form
+version's authored order (FR-065), cut at 500 characters for a card; the whole answer is one
+click away. Rejected: a lookup per capability in each piece (three copies of the access rule),
+and asking the event store for the IDs of crash reports (it holds none).
+
+**Which IDs a profile's links match.** An installation's profile matches its installation ID
+**and every user ID seen on it**; a user's profile matches the user ID **and the IDs of every
+installation it was seen on**. AN-124 says "the profile's installation or user ID", and a
+crash report sent before sign-in carries only the installation ID while a feedback submission
+sent from a backend carries only the user ID: matching one ID alone would leave out exactly the
+records support opens a profile to find. The cost is that a shared device's profile also lists
+the crashes of its other users' other installations, which the identity history on the same
+page explains. Rejected: matching the installation ID alone for an installation (misses the
+backend's submissions) and following links transitively (user → installations → their other
+users), which would pull in strangers on a shared tablet.
+
+**Profile reads.** A profile by its exact ID holds no slot (AN-205) but runs under the per-query
+limits: the installation record (`installations` with the existence rule of AN-031), its
+identity links (`installation_users`, the current user ID being the last seen with ties to the
+larger ID, as `argMax(user_id, (last_seen, user_id))` derives it), and its counts and calendar
+from its events (`installation_id =` or `user_id =`, served by the bloom filters of DECISIONS
+31.4). Sessions are the distinct session IDs of its `app_started` events (AN-043), active days
+the local days holding an event that is not a background event (AN-047), events every event
+including background ones. A user profile exists while one of its installations' records does
+(AN-126) and its totals are over the events carrying the user ID, on whichever installation.
+The test installation is never listed (AN-025); read by its exact ID it has a profile like any
+other. A server installation has no `lastSeen` (its events are background events), so lists
+order it by its last event. Column aliases never repeat a column's name (`max(last_seen) AS
+last_seen_at`): ClickHouse resolves an alias before a column, and `ifNull(max(last_seen), …)`
+beside `max(last_seen) AS last_seen` would read as an aggregate inside an aggregate.
+
+**Search, the recent list and the feed take a slot** (AN-205). A prefix needs six characters
+(AN-120); shorter text still matches exact IDs, because a user ID such as `u1` is legitimate,
+and the answer carries `notice: prefix_too_short` rather than an error, so the interface can say
+why a five-character prefix of an installation ID found nothing. An installation ID prefix is
+`startsWith(toString(installation_id), prefix)`, the prefix rebuilt from `q`'s hex digits in the
+stored lowercase dashed form, so it matches in any letter case, with or without dashes (9.1), and
+needs six hex digits (found by the verification: a dashless prefix longer than eight characters
+matched nothing); both prefixes scan the database's installation tables, which is why they hold a
+slot.
+
+**Cursors keep the first page's time** (Appendix E). The feed orders by effective time then
+event ID and reads `max(received_time) OVER ()` with its first page; later pages add
+`received_time <= that`, so an event arriving meanwhile, however old its effective time, never
+lands on a page already passed, and it heads a fresh first page instead. The recent-installations
+list orders by "seen" (last seen, or last event for a server installation) then installation ID
+and keeps the first page's newest "seen"; an installation active after that is left off the
+following pages (it heads a fresh list) rather than listed twice. **What that costs**: such an
+installation that was still below the cursor is missing from that paging session, since its
+earlier "seen" is merged away in the aggregate state and cannot be read as of the first page.
+Rejected: recomputing "seen" as of the first page from the events (a scan of the whole storage
+window per page).
+
+**Export** (AN-125) streams one JSON document: the record, identity links, first occurrences
+(a deleted name's are left out, as its events are; `*` for the any-event occurrence) and every
+event, newest first, read in pages of 5,000 through the feed's own cursor, each page taking and
+releasing a slot. The records and the first page are read before the response starts, so a
+missing profile, a busy slot or an outage answers with its status; a failure after that cuts
+the download, which a client sees as invalid JSON. The file name carries the database ID and
+the date, never the installation or user ID (a download's name lands in browser histories).
+With `limit`, the route answers one page as JSON (the records on the first page only): that is
+what `export_analytics_profile` reads, 1,000 events a call (AN-204).
+
+**The Usage profile link** (AN-154, FR-066) is its own request, `GET …/reports/{id}/usage-profile`
+and `GET …/submissions/{id}/usage-profile`, which the web asks after the report or submission
+has loaded: the crash and submission reads never touch the event store, so an outage can
+neither slow nor fail them. The lookup answers an empty list, never an error, when the event
+store is not configured, does not answer `reachable()` within 1.5 s, or the query fails, and it
+is bounded at 3 s in all (tested with a store refusing connections and one accepting them and
+never answering). It holds no slot (a read by exact ID). When several readable analytics
+databases of the project hold the installation, the answer lists them all, the one it was seen
+in most recently first, and the interface shows one link per database, named after it.
+Rejected: embedding the link in the report and submission answers (every read would wait on the
+event store, which AN-154 and FD-009 forbid), and choosing one database silently.
+
+**Web.** Users is a panel of the database page; the profile's subject is in the address
+(`?tab=users&installation=…` or `&user=…`), which is what the Usage profile link opens. The
+calendar draws at most the last 53 weeks and hides its drawing from assistive technology;
+**Active days as a list** gives every active day as text. The feed groups consecutive events of
+one session, as a newest-first list meets them. The Admin's Erase action has its marked place in
+the profile header for piece 10.

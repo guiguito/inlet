@@ -17,6 +17,7 @@ import {
 } from '@inlet/shared';
 import { InletClient, InletError } from './client.js';
 import { registerAnalyticsTools } from './analytics-tools.js';
+import { registerAnalyticsProfileTools } from './analytics-profile-tools.js';
 import { registerCrashTools } from './crash-tools.js';
 
 /**
@@ -107,6 +108,7 @@ function databasePath(id: string): string {
 export function registerTools(server: McpServer, client: InletClient): void {
   registerCrashTools(server, client);
   registerAnalyticsTools(server, client);
+  registerAnalyticsProfileTools(server, client);
 
   // --- Reading ------------------------------------------------------------
 
@@ -244,7 +246,7 @@ export function registerTools(server: McpServer, client: InletClient): void {
     {
       title: 'Read one submission',
       description:
-        'Includes the definition of the form version it was answered against, so answers can be read with the labels the respondent actually saw (FR-065), and the stable authenticated URL of each screenshot.',
+        'Includes the definition of the form version it was answered against, so answers can be read with the labels the respondent actually saw (FR-065), and the stable authenticated URL of each screenshot. Also the SDK identity the submission carried (FR-062, FR-204): `userId`, `installationId` and `sessionId`, null when absent; pass the installation ID or user ID to get_analytics_profile to see that respondent’s usage.',
       inputSchema: { databaseId, submissionId },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },

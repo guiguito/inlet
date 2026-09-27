@@ -345,6 +345,7 @@ These need a secret server key or a signed-in user.
 ```
 GET  /v1/feedback-databases/{databaseId}/submissions?limit=50&cursor=…
 GET  /v1/feedback-databases/{databaseId}/submissions/{submissionId}
+GET  /v1/feedback-databases/{databaseId}/submissions/{submissionId}/usage-profile
 POST /v1/feedback-databases/{databaseId}/submissions/seen
 DELETE /v1/feedback-databases/{databaseId}/submissions/{submissionId}
 GET  /v1/feedback-databases/{databaseId}/submissions/export?format=json
@@ -353,6 +354,10 @@ GET  /v1/feedback-databases/{databaseId}/submissions/export?format=csv
 
 The list is newest first and keyset-paginated, so a page stays stable while new
 feedback arrives. Follow `nextCursor` until it is null.
+
+A submission carries the SDK identity it was sent with, `installationId`, `sessionId` and
+`userId` (null when absent). `…/usage-profile` answers the analytics profiles of its
+installation, for the "Usage profile" link (see [Profiles](#profiles)).
 
 ### Narrowing the list
 
@@ -1020,6 +1025,7 @@ GET  /v1/crash-databases/{id}/groups?state&kind&release&os&arch&environment&user
 GET  /v1/crash-databases/{id}/groups/{groupId}?days=30
 GET  /v1/crash-databases/{id}/groups/{groupId}/reports?release&os&environment&userId&installationId&sessionId&limit
 GET  /v1/crash-databases/{id}/reports/{reportId}
+GET  /v1/crash-databases/{id}/reports/{reportId}/usage-profile
 GET  /v1/crash-databases/{id}/releases
 GET  /v1/crash-databases/{id}/filters
 GET  /v1/crash-databases/{id}/stats?days=30&by=day|release|os|environment|kind (plus the list filters)
@@ -1037,6 +1043,8 @@ the release, OS and environment filters too, and reshapes its breakdowns and tim
 A report carries `installationId` and `sessionId` (null when absent) beside `userId`.
 Filtering groups by either returns the groups with at least one retained report carrying
 it; the same filters apply to the report export.
+`…/usage-profile` answers the analytics profiles of the report's installation, for the
+"Usage profile" link (see [Profiles](#profiles)).
 
 `/filters` returns `{kinds, operatingSystems, environments}`: the distinct values this
 database has actually seen, for populating a filter control without offering a value that
@@ -1401,7 +1409,13 @@ no query slot and answers while the event store is down.
   the names that have used that category; hidden names are left out unless
   `includeHidden=true`; `includeParams=true` adds each name's params with their types and
   descriptions. `sort` is `name` (the default), `lastSeen` or `events24h`, each then by name.
-  At most 1,000 a page: pass `nextCursor` back as `cursor`.
+  At most 1,000 a page: pass `nextCursor` back as `cursor`, with the same `sort` (another
+  sort's cursor, or one not returned by this list, is `400 invalid_query` at `cursor`). The
+  cursor is a position — the last entry's sort value and name — and the time of the first
+  page, so a name that arrives while you page is not shown on a later page (read the list
+  again to see it), and an entry is never shown twice because an earlier one arrived. Under
+  `lastSeen` and `events24h`, an entry whose figures the refresh moves across your position
+  between two pages can still be skipped or repeated; `name` is exact.
 - Standard events show the platform's own description until the team writes one.
 
 **One event** (`GET …/events/{name}`) adds its categories and its params, each with its
@@ -1477,7 +1491,9 @@ The body is a trend definition (UX Analytics PRD 9.2). Everything but `series` h
   `last90Days`, `last12Months` (this calendar month and the eleven before it), `thisMonth`,
   `thisYear`.
 - **Interval**: `hour` (a range of at most seven days, else `400 invalid_query`), `day` (the
-  default), `week` (ISO weeks, Monday to Sunday), `month` or `year`.
+  default), `week` (ISO weeks, Monday to Sunday), `month` or `year`. A range spans at most
+  1,000 periods of its interval (1,000 days by day, about 19 years by week); a longer one is
+  `400 invalid_query` at `range`.
 - **Series**: one to five. `event` is an event name or `*`, any event: every event of a device
   installation that is not a background event, of every name and category, hidden ones
   included. `metric` is `events`, `installations` (unique installations: server installations
@@ -1548,10 +1564,282 @@ The answer has one point per period of the range, zeros included:
   period and series: `series, event, metric, splitValue, periodStart, periodLabel, value,
   incomplete, coveredFrom, coveredTo`, the chart's own values.
 
+### The Overview
+
+```
+GET /v1/analytics-databases/{id}/overview?preset&from&to&app&platform&environment&unit    Viewer or above; one query slot
+```
+
+The home screen of a database (UX Analytics AN-140 to AN-144), in one answer that holds one
+query slot for all of its statements.
+
+- **Range**: `preset` (`last30Days` by default; presets end today and include it) or `from`
+  and `to`, dates in the reporting timezone, both included, at most 1,000 days.
+- **Filters**: `app` (every app by default), `platform` (every client platform by default:
+  `web`, `ios`, `android`, `macos`, `windows`, `linux`, `other`; `server` is refused, since
+  a backend's events count in no active figure) and `environment` (`production` by default).
+  Repeat a parameter for several values: `?environment=production&environment=staging`.
+- **`unit`**: `installation` (the default) or `user`. It changes the active figures only:
+  with `user` they count distinct non-empty user IDs of the same events.
+
+```json
+{
+  "range": { "from": "2026-08-29", "to": "2026-09-27" },
+  "unit": "installation",
+  "timezone": "Europe/Paris",
+  "keptFrom": "2026-06-01",
+  "filters": { "apps": [], "platforms": [], "environments": ["production"] },
+  "figures": {
+    "activeLastHour": { "value": 412, "previous": 398, "covered": { "from": "2026-09-27T09:00:00.000Z", "to": "2026-09-27T10:00:00.000Z" } },
+    "dailyActiveLastDay": { "value": 5210, "previous": 5102, "covered": { "from": "2026-09-26", "to": "2026-09-26" } },
+    "dailyActiveToday": { "value": 3120, "previous": 3044, "covered": { "from": "2026-09-27", "to": "2026-09-27" } },
+    "weeklyActive": { "value": 14320, "previous": 13980, "covered": { "from": "2026-09-21", "to": "2026-09-27" } },
+    "monthlyActive": { "value": 31022, "previous": null, "covered": { "from": "2026-08-29", "to": "2026-09-27" } },
+    "stickiness": { "value": 0.162, "previous": null, "covered": { "from": "2026-08-29", "to": "2026-09-27" } },
+    "newInstallations": { "value": 2210, "previous": 1987, "covered": { "from": "2026-08-29", "to": "2026-09-27" }, "perDay": [{ "day": "2026-08-29", "value": 71 }] },
+    "sessions": { "value": 88410, "previous": 84002, "covered": { "from": "2026-08-29", "to": "2026-09-27" }, "perDay": [{ "day": "2026-08-29", "value": 2890 }] },
+    "d1": { "value": 0.41, "previous": 0.39, "covered": { "from": "2026-08-29", "to": "2026-09-27" }, "installations": 2140 },
+    "d7": { "value": 0.22, "previous": 0.21, "covered": { "from": "2026-08-29", "to": "2026-09-27" }, "installations": 1650 },
+    "d30": { "value": null, "previous": 0.11, "covered": { "from": "2026-08-29", "to": "2026-09-27" }, "installations": 0 }
+  },
+  "crashFree": {
+    "covered": { "from": "2026-08-29", "to": "2026-09-27" },
+    "overall": { "rate": 0.992, "sessions": 80120, "measured": true, "lowConfidence": false, "previous": 0.990 },
+    "versions": [
+      { "version": "1.5.0", "rate": 0.99, "sessions": 1000, "measured": true, "lowConfidence": false },
+      { "version": "1.4.2", "rate": null, "sessions": 0, "measured": false, "lowConfidence": false }
+    ]
+  },
+  "shares": {
+    "covered": { "from": "2026-09-21", "to": "2026-09-27" },
+    "appVersion": [{ "value": "1.5.0", "share": 0.62, "installations": 8878 }, { "value": "Other", "share": 0.02, "installations": 286, "other": true }],
+    "platform": [{ "value": "ios", "share": 0.55, "installations": 7876 }],
+    "country": [{ "value": "FR", "share": 0.31, "installations": 4439 }]
+  },
+  "topEvents": { "computedAt": "2026-09-27T09:58:00.000Z", "events": [{ "name": "screen_viewed", "events": 120400 }] },
+  "dailyActive": { "covered": { "from": "2026-08-29", "to": "2026-09-27" }, "points": [{ "start": "2026-08-29", "label": "2026-08-29", "value": 4980, "incomplete": false }] },
+  "versionsFirstSeen": [{ "version": "1.5.0", "day": "2026-09-15" }],
+  "notices": []
+}
+```
+
+Field by field:
+
+- **Every figure** has `value`, `previous` and `covered`. `covered` is the part of the figure's
+  period the storage window holds (null when it holds none of it, and then `value` is null
+  too). `previous` is the same figure for the previous period, and is `null` — shown as "not
+  available" — whenever that period begins before the oldest event kept (`keptFrom`), so a
+  change is never computed from part of a period.
+- **Anchored to now**, whatever the range: `activeLastHour`, units with an event in the last
+  60 minutes by event time (previous: the 60 minutes before; `covered` holds RFC 3339 times);
+  `dailyActiveLastDay`, yesterday (previous: the day before); `dailyActiveToday`, today so far
+  (previous: yesterday up to the same time of day); `weeklyActive` and `monthlyActive`, the
+  7 and 30 days ending today (previous: seven and thirty days earlier); `stickiness`, the mean
+  daily active units over those 30 days (over the days kept, when fewer) divided by
+  `monthlyActive` (previous: thirty days earlier).
+- **Active** means an event that is not a background event (platform `server`) from a device
+  installation. Server installations (events carrying a user ID and no installation ID) and
+  the database's test installation count in no active or unique figure.
+- **Over the range** (previous: the range of the same length just before):
+  `newInstallations`, installations whose install day falls in the range, filtered by their
+  install dimensions, never ephemeral, server or test ones; `sessions`, distinct session IDs of
+  stored `app_started` events of device installations, each on the local day, app version,
+  dimensions and `crashReporting` of its first `app_started` accepted, a session ID no
+  `app_started` names counting nowhere; each with `perDay` over the covered days.
+- **`d1`, `d7`, `d30`**: of the installations installed in the range whose Nth day after
+  installing has ended (`installations`, the denominator), the share that sent `app_started`
+  on that local day, on any platform and in any environment — the standard Retention cohort,
+  by day. `value` is null while no installation of the range has reached its Nth day's end,
+  which with the default 30 days is always the case for `d30`.
+- **`crashFree`**: over the sessions whose `app_started` falls in the range and reports a crash
+  module (`crashReporting` true), `rate` = 1 − sessions flagged crashed ÷ sessions, a session
+  being flagged when any `session_crashed` names it however late it arrived (one per session
+  counts). `overall`, with `previous`, and `versions`, the five app versions with the most
+  sessions in the range; `measured` is false ("not measured", `rate` null) for a version none
+  of whose sessions reported a crash module, `sessions` is the number counted, and
+  `lowConfidence` is true below 100.
+- **`shares`**: the installations active in the last 7 days, each counted once by its latest
+  app version, platform and country: the ten largest values and `Other` (`other: true`),
+  `share` adding up to 1. An empty `value` means none was reported.
+- **`topEvents`**: the ten names with the most events in the last 24 hours, hidden ones left
+  out, from the catalog's refresh as of `computedAt` (at most five minutes old; empty before
+  its first pass).
+- **`dailyActive`**: daily active units over the range, a point a day as a trend's points,
+  `incomplete` for today and for days before the oldest one kept.
+- **`versionsFirstSeen`**: the day each app version was first seen, for the versions first seen
+  within the range, from the events the active figures count.
+- **`notices`**: `no_events`, when nothing has arrived yet; `no_app_started`, when the last 24
+  hours brought events and no `app_started` (the standard events are off, typically), which
+  is why sessions, retention and crash-free sessions are empty.
+
+A bad range, unit or platform is `400 invalid_query` with its path (`range`, `range.to`,
+`unit`, `platform.0`).
+
+### Profiles
+
+A profile is everything an analytics database knows about one installation or one user ID
+(UX Analytics PRD 6.9). An **installation** is one install of an app on one device or browser
+profile, identified by the random ID the SDK keeps; a **server installation** is the one the
+server derives for events that carry a user ID and no installation ID (a backend); the **test
+installation** receives the test event and is never listed. A **user ID** is the opaque ID the
+application sets after sign-in. The two are never merged: one installation may carry several
+user IDs over its life, and one user ID may span several installations.
+
+```
+GET /v1/analytics-databases/{id}/profiles?q&platform&appVersion&country&environment&cursor&limit   a query slot
+GET /v1/analytics-databases/{id}/profiles/installations/{installationId}                          no slot
+GET /v1/analytics-databases/{id}/profiles/users/{userId}                                          no slot
+GET /v1/analytics-databases/{id}/profiles/installations/{installationId}/events?name&from&to&cursor&limit   a query slot
+GET /v1/analytics-databases/{id}/profiles/users/{userId}/events?name&from&to&cursor&limit                   a query slot
+GET /v1/analytics-databases/{id}/profiles/installations/{installationId}/export[?limit&cursor]     a slot per page
+GET /v1/analytics-databases/{id}/profiles/users/{userId}/export[?limit&cursor]                     a slot per page
+GET /v1/crash-databases/{id}/reports/{reportId}/usage-profile                                     no slot
+GET /v1/feedback-databases/{id}/submissions/{submissionId}/usage-profile                          no slot
+```
+
+All need Viewer or above (a secret key qualifies) and answer `503 analytics_unavailable` while
+the event store is down, except the two `usage-profile` routes, which answer an empty list.
+A user ID goes in the path URL-encoded (`/profiles/users/a%2Fb`). Every route is logged by its
+pattern, so no installation or user ID reaches the server's log.
+
+**Finding a profile.** With `q`, the answer lists the installations whose ID is `q` or starts
+with it, and in `users` the user IDs equal to it or starting with it, their installations
+included in `installations`. A prefix needs **at least six characters**: shorter text matches
+exact IDs only (a user ID such as `u1` is still found) and the answer says
+`"notice": "prefix_too_short"`. An installation ID, or its first six hex digits or more, is
+found in any letter case, with or without its dashes. At most `limit` of each (50 by default,
+1,000 at most), with `truncated: true` when more match.
+
+Without `q`, the answer is the installations **seen most recently**, newest first then by
+installation ID, 50 a page, optionally filtered by their latest `platform`, `appVersion`,
+`country` and `environment`:
+
+```json
+{
+  "installations": [
+    {
+      "installationId": "0192f5a0-1111-7000-8000-00000000000a",
+      "userId": "u2",
+      "installationKind": "device", "server": false, "ephemeral": false,
+      "platform": "ios", "platformVersion": "18.1", "appVersion": "1.5.0",
+      "country": "FR", "environment": "production",
+      "firstSeen": "2026-09-01T08:00:00.000Z",
+      "lastSeen": "2026-09-27T09:41:12.004Z",
+      "lastEvent": "2026-09-27T09:41:12.004Z"
+    }
+  ],
+  "users": [],
+  "nextCursor": "eyJoIjoi…",
+  "truncated": false,
+  "notice": null
+}
+```
+
+`userId` is the user ID seen last on the installation. `lastSeen` comes from events that are
+not background events, so it is null for a server installation, which is ordered by its
+`lastEvent` instead. Device and server installations are listed; the test installation is not.
+
+**Cursors** are opaque. They carry the next page's position and the time of the first page, so
+paging while events arrive shows each item at most once: an installation that becomes active
+after the first page was read moves to the top of a fresh list rather than onto a later page,
+and a profile's events that arrive meanwhile are left off the pages that follow (they head a
+fresh first page). A cursor not issued by the list is `400 invalid_query`.
+
+**An installation profile**:
+
+```json
+{
+  "kind": "installation",
+  "installation": {
+    "installationId": "0192f5a0-1111-7000-8000-00000000000a",
+    "installationKind": "device", "server": false, "ephemeral": false,
+    "installTime": "2026-09-01T08:00:00.000Z", "installDay": "2026-09-01",
+    "firstSeen": "2026-09-01T08:00:00.000Z",
+    "lastSeen": "2026-09-27T09:41:12.004Z",
+    "lastEvent": "2026-09-27T09:41:12.004Z",
+    "installAttribution": "newsletter",
+    "install": { "platform": "ios", "appVersion": "1.4.0", "…": "…", "experiments": {} },
+    "latest": { "platform": "ios", "osName": "iOS", "platformVersion": "18.1", "runtime": null,
+                "runtimeVersion": null, "app": "com.example.checkout", "appVersion": "1.5.0",
+                "appBuild": "412", "locale": "fr-FR", "environment": "production", "country": "FR",
+                "attribution": "ads", "experiments": { "checkout": "b" } },
+    "userId": "u2"
+  },
+  "identity": [
+    { "userId": "u2", "firstSeen": "2026-09-20T10:00:00.000Z", "lastSeen": "2026-09-27T09:41:12.004Z", "current": true },
+    { "userId": "u1", "firstSeen": "2026-09-01T08:00:00.000Z", "lastSeen": "2026-09-19T18:30:00.000Z", "current": false }
+  ],
+  "counts": { "events": 1840, "sessions": 61, "activeDays": 22 },
+  "activeDays": [{ "day": "2026-09-01", "events": 40 }],
+  "window": { "from": "2026-06-01", "to": "2026-09-27" },
+  "links": {
+    "crashGroups": [
+      { "crashDatabaseId": "cdb_…", "crashDatabaseName": "Checkout crashes", "groupId": "cgr_…",
+        "title": "PaymentError · pay (checkout.js)", "reports": 2, "lastReceivedAt": "2026-09-27T09:40:58.100Z" }
+    ],
+    "submissions": [
+      { "feedbackDatabaseId": "fdb_…", "feedbackDatabaseName": "Checkout feedback", "submissionId": "sub_…",
+        "receivedAt": "2026-09-27T09:42:03.000Z", "firstTextAnswer": "Paying did nothing, twice." }
+    ],
+    "truncated": { "crashGroups": false, "submissions": false }
+  }
+}
+```
+
+- `installTime` is the effective time of the event that created the record and never moves;
+  `install` holds that event's dimensions, `latest` those of its latest event. The current user
+  ID is the one seen last; the others are its previous user IDs, each with when it was first and
+  last seen on this installation.
+- `counts` and `activeDays` are counted from its events: every event; sessions, the distinct
+  session IDs of its `app_started` events; active days, the days (in the reporting timezone)
+  holding an event that is not a background event. `window` is the storage window the calendar
+  covers, from the oldest day kept to today.
+- `links` lists, from the crash and feedback databases of the same project **that you can
+  read**, the crash groups having retained reports that carry the installation ID or any user ID
+  seen on it (with the number of such reports and when the last arrived) and the submissions
+  carrying either (with their received time and first free-text answer, cut at 500 characters),
+  newest first, 100 of each at most. A database you cannot read contributes nothing.
+- `404 profile_not_found` when no installation record exists: never received, only background
+  events (which create no record), erased, or aged out with its events.
+
+**A user profile** has `kind: "user"`, `user` (`userId`, `firstSeen`, `lastSeen`,
+`installations`), `identity` (the installations it was seen on, most recent first, each as a
+list row plus `userFirstSeen` and `userLastSeen`), `counts` and `activeDays` over the events
+carrying the user ID, `window`, and `links` for the user ID and those installations' IDs.
+
+**A profile's events** are newest first by effective time then event ID, 50 a page (`limit` up
+to 1,000), each with `eventId`, `name`, `category`, `time` (effective), `receivedTime`,
+`sessionId`, `installationId`, `userId`, `params` (as stored, every value text) and `context`
+(the dimensions above). `name` keeps one event name, an unknown or deleted one answering none;
+`from` and `to` are dates in the reporting timezone, both included. Every environment is
+included.
+
+**The export** is a JSON download, to answer a request for access: the record, `identity`,
+`firstOccurrences` (for each event name still in the catalog, and `*` for any event, the day,
+time and dimensions of the first occurrence), and `events`, every stored event of the profile,
+newest first. The events are read in pages of 5,000, each holding a query slot only while it is
+read. With `limit`, the route answers one page of JSON instead, the records on the first page
+only, with `nextCursor` (MCP uses it).
+
+**The Usage profile link.** `GET …/reports/{reportId}/usage-profile` and
+`GET …/submissions/{submissionId}/usage-profile` need Viewer on the crash or feedback database
+and answer:
+
+```json
+{ "profiles": [{ "analyticsDatabaseId": "adb_…", "analyticsDatabaseName": "Checkout app",
+                 "installationId": "0192f5a0-…", "lastSeen": "2026-09-27T09:41:12.004Z" }] }
+```
+
+one entry per analytics database of the same project that you can read and that holds the
+installation, the most recently seen first. The list is empty when the report or submission
+carries no installation ID, no readable analytics database holds it, the deployment runs no
+event store, or the event store does not answer within about a second and a half. It is a
+separate request so the report or submission itself never waits on the event store.
+
 ### Query slots and limits
 
-Every analytics query — trends, an event's top values, filter values, and later the
-Overview, funnels, cohorts, profile searches and exports — holds one of the server's query
+Every analytics query — the Overview, trends, an event's top values, filter values, and later
+funnels, cohorts, profile searches and exports — holds one of the server's query
 slots while it runs: three by default (`INLET_ANALYTICS_QUERY_SLOTS`), one of them kept for
 signed-in users so that an agent's key never locks out the interface. Each credential and
 each signed-in user holds one slot at a time (and a second only for a funnel's trend view);
@@ -1561,7 +1849,9 @@ the event store's limits, 30 seconds (`INLET_ANALYTICS_QUERY_TIME_S`), a memory 
 (`INLET_ANALYTICS_QUERY_MEMORY_BYTES`) and a thread limit (`INLET_ANALYTICS_QUERY_THREADS`);
 one that exceeds them answers `503 query_limit_exceeded`: ask for a shorter range or a
 coarser interval. The catalog list, the live feed, the Lexicon's changes and ingest never take
-a slot, and the rules are the same over MCP.
+a slot, and the rules are the same over MCP. A client that closes its connection before the
+answer — a chart replaced by the next one — leaves the queue at once, or has its running
+statement cancelled in the event store, and its slot is free for its next query.
 
 ## Errors
 

@@ -62,8 +62,8 @@ pieces land; a piece that departs from one says so in its report and in that sec
 | 2 | Contract and analytics databases | `@inlet/shared` analytics contract; PostgreSQL tables; create, read, rename, delete; fourth access scope; operator limits; project page, switcher, database shell with Settings; MCP database tools | verified and committed (DECISIONS 33.2) |
 | 3 | Ingest and Collect | The batch route and every derivation at ingest; rate limits; country; catalog writes; live feed; test event; counters; the analytics worker; Collect tab; its tools | verified and committed (DECISIONS 33.3) |
 | 4 | Catalog, Lexicon and trends | Query layer (slots, limits, filters, ranges, periods, coverage, the erasure skip); catalog, event detail, filter values, hide, block, delete; trends and their export; catalog export; Events tab; tools | verified and committed (DECISIONS 33.4) |
-| 5 | Overview | Every figure of AN-140, sessions, retention D1/D7/D30, crash-free sessions; Overview tab; tool | pending |
-| 6 | Profiles and links | AN-120 to AN-126, AN-154, FR-066; the shared helper that finds crash reports and submissions carrying an ID; Users tab; Usage profile links; tools | pending |
+| 5 | Overview | Every figure of AN-140, sessions, retention D1/D7/D30, crash-free sessions; Overview tab; tool; piece 4's follow-ups (client disconnect, 1,000 periods, catalog cursor) | verified and committed (DECISIONS 33.5) |
+| 6 | Profiles and links | AN-120 to AN-126, AN-154, FR-066; the shared helper that finds crash reports and submissions carrying an ID; Users tab; Usage profile links; tools | verified and committed (DECISIONS 33.6) |
 | 7 | Funnels | AN-080 to AN-089, including the drill-down's crash and feedback flags through piece 6's helper; Funnels tab; tools | pending |
 | 8 | Cohorts | AN-100 to AN-109; Cohorts tab; tools | pending |
 | 9 | Storage, retention and data health | AN-004 removal worker, AN-160 to AN-169, AN-190 to AN-192, the orphan sweep; Settings → Storage; the Collect notice; tools | pending |
@@ -710,6 +710,109 @@ instructions' paragraph on the catalog, trends and slots. `QUERY_SEMANTICS` in
 and experiment keys; the batch route parses its body in its own context with prototype-poisoning
 checks off (every other route keeps them).
 
+### From piece 5: the Overview
+
+**Modules.** `apps/api/src/services/analytics-overview.ts` (`runOverview`, `overviewFigures`, the
+pure helpers), `routes/analytics-overview.ts` (`GET …/overview`, registered after
+`analyticsEventRoutes`), `apps/web/src/components/analytics-overview.tsx` (`OverviewPanel`),
+the MCP tool `get_analytics_overview`.
+
+**Helpers later pieces reuse** (all in `analytics-overview.ts`):
+
+- `sessionsSource(scope, filters, p, startedId, from, to)` — the sessions of AN-043 as rows
+  `(session_id, day, app_version, crash_reporting)`: distinct session IDs of the `app_started`
+  of device installations, background events excluded, each taking its day, version,
+  dimensions and `crashReporting` from its first `app_started` accepted; filters test the
+  session's own `app_id`, `platform`, `environment`. Piece 12 and the crash database's Releases
+  tab (crash-free sessions per release) build on it; `startedId` comes from
+  `resolveEventNames(…, ['app_started'])`.
+- `crashedSessions(scope, p, crashedId, from)` — the session IDs a `session_crashed` names,
+  however late it arrived; `crashFreeOf(sessions, crashed)` — AN-152's rate, `measured`,
+  `lowConfidence` (below `LOW_CONFIDENCE_SESSIONS`, 100).
+- `activeRows(scope, filters, p, from, to)` — the two-level active rows over `by_day`;
+  `overviewFilters(query)` — AN-140's filters as 9.2 filters; `sharesOf(rows)` — ten values and
+  Other; `previousWindow`, `previousAvailable` — AN-141's rule.
+- The installation records' install day and dimensions under the filter compiler's column names
+  (`installedRows`, not exported): piece 8's cohorts with the install start can follow the same
+  shape (`minIfMerge(install)`, `kind = 'device' AND NOT ephemeral`).
+
+**Event store.** `version_first` (migration `0002_version_first.sql`): `min(local_day)` per
+database, app, platform, environment and app version, fed from `events_ingest` for device
+installations and non-background events. **Piece 9's database removal drops its partition**
+with the other tables'; the harness truncates it and the seed script applies every migration.
+
+**Query layer (piece 4's follow-ups).** `runAnalyticsQuery(ctx, principal, kind, work, signal?)`
+hands `work` a `ReadStore` (`store.query` bound to the signal); every later slot query passes
+`clientGoneSignal(reply)` from its route so a client that goes away leaves the slot queue and has
+its statement cancelled. `QuerySlots.acquire(caller, kind, signal?)`, `querySlots.waiting`.
+`store.query(sql, params, settings, signal?)`. The reader sends
+`cancel_http_readonly_queries_on_client_close = 1`. `checkInterval(range, interval, path,
+rangePath)` refuses more than `RANGE_MAX_PERIODS` (1,000) periods at `rangePath`; funnels and
+cohorts call it with their interval or granularity. `periodCount(range, interval)`. The catalog
+cursor is `{ sort, key, name, firstPageMs }` (base64url JSON); `api.listAnalyticsEvents` in the
+web follows every page.
+
+**Web.** `TrendChart` takes optional `markers` (`{ day, label }[]`), drawn as dashed lines and
+listed as text; `changeText(figure, kind)` words a change or "Change not available".
+
+### From piece 6: profiles and links
+
+**The cross-capability lookup** — `apps/api/src/services/identity-links.ts`, PostgreSQL only
+(works while the event store is down), limited to the crash and feedback databases of one
+project that the principal can read:
+
+- `findIdentityLinks(ctx, principal, projectId, { installationIds, userIds })` →
+  `{ crashGroups: [{ crashDatabaseId, crashDatabaseName, groupId, title, reports, lastReceivedAt }],
+  submissions: [{ feedbackDatabaseId, feedbackDatabaseName, submissionId, receivedAt,
+  firstTextAnswer }], truncated }`, newest first, `LINKS_MAX` (100) of each. Installation IDs in
+  any form (normalised with `normalizeUuid`; anything else matches nothing).
+- `identityFlags(ctx, principal, projectId, ids)` → `{ crashes: { installationIds, userIds },
+  feedback: { installationIds, userIds } }`, each a `Set` of the given IDs that at least one
+  record carries: **piece 7's drill-down flags** (AN-088), one call per page of units.
+- `readableDatabases(ctx, principal, projectId)` → the readable crash and feedback databases of
+  the project (id, name): **piece 10's erasure preview** can start from it, then count with its
+  own queries on the same identity indexes.
+- `firstTextAnswer(definition, answers)` — FR-066's preview.
+
+**The profile readers** — `apps/api/src/services/analytics-profiles.ts`:
+
+- `findProfiles` (slot), `installationProfile` and `userProfile` (no slot, per-query limits),
+  `profileEvents` (slot), `profileExportHead` (no slot) and `profileEventPages` (an async
+  generator, one slot per page of `EXPORT_PAGE` events), `usageProfiles` (never throws for the
+  event store; 1.5 s reachability, 3 s in all).
+- Row presenters and SQL fragments inside it: `summarySql` (the list columns of installations
+  matching a condition, existence rule and test installation applied), `latestUserIds`,
+  `installationRecord`, `userRecord`, `countsOf`, `readEvents` (the feed's keyset with the first
+  page's received time), `firstOccurrences`. **Piece 7's drill-down rows** ("installation ID,
+  user ID when known, platform, app version and last seen") are exactly `summarySql` +
+  `latestUserIds` + `presentSummary` for a list of installation IDs: export those rather than
+  writing them again. **Piece 10** reads a profile's records and events for its preview through
+  `profileExportHead` and the same subject conditions.
+- `rfc3339` turns the event store's `YYYY-MM-DD hh:mm:ss.sss` into RFC 3339.
+- Aliases never reuse a column's name (`max(last_seen) AS last_seen_at`), see DECISIONS 33.6.
+
+**Routes** (`routes/analytics-profiles.ts`, `analyticsProfileRoutes`, registered after
+`analyticsEventRoutes`): the profile routes of PRD 7.2, and
+`GET /v1/crash-databases/{id}/reports/{reportId}/usage-profile` and
+`GET /v1/feedback-databases/{id}/submissions/{submissionId}/usage-profile` for AN-154. Every
+list takes `limit` up to 1,000 (MCP) and defaults to 50. The export takes `?limit&cursor` for a
+JSON page.
+
+**Web.** `components/analytics-users.tsx` (`UsersPanel`; the profile's subject is the address's
+`installation` or `user` parameter under `tab=users`), `components/usage-profile-link.tsx`
+(`UsageProfileLinks`, used by `pages/crash-group.tsx`'s report view and `pages/submission.tsx`),
+`lib/analytics-profiles.ts` (`profilesApi`, `profileHref(databaseId, subject)` — **piece 7's
+drill-down links to profiles with it**). `request` in `lib/api.ts` is now exported for such
+modules. **Piece 10's Erase** goes in `ProfileHeader`, where a comment marks its place; the
+database page already knows the caller's role (`role`) to pass down.
+
+**MCP.** `apps/mcp/src/analytics-profile-tools.ts` (`registerAnalyticsProfileTools`, called from
+`registerTools`): `find_analytics_profiles`, `get_analytics_profile`,
+`list_analytics_profile_events`, `export_analytics_profile`; `PROFILE_SEMANTICS` is the AN-201
+paragraph on installations and user IDs. `get_crash_report` and `get_submission` now describe the
+identity fields they return. The remote MCP route runs the built `@inlet/mcp` (`dist`): rebuild it
+(`npm run build -w @inlet/mcp`) before an API test calls a new tool.
+
 ## Left out, and why
 
 Each piece appends what it did not build and the reason.
@@ -903,3 +1006,46 @@ passed the five-experiment cap and made every later event invalid. Left:
   every environment, 7.2's `confirm` on the name deletion and `includeParams` on the catalog, and
   9.1's params row ("keys `__proto__`, `constructor` and `prototype` refused"), which the
   orchestrator already planned.
+
+### From piece 5
+
+- **Budgets at scale**: the whole Overview took a median of 490 ms on the 22.5-million-event seed
+  on this laptop (DECISIONS 33.5), as an indication. New installations and retention read the
+  whole `installations` table of the database, which grows with every installation it has ever
+  had; if piece 12's load test finds them over budget, a table keyed by install day is the next
+  step.
+- **Top events and the no-`app_started` notice come from the catalog**, so they ignore the
+  Overview's app, platform and environment filters, and say nothing before the catalog's first
+  refresh (at most five minutes after the first events).
+- **The catalog cursor under `lastSeen` and `events24h`**: a refresh between two pages can move an
+  entry across the reader's position (DECISIONS 33.5); `name` is exact.
+- **Two `app_started` of one session more than a day apart** (a broken client clock) may count the
+  session on the later day's side of a range edge: sessions are read a day either side of the
+  range only.
+- **Versions first seen** carry no marker for a version whose first day is the oldest day kept
+  after retention dropped weeks.
+- **The Overview's filter state is not in the address**, unlike a chart's; the PRD does not ask
+  for it.
+- **PRD amendments** are listed at the end of DECISIONS 33.5.
+
+### From piece 6
+
+- **Links are capped at the newest 100 crash groups and 100 submissions** per profile, with
+  `truncated`; the crash and feedback screens filter by installation and user ID for the rest.
+- **The recent-installations list**: an installation that becomes active while the list is
+  paged, and that was still below the cursor, is left off the following pages (it heads a fresh
+  list); its earlier "seen" is merged away in the aggregate state (DECISIONS 33.6). The feed's
+  cursor is exact.
+- **A profile read against a hung event store** (accepting connections, never answering) waits
+  the reader's query timeout before `analytics_unavailable`, as every analytics read does since
+  piece 1; the Usage profile link is bounded at 3 s and the crash and submission views never wait.
+- **A user seen on more than 1,000 installations** lists the 1,000 most recent
+  (`USER_INSTALLATIONS_MAX`).
+- **An export cut by a failure after its first page** ends as invalid JSON; nothing retries it.
+- **The profile's calendar** draws the last 53 weeks; older active days are in the text list.
+- **The e2e journey sends the crash report and submission over HTTP with the identity fields**,
+  as the SDK sends them, rather than through a browser SDK; the SDK's attach rules are piece 11's
+  and verified there.
+- **PRD amendments for the orchestrator** (not applied here): see the piece 6 report — 7.2's
+  `usage-profile` routes and `limit`/`cursor` on the export, AN-120's short-`q` behaviour, and
+  AN-124's matched IDs.

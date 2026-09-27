@@ -193,6 +193,13 @@ test.describe('the MCP server', () => {
           'list_analytics_databases',
           'send_analytics_test_event',
           'update_analytics_database',
+          // The Overview, piece 5.
+          'get_analytics_overview',
+          // Profiles, piece 6.
+          'export_analytics_profile',
+          'find_analytics_profiles',
+          'get_analytics_profile',
+          'list_analytics_profile_events',
         ].sort(),
       );
 

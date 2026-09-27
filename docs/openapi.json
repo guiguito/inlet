@@ -19290,6 +19290,3616 @@
         }
       }
     },
+    "/v1/analytics-databases/{databaseId}/overview": {
+      "get": {
+        "summary": "Read the Overview",
+        "tags": [
+          "Analytics queries"
+        ],
+        "description": "AN-140 to AN-144. Viewer or above; holds one query slot for the whole answer (`503 analytics_busy` after ten seconds without one, `503 query_limit_exceeded` past the per-query limits).\n\nThe range is `preset` (default `last30Days`; presets end today and include it) or `from` and `to` (dates in the reporting timezone, both included, at most 1,000 days). `app` (every app by default), `platform` (every client platform by default; `server` is never one) and `environment` (`production` by default) filter every figure; each may be repeated for several values. `unit` (`installation` by default, or `user`) is what the active figures count.\n\nEach figure has its `value`, its `previous` (null when the previous period begins before the oldest event kept) and the range it `covered`. Active figures are anchored to now, not the range: the last 60 minutes, the last complete day and today, the 7 and 30 days ending today, and stickiness. New installations, sessions, D1, D7 and D30 and crash-free sessions cover the range; shares cover the last 7 days; top events come from the catalog’s last 24 hours.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "today",
+                "yesterday",
+                "last7Days",
+                "last30Days",
+                "last90Days",
+                "last12Months",
+                "thisMonth",
+                "thisYear"
+              ]
+            },
+            "in": "query",
+            "name": "preset",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "description": "YYYY-MM-DD, with `to`."
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "description": "YYYY-MM-DD, with `from`."
+          },
+          {
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              ]
+            },
+            "in": "query",
+            "name": "app",
+            "required": false
+          },
+          {
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              ]
+            },
+            "in": "query",
+            "name": "platform",
+            "required": false
+          },
+          {
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              ]
+            },
+            "in": "query",
+            "name": "environment",
+            "required": false
+          },
+          {
+            "schema": {
+              "default": "installation",
+              "type": "string",
+              "enum": [
+                "installation",
+                "user"
+              ]
+            },
+            "in": "query",
+            "name": "unit",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "range": {
+                      "type": "object",
+                      "properties": {
+                        "from": {
+                          "type": "string"
+                        },
+                        "to": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "from",
+                        "to"
+                      ],
+                      "additionalProperties": false,
+                      "description": "The requested range as dates in the reporting timezone, both included."
+                    },
+                    "unit": {
+                      "type": "string",
+                      "enum": [
+                        "installation",
+                        "user"
+                      ]
+                    },
+                    "timezone": {
+                      "type": "string"
+                    },
+                    "keptFrom": {
+                      "description": "The oldest day the database keeps (AN-065); null while it holds no event.",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "filters": {
+                      "type": "object",
+                      "properties": {
+                        "apps": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "platforms": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "environments": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": [
+                        "apps",
+                        "platforms",
+                        "environments"
+                      ],
+                      "additionalProperties": false,
+                      "description": "The filters applied; an empty list is every value."
+                    },
+                    "figures": {
+                      "type": "object",
+                      "properties": {
+                        "activeLastHour": {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "description": "The figure; null when the period holds no data, or a share has no installation to divide by.",
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            },
+                            "previous": {
+                              "description": "The same figure for the previous period (AN-141); null when that period begins before the oldest event kept.",
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            },
+                            "covered": {
+                              "type": "object",
+                              "properties": {
+                                "from": {
+                                  "type": "string"
+                                },
+                                "to": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "from",
+                                "to"
+                              ],
+                              "additionalProperties": false,
+                              "description": "RFC 3339 times."
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "previous",
+                            "covered"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "dailyActiveLastDay": {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "description": "The figure; null when the period holds no data, or a share has no installation to divide by.",
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            },
+                            "previous": {
+                              "description": "The same figure for the previous period (AN-141); null when that period begins before the oldest event kept.",
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            },
+                            "covered": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "from": {
+                                      "type": "string"
+                                    },
+                                    "to": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "from",
+                                    "to"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "The part of the period the storage window holds (AN-143); null when none of it is."
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "previous",
+                            "covered"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "dailyActiveToday": {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "description": "The figure; null when the period holds no data, or a share has no installation to divide by.",
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            },
+                            "previous": {
+                              "description": "The same figure for the previous period (AN-141); null when that period begins before the oldest event kept.",
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            },
+                            "covered": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "from": {
+                                      "type": "string"
+                                    },
+                                    "to": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "from",
+                                    "to"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "The part of the period the storage window holds (AN-143); null when none of it is."
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "previous",
+                            "covered"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "weeklyActive": {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "description": "The figure; null when the period holds no data, or a share has no installation to divide by.",
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            },
+                            "previous": {
+                              "description": "The same figure for the previous period (AN-141); null when that period begins before the oldest event kept.",
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            },
+                            "covered": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "from": {
+                                      "type": "string"
+                                    },
+                                    "to": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "from",
+                                    "to"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "The part of the period the storage window holds (AN-143); null when none of it is."
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "previous",
+                            "covered"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "monthlyActive": {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "description": "The figure; null when the period holds no data, or a share has no installation to divide by.",
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            },
+                            "previous": {
+                              "description": "The same figure for the previous period (AN-141); null when that period begins before the oldest event kept.",
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            },
+                            "covered": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "from": {
+                                      "type": "string"
+                                    },
+                                    "to": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "from",
+                                    "to"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "The part of the period the storage window holds (AN-143); null when none of it is."
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "previous",
+                            "covered"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "stickiness": {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "description": "The figure; null when the period holds no data, or a share has no installation to divide by.",
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            },
+                            "previous": {
+                              "description": "The same figure for the previous period (AN-141); null when that period begins before the oldest event kept.",
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            },
+                            "covered": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "from": {
+                                      "type": "string"
+                                    },
+                                    "to": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "from",
+                                    "to"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "The part of the period the storage window holds (AN-143); null when none of it is."
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "previous",
+                            "covered"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "newInstallations": {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "description": "The figure; null when the period holds no data, or a share has no installation to divide by.",
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            },
+                            "previous": {
+                              "description": "The same figure for the previous period (AN-141); null when that period begins before the oldest event kept.",
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            },
+                            "covered": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "from": {
+                                      "type": "string"
+                                    },
+                                    "to": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "from",
+                                    "to"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "The part of the period the storage window holds (AN-143); null when none of it is."
+                            },
+                            "perDay": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "day": {
+                                    "type": "string"
+                                  },
+                                  "value": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "day",
+                                  "value"
+                                ],
+                                "additionalProperties": false
+                              }
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "previous",
+                            "covered",
+                            "perDay"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "sessions": {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "description": "The figure; null when the period holds no data, or a share has no installation to divide by.",
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            },
+                            "previous": {
+                              "description": "The same figure for the previous period (AN-141); null when that period begins before the oldest event kept.",
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            },
+                            "covered": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "from": {
+                                      "type": "string"
+                                    },
+                                    "to": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "from",
+                                    "to"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "The part of the period the storage window holds (AN-143); null when none of it is."
+                            },
+                            "perDay": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "day": {
+                                    "type": "string"
+                                  },
+                                  "value": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "day",
+                                  "value"
+                                ],
+                                "additionalProperties": false
+                              }
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "previous",
+                            "covered",
+                            "perDay"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "d1": {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "description": "The figure; null when the period holds no data, or a share has no installation to divide by.",
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            },
+                            "previous": {
+                              "description": "The same figure for the previous period (AN-141); null when that period begins before the oldest event kept.",
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            },
+                            "covered": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "from": {
+                                      "type": "string"
+                                    },
+                                    "to": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "from",
+                                    "to"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "The part of the period the storage window holds (AN-143); null when none of it is."
+                            },
+                            "installations": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991,
+                              "description": "Installations installed in the range whose day N has ended: the share’s denominator."
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "previous",
+                            "covered",
+                            "installations"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "d7": {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "description": "The figure; null when the period holds no data, or a share has no installation to divide by.",
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            },
+                            "previous": {
+                              "description": "The same figure for the previous period (AN-141); null when that period begins before the oldest event kept.",
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            },
+                            "covered": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "from": {
+                                      "type": "string"
+                                    },
+                                    "to": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "from",
+                                    "to"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "The part of the period the storage window holds (AN-143); null when none of it is."
+                            },
+                            "installations": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "previous",
+                            "covered",
+                            "installations"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "d30": {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "description": "The figure; null when the period holds no data, or a share has no installation to divide by.",
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            },
+                            "previous": {
+                              "description": "The same figure for the previous period (AN-141); null when that period begins before the oldest event kept.",
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            },
+                            "covered": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "from": {
+                                      "type": "string"
+                                    },
+                                    "to": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "from",
+                                    "to"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "The part of the period the storage window holds (AN-143); null when none of it is."
+                            },
+                            "installations": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "previous",
+                            "covered",
+                            "installations"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "activeLastHour",
+                        "dailyActiveLastDay",
+                        "dailyActiveToday",
+                        "weeklyActive",
+                        "monthlyActive",
+                        "stickiness",
+                        "newInstallations",
+                        "sessions",
+                        "d1",
+                        "d7",
+                        "d30"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "crashFree": {
+                      "type": "object",
+                      "properties": {
+                        "covered": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "from": {
+                                  "type": "string"
+                                },
+                                "to": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "from",
+                                "to"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "The part of the period the storage window holds (AN-143); null when none of it is."
+                        },
+                        "overall": {
+                          "type": "object",
+                          "properties": {
+                            "rate": {
+                              "description": "1 − sessions flagged crashed ÷ sessions; null when not measured.",
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            },
+                            "sessions": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991,
+                              "description": "Sessions whose app_started falls in the range and reports a crash module (crashReporting true)."
+                            },
+                            "measured": {
+                              "type": "boolean",
+                              "description": "False (\"not measured\") when no session reported a crash module."
+                            },
+                            "lowConfidence": {
+                              "type": "boolean",
+                              "description": "Fewer than 100 sessions."
+                            },
+                            "previous": {
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "rate",
+                            "sessions",
+                            "measured",
+                            "lowConfidence",
+                            "previous"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "versions": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "rate": {
+                                "description": "1 − sessions flagged crashed ÷ sessions; null when not measured.",
+                                "type": [
+                                  "number",
+                                  "null"
+                                ]
+                              },
+                              "sessions": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991,
+                                "description": "Sessions whose app_started falls in the range and reports a crash module (crashReporting true)."
+                              },
+                              "measured": {
+                                "type": "boolean",
+                                "description": "False (\"not measured\") when no session reported a crash module."
+                              },
+                              "lowConfidence": {
+                                "type": "boolean",
+                                "description": "Fewer than 100 sessions."
+                              },
+                              "version": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "rate",
+                              "sessions",
+                              "measured",
+                              "lowConfidence",
+                              "version"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "description": "The five app versions with the most sessions in the range."
+                        }
+                      },
+                      "required": [
+                        "covered",
+                        "overall",
+                        "versions"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "shares": {
+                      "type": "object",
+                      "properties": {
+                        "covered": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "from": {
+                                  "type": "string"
+                                },
+                                "to": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "from",
+                                "to"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "The part of the period the storage window holds (AN-143); null when none of it is."
+                        },
+                        "appVersion": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "value": {
+                                "type": "string"
+                              },
+                              "share": {
+                                "type": "number"
+                              },
+                              "installations": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "other": {
+                                "type": "boolean",
+                                "enum": [
+                                  true
+                                ]
+                              }
+                            },
+                            "required": [
+                              "value",
+                              "share",
+                              "installations"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "platform": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "value": {
+                                "type": "string"
+                              },
+                              "share": {
+                                "type": "number"
+                              },
+                              "installations": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "other": {
+                                "type": "boolean",
+                                "enum": [
+                                  true
+                                ]
+                              }
+                            },
+                            "required": [
+                              "value",
+                              "share",
+                              "installations"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "country": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "value": {
+                                "type": "string"
+                              },
+                              "share": {
+                                "type": "number"
+                              },
+                              "installations": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "other": {
+                                "type": "boolean",
+                                "enum": [
+                                  true
+                                ]
+                              }
+                            },
+                            "required": [
+                              "value",
+                              "share",
+                              "installations"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "covered",
+                        "appVersion",
+                        "platform",
+                        "country"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "topEvents": {
+                      "type": "object",
+                      "properties": {
+                        "computedAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "events": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "events": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": [
+                              "name",
+                              "events"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "computedAt",
+                        "events"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "dailyActive": {
+                      "type": "object",
+                      "properties": {
+                        "covered": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "from": {
+                                  "type": "string"
+                                },
+                                "to": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "from",
+                                "to"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "The part of the period the storage window holds (AN-143); null when none of it is."
+                        },
+                        "points": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "start": {
+                                "type": "string"
+                              },
+                              "label": {
+                                "type": "string"
+                              },
+                              "value": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "incomplete": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "start",
+                              "label",
+                              "value",
+                              "incomplete"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "covered",
+                        "points"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "versionsFirstSeen": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "version": {
+                            "type": "string"
+                          },
+                          "day": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "version",
+                          "day"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "notices": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "code": {
+                            "type": "string",
+                            "enum": [
+                              "no_events",
+                              "no_app_started"
+                            ]
+                          },
+                          "message": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "message"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "range",
+                    "unit",
+                    "timezone",
+                    "keptFrom",
+                    "filters",
+                    "figures",
+                    "crashFree",
+                    "shares",
+                    "topEvents",
+                    "dailyActive",
+                    "versionsFirstSeen",
+                    "notices"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/analytics-databases/{databaseId}/profiles": {
+      "get": {
+        "summary": "Find profiles, or list the recent installations",
+        "tags": [
+          "Analytics profiles"
+        ],
+        "description": "AN-120. Viewer or above; holds a query slot.\n\nWith `q`: the installations whose ID is `q` or starts with it, and the user IDs equal to it or starting with it (`users`) with every installation they were seen on (in `installations`). A prefix needs at least six characters; shorter text matches exact IDs only and says `notice: prefix_too_short`. At most `limit` of each, `truncated` when more match.\n\nWithout `q`: the installations seen most recently, newest first then by installation ID, 50 a page, filtered by their latest `platform`, `appVersion`, `country` and `environment`. `nextCursor` carries the position and the first page’s time, so an installation active while you page is not listed twice. Device and server installations are listed; the test installation is not.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "in": "query",
+            "name": "q",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "in": "query",
+            "name": "platform",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "in": "query",
+            "name": "appVersion",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 8
+            },
+            "in": "query",
+            "name": "country",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "in": "query",
+            "name": "environment",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 500
+            },
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "description": "The `nextCursor` of the previous page."
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "description": "At most this many, 50 by default and 1000 at most (AN-204)."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "installations": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "installationId": {
+                            "type": "string"
+                          },
+                          "userId": {
+                            "description": "The user ID seen last on it.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "installationKind": {
+                            "type": "string",
+                            "enum": [
+                              "device",
+                              "server"
+                            ]
+                          },
+                          "server": {
+                            "type": "boolean"
+                          },
+                          "ephemeral": {
+                            "type": "boolean"
+                          },
+                          "platform": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "platformVersion": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "appVersion": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "country": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "environment": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "firstSeen": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "lastSeen": {
+                            "description": "From events that are not background events; null for a server installation.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "lastEvent": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "installationId",
+                          "userId",
+                          "installationKind",
+                          "server",
+                          "ephemeral",
+                          "platform",
+                          "platformVersion",
+                          "appVersion",
+                          "country",
+                          "environment",
+                          "firstSeen",
+                          "lastSeen",
+                          "lastEvent"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "users": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "userId": {
+                            "type": "string"
+                          },
+                          "installations": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "lastSeen": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "userId",
+                          "installations",
+                          "lastSeen"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "nextCursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "truncated": {
+                      "type": "boolean"
+                    },
+                    "notice": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "prefix_too_short"
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "installations",
+                    "users",
+                    "nextCursor",
+                    "truncated",
+                    "notice"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/analytics-databases/{databaseId}/profiles/installations/{installationId}": {
+      "get": {
+        "summary": "Read an installation profile",
+        "tags": [
+          "Analytics profiles"
+        ],
+        "description": "AN-121, AN-124, AN-126. Viewer or above; no query slot (a read by exact ID). The installation record (install time and day, first seen, last seen, last event, server or ephemeral, install attribution, install and latest dimensions, current user ID), `identity` (every user ID seen on it with first and last seen, the current one first), `counts` (events, sessions with an app_started, active days) and `activeDays` counted from its events, the storage `window`, and `links`: the crash groups and submissions, in the databases of the project you can read, carrying its installation ID or a user ID seen on it. `404 profile_not_found` when no installation record exists.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 36
+            },
+            "in": "path",
+            "name": "installationId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "installation"
+                      ]
+                    },
+                    "installation": {
+                      "type": "object",
+                      "properties": {
+                        "installationId": {
+                          "type": "string"
+                        },
+                        "installationKind": {
+                          "type": "string",
+                          "enum": [
+                            "device",
+                            "server",
+                            "test"
+                          ]
+                        },
+                        "server": {
+                          "type": "boolean"
+                        },
+                        "ephemeral": {
+                          "type": "boolean"
+                        },
+                        "installTime": {
+                          "type": "string"
+                        },
+                        "installDay": {
+                          "type": "string"
+                        },
+                        "firstSeen": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "lastSeen": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "lastEvent": {
+                          "type": "string"
+                        },
+                        "installAttribution": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "install": {
+                          "type": "object",
+                          "properties": {
+                            "platform": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "osName": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "platformVersion": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "runtime": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "runtimeVersion": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "app": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "appVersion": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "appBuild": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "locale": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "environment": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "country": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "attribution": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "experiments": {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": [
+                            "platform",
+                            "osName",
+                            "platformVersion",
+                            "runtime",
+                            "runtimeVersion",
+                            "app",
+                            "appVersion",
+                            "appBuild",
+                            "locale",
+                            "environment",
+                            "country",
+                            "attribution",
+                            "experiments"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "latest": {
+                          "type": "object",
+                          "properties": {
+                            "platform": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "osName": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "platformVersion": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "runtime": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "runtimeVersion": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "app": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "appVersion": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "appBuild": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "locale": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "environment": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "country": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "attribution": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "experiments": {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": [
+                            "platform",
+                            "osName",
+                            "platformVersion",
+                            "runtime",
+                            "runtimeVersion",
+                            "app",
+                            "appVersion",
+                            "appBuild",
+                            "locale",
+                            "environment",
+                            "country",
+                            "attribution",
+                            "experiments"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "userId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "installationId",
+                        "installationKind",
+                        "server",
+                        "ephemeral",
+                        "installTime",
+                        "installDay",
+                        "firstSeen",
+                        "lastSeen",
+                        "lastEvent",
+                        "installAttribution",
+                        "install",
+                        "latest",
+                        "userId"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "identity": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "userId": {
+                            "type": "string"
+                          },
+                          "firstSeen": {
+                            "type": "string"
+                          },
+                          "lastSeen": {
+                            "type": "string"
+                          },
+                          "current": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "userId",
+                          "firstSeen",
+                          "lastSeen",
+                          "current"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "counts": {
+                      "type": "object",
+                      "properties": {
+                        "events": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "sessions": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "activeDays": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "events",
+                        "sessions",
+                        "activeDays"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "activeDays": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "day": {
+                            "type": "string"
+                          },
+                          "events": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "day",
+                          "events"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "description": "Each local day holding an event that is not a background event, with its events."
+                    },
+                    "window": {
+                      "type": "object",
+                      "properties": {
+                        "from": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "to": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "from",
+                        "to"
+                      ],
+                      "additionalProperties": false,
+                      "description": "The storage window the calendar covers: the oldest day kept to today."
+                    },
+                    "links": {
+                      "type": "object",
+                      "properties": {
+                        "crashGroups": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "crashDatabaseId": {
+                                "type": "string"
+                              },
+                              "crashDatabaseName": {
+                                "type": "string"
+                              },
+                              "groupId": {
+                                "type": "string"
+                              },
+                              "title": {
+                                "type": "string"
+                              },
+                              "reports": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "lastReceivedAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              }
+                            },
+                            "required": [
+                              "crashDatabaseId",
+                              "crashDatabaseName",
+                              "groupId",
+                              "title",
+                              "reports",
+                              "lastReceivedAt"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "submissions": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "feedbackDatabaseId": {
+                                "type": "string"
+                              },
+                              "feedbackDatabaseName": {
+                                "type": "string"
+                              },
+                              "submissionId": {
+                                "type": "string"
+                              },
+                              "receivedAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "firstTextAnswer": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "feedbackDatabaseId",
+                              "feedbackDatabaseName",
+                              "submissionId",
+                              "receivedAt",
+                              "firstTextAnswer"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "truncated": {
+                          "type": "object",
+                          "properties": {
+                            "crashGroups": {
+                              "type": "boolean"
+                            },
+                            "submissions": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "crashGroups",
+                            "submissions"
+                          ],
+                          "additionalProperties": false,
+                          "description": "More than 100 carry the IDs; the newest are listed."
+                        }
+                      },
+                      "required": [
+                        "crashGroups",
+                        "submissions",
+                        "truncated"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "installation",
+                    "identity",
+                    "counts",
+                    "activeDays",
+                    "window",
+                    "links"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/analytics-databases/{databaseId}/profiles/users/{userId}": {
+      "get": {
+        "summary": "Read a user profile",
+        "tags": [
+          "Analytics profiles"
+        ],
+        "description": "AN-122, AN-124. Viewer or above; no query slot. The user ID with its first and last seen, `identity` (the installations it was seen on, most recent first, each with its platform, app version, country and last seen, and when the user ID was seen on it), `counts` and `activeDays` over the events carrying the user ID, the storage `window`, and `links` for the user ID and those installations’ IDs. `404 profile_not_found` when none of its installations has a record.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "in": "path",
+            "name": "userId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "user"
+                      ]
+                    },
+                    "user": {
+                      "type": "object",
+                      "properties": {
+                        "userId": {
+                          "type": "string"
+                        },
+                        "firstSeen": {
+                          "type": "string"
+                        },
+                        "lastSeen": {
+                          "type": "string"
+                        },
+                        "installations": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "userId",
+                        "firstSeen",
+                        "lastSeen",
+                        "installations"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "identity": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "installationId": {
+                            "type": "string"
+                          },
+                          "userId": {
+                            "description": "The user ID seen last on it.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "installationKind": {
+                            "type": "string",
+                            "enum": [
+                              "device",
+                              "server"
+                            ]
+                          },
+                          "server": {
+                            "type": "boolean"
+                          },
+                          "ephemeral": {
+                            "type": "boolean"
+                          },
+                          "platform": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "platformVersion": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "appVersion": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "country": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "environment": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "firstSeen": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "lastSeen": {
+                            "description": "From events that are not background events; null for a server installation.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "lastEvent": {
+                            "type": "string"
+                          },
+                          "userFirstSeen": {
+                            "type": "string"
+                          },
+                          "userLastSeen": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "installationId",
+                          "userId",
+                          "installationKind",
+                          "server",
+                          "ephemeral",
+                          "platform",
+                          "platformVersion",
+                          "appVersion",
+                          "country",
+                          "environment",
+                          "firstSeen",
+                          "lastSeen",
+                          "lastEvent",
+                          "userFirstSeen",
+                          "userLastSeen"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "counts": {
+                      "type": "object",
+                      "properties": {
+                        "events": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "sessions": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "activeDays": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "events",
+                        "sessions",
+                        "activeDays"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "activeDays": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "day": {
+                            "type": "string"
+                          },
+                          "events": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "day",
+                          "events"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "description": "Each local day holding an event that is not a background event, with its events."
+                    },
+                    "window": {
+                      "type": "object",
+                      "properties": {
+                        "from": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "to": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "from",
+                        "to"
+                      ],
+                      "additionalProperties": false,
+                      "description": "The storage window the calendar covers: the oldest day kept to today."
+                    },
+                    "links": {
+                      "type": "object",
+                      "properties": {
+                        "crashGroups": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "crashDatabaseId": {
+                                "type": "string"
+                              },
+                              "crashDatabaseName": {
+                                "type": "string"
+                              },
+                              "groupId": {
+                                "type": "string"
+                              },
+                              "title": {
+                                "type": "string"
+                              },
+                              "reports": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "lastReceivedAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              }
+                            },
+                            "required": [
+                              "crashDatabaseId",
+                              "crashDatabaseName",
+                              "groupId",
+                              "title",
+                              "reports",
+                              "lastReceivedAt"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "submissions": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "feedbackDatabaseId": {
+                                "type": "string"
+                              },
+                              "feedbackDatabaseName": {
+                                "type": "string"
+                              },
+                              "submissionId": {
+                                "type": "string"
+                              },
+                              "receivedAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "firstTextAnswer": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "feedbackDatabaseId",
+                              "feedbackDatabaseName",
+                              "submissionId",
+                              "receivedAt",
+                              "firstTextAnswer"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "truncated": {
+                          "type": "object",
+                          "properties": {
+                            "crashGroups": {
+                              "type": "boolean"
+                            },
+                            "submissions": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "crashGroups",
+                            "submissions"
+                          ],
+                          "additionalProperties": false,
+                          "description": "More than 100 carry the IDs; the newest are listed."
+                        }
+                      },
+                      "required": [
+                        "crashGroups",
+                        "submissions",
+                        "truncated"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "user",
+                    "identity",
+                    "counts",
+                    "activeDays",
+                    "window",
+                    "links"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/analytics-databases/{databaseId}/profiles/installations/{installationId}/events": {
+      "get": {
+        "summary": "List an installation’s events",
+        "tags": [
+          "Analytics profiles"
+        ],
+        "description": "AN-123. Viewer or above; holds a query slot. Newest first by effective time then event ID, 50 a page, each with its name, time, session ID, params (as stored, text) and context. `name` keeps one event name (an unknown or deleted one answers none); `from` and `to` are local days in the reporting timezone, both included. `nextCursor` carries the position and the time of the first page, so events arriving while you page never move an event across pages.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,63}$"
+            },
+            "in": "query",
+            "name": "name",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "description": "The first local day, in the reporting timezone."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "description": "The last local day, included."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 500
+            },
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "description": "The `nextCursor` of the previous page."
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "description": "At most this many, 50 by default and 1000 at most (AN-204)."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 36
+            },
+            "in": "path",
+            "name": "installationId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "eventId": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "category": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "time": {
+                            "type": "string",
+                            "description": "The effective time."
+                          },
+                          "receivedTime": {
+                            "type": "string"
+                          },
+                          "sessionId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "installationId": {
+                            "type": "string"
+                          },
+                          "userId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "params": {
+                            "type": "object",
+                            "propertyNames": {
+                              "type": "string"
+                            },
+                            "additionalProperties": {
+                              "type": "string"
+                            },
+                            "description": "As stored: every value as text."
+                          },
+                          "context": {
+                            "type": "object",
+                            "properties": {
+                              "platform": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "osName": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "platformVersion": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "runtime": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "runtimeVersion": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "app": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "appVersion": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "appBuild": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "locale": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "environment": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "country": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "attribution": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "experiments": {
+                                "type": "object",
+                                "propertyNames": {
+                                  "type": "string"
+                                },
+                                "additionalProperties": {
+                                  "type": "string"
+                                }
+                              }
+                            },
+                            "required": [
+                              "platform",
+                              "osName",
+                              "platformVersion",
+                              "runtime",
+                              "runtimeVersion",
+                              "app",
+                              "appVersion",
+                              "appBuild",
+                              "locale",
+                              "environment",
+                              "country",
+                              "attribution",
+                              "experiments"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "eventId",
+                          "name",
+                          "category",
+                          "time",
+                          "receivedTime",
+                          "sessionId",
+                          "installationId",
+                          "userId",
+                          "params",
+                          "context"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "nextCursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "events",
+                    "nextCursor"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/analytics-databases/{databaseId}/profiles/users/{userId}/events": {
+      "get": {
+        "summary": "List a user’s events",
+        "tags": [
+          "Analytics profiles"
+        ],
+        "description": "AN-123. Viewer or above; holds a query slot. Newest first by effective time then event ID, 50 a page, each with its name, time, session ID, params (as stored, text) and context. `name` keeps one event name (an unknown or deleted one answers none); `from` and `to` are local days in the reporting timezone, both included. `nextCursor` carries the position and the time of the first page, so events arriving while you page never move an event across pages.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,63}$"
+            },
+            "in": "query",
+            "name": "name",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "description": "The first local day, in the reporting timezone."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "description": "The last local day, included."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 500
+            },
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "description": "The `nextCursor` of the previous page."
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "description": "At most this many, 50 by default and 1000 at most (AN-204)."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "in": "path",
+            "name": "userId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "eventId": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "category": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "time": {
+                            "type": "string",
+                            "description": "The effective time."
+                          },
+                          "receivedTime": {
+                            "type": "string"
+                          },
+                          "sessionId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "installationId": {
+                            "type": "string"
+                          },
+                          "userId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "params": {
+                            "type": "object",
+                            "propertyNames": {
+                              "type": "string"
+                            },
+                            "additionalProperties": {
+                              "type": "string"
+                            },
+                            "description": "As stored: every value as text."
+                          },
+                          "context": {
+                            "type": "object",
+                            "properties": {
+                              "platform": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "osName": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "platformVersion": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "runtime": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "runtimeVersion": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "app": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "appVersion": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "appBuild": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "locale": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "environment": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "country": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "attribution": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "experiments": {
+                                "type": "object",
+                                "propertyNames": {
+                                  "type": "string"
+                                },
+                                "additionalProperties": {
+                                  "type": "string"
+                                }
+                              }
+                            },
+                            "required": [
+                              "platform",
+                              "osName",
+                              "platformVersion",
+                              "runtime",
+                              "runtimeVersion",
+                              "app",
+                              "appVersion",
+                              "appBuild",
+                              "locale",
+                              "environment",
+                              "country",
+                              "attribution",
+                              "experiments"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "eventId",
+                          "name",
+                          "category",
+                          "time",
+                          "receivedTime",
+                          "sessionId",
+                          "installationId",
+                          "userId",
+                          "params",
+                          "context"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "nextCursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "events",
+                    "nextCursor"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/analytics-databases/{databaseId}/profiles/installations/{installationId}/export": {
+      "get": {
+        "summary": "Export an installation profile",
+        "tags": [
+          "Analytics profiles"
+        ],
+        "description": "AN-125. Viewer or above. A JSON download: the installation or user record, `identity` (its identity links), `firstOccurrences` (per event name still in the catalog, and `*` for any event: the local day, time and dimensions of the first occurrence) and `events`, every stored event of the profile, newest first — to answer a request for access. The events are read in pages of 5,000, each holding a query slot while it is read. With `limit`, one page of JSON instead (the records on the first page only), with `nextCursor`.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "description": "Answer one page of at most this many events as JSON, with `nextCursor`, instead of the whole download (for MCP, AN-204)."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 500
+            },
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "description": "The `nextCursor` of the previous page."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 36
+            },
+            "in": "path",
+            "name": "installationId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/analytics-databases/{databaseId}/profiles/users/{userId}/export": {
+      "get": {
+        "summary": "Export a user profile",
+        "tags": [
+          "Analytics profiles"
+        ],
+        "description": "AN-125. Viewer or above. A JSON download: the installation or user record, `identity` (its identity links), `firstOccurrences` (per event name still in the catalog, and `*` for any event: the local day, time and dimensions of the first occurrence) and `events`, every stored event of the profile, newest first — to answer a request for access. The events are read in pages of 5,000, each holding a query slot while it is read. With `limit`, one page of JSON instead (the records on the first page only), with `nextCursor`.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "description": "Answer one page of at most this many events as JSON, with `nextCursor`, instead of the whole download (for MCP, AN-204)."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 500
+            },
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "description": "The `nextCursor` of the previous page."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "in": "path",
+            "name": "userId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/crash-databases/{databaseId}/reports/{reportId}/usage-profile": {
+      "get": {
+        "summary": "The Usage profile link of a crash report",
+        "tags": [
+          "Crash reports"
+        ],
+        "description": "AN-154. Viewer or above on this database. The usage profiles of the installation it carries: each analytics database of the same project that you can read and that holds the installation, the one it was seen in most recently first. Empty when it carries no installation ID, none holds it, or the event store does not answer within about a second and a half; never an error for the event store, and asked separately so the view itself never waits on it.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "reportId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "profiles": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "analyticsDatabaseId": {
+                            "type": "string"
+                          },
+                          "analyticsDatabaseName": {
+                            "type": "string"
+                          },
+                          "installationId": {
+                            "type": "string"
+                          },
+                          "lastSeen": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "analyticsDatabaseId",
+                          "analyticsDatabaseName",
+                          "installationId",
+                          "lastSeen"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "description": "The readable analytics databases of the project holding the installation, seen most recently first; empty when none does or the event store does not answer."
+                    }
+                  },
+                  "required": [
+                    "profiles"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/feedback-databases/{databaseId}/submissions/{submissionId}/usage-profile": {
+      "get": {
+        "summary": "The Usage profile link of a submission",
+        "tags": [
+          "Submissions"
+        ],
+        "description": "AN-154. Viewer or above on this database. The usage profiles of the installation it carries: each analytics database of the same project that you can read and that holds the installation, the one it was seen in most recently first. Empty when it carries no installation ID, none holds it, or the event store does not answer within about a second and a half; never an error for the event store, and asked separately so the view itself never waits on it.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "databaseId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "submissionId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "profiles": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "analyticsDatabaseId": {
+                            "type": "string"
+                          },
+                          "analyticsDatabaseName": {
+                            "type": "string"
+                          },
+                          "installationId": {
+                            "type": "string"
+                          },
+                          "lastSeen": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "analyticsDatabaseId",
+                          "analyticsDatabaseName",
+                          "installationId",
+                          "lastSeen"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "description": "The readable analytics databases of the project holding the installation, seen most recently first; empty when none does or the event store does not answer."
+                    }
+                  },
+                  "required": [
+                    "profiles"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/analytics-databases/{databaseId}/slack-notifications": {
       "get": {
         "summary": "Read the Slack notification settings",

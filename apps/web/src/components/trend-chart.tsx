@@ -12,6 +12,9 @@ import { cn } from '@/lib/utils';
  * - Below the drawing, a table of every value per period, which is also the chart's accessible
  *   table: the drawing itself is `aria-hidden`.
  *
+ * - Optional markers (the Overview's app versions, AN-142): a dashed vertical line on the period
+ *   each starts, and the same list as text under the drawing.
+ *
  * Every label is user-authored or data (event names, split values) and is rendered as text.
  */
 
@@ -29,7 +32,9 @@ export function keptFromNote(keptFrom: string): string {
   return `Events are kept from ${date}. Earlier days have no data.`;
 }
 
-export function TrendChart({ answer, className }: { answer: AnalyticsTrendAnswer; className?: string }) {
+export type ChartMarker = { day: string; label: string };
+
+export function TrendChart({ answer, markers = [], className }: { answer: AnalyticsTrendAnswer; markers?: ChartMarker[]; className?: string }) {
   const id = useId();
   const periods = answer.series[0]?.points ?? [];
   const width = 760;
@@ -104,6 +109,18 @@ export function TrendChart({ answer, className }: { answer: AnalyticsTrendAnswer
             </text>
           ) : null,
         )}
+        {markers.map((marker) => {
+          const index = periods.findIndex((point) => dayOf(point.start) === marker.day);
+          if (index === -1) return null;
+          return (
+            <g key={`${marker.day}-${marker.label}`} data-testid="chart-marker">
+              <line x1={x(index)} x2={x(index)} y1={pad.top} y2={pad.top + innerH} stroke="currentColor" strokeOpacity={0.45} strokeDasharray="2 3" />
+              <text x={x(index) + 3} y={pad.top + 9} fontSize={9} fill="currentColor">
+                {marker.label}
+              </text>
+            </g>
+          );
+        })}
         {answer.series.map((series, seriesIndex) => {
           const color = seriesColor(seriesIndex, series.group);
           return (
@@ -139,6 +156,11 @@ export function TrendChart({ answer, className }: { answer: AnalyticsTrendAnswer
         })}
       </svg>
       <p className="text-xs text-muted-foreground">A dashed segment and a hollow point mark a period that is not complete: the one under way, or one the data kept only partly covers.</p>
+      {markers.length > 0 ? (
+        <p className="text-xs text-muted-foreground" data-testid="chart-markers">
+          {markers.map((marker) => `${marker.label} on ${marker.day}`).join('; ')}.
+        </p>
+      ) : null}
 
       <div className="overflow-x-auto rounded-md border">
         <table className="w-full text-sm" aria-labelledby={`${id}-caption`} data-testid="trend-table">

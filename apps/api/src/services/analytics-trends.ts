@@ -153,8 +153,11 @@ function points(periods: Period[], metric: AnalyticsMetric, rows: Map<string, Co
   return periods.map((period) => ({ start: period.start, label: period.label, value: metricValue(metric, rows.get(period.key)), incomplete: period.incomplete }));
 }
 
-/** AN-060 to AN-067: runs a trend definition (defaults already applied) holding one query slot. */
-export async function runTrend(ctx: AppContext, database: AnalyticsDatabaseRow, principal: Principal, query: AnalyticsTrendQuery, nowMs = Date.now()): Promise<TrendAnswer> {
+/**
+ * AN-060 to AN-067: runs a trend definition (defaults already applied) holding one query slot;
+ * `signal` cancels it when the client goes away (`clientGoneSignal`).
+ */
+export async function runTrend(ctx: AppContext, database: AnalyticsDatabaseRow, principal: Principal, query: AnalyticsTrendQuery, nowMs = Date.now(), signal?: AbortSignal): Promise<TrendAnswer> {
   const timezone = database.timezone;
   const range = resolveRange(query.range, timezone, nowMs);
   checkInterval(range, query.interval);
@@ -232,7 +235,7 @@ export async function runTrend(ctx: AppContext, database: AnalyticsDatabaseRow, 
       if (none > 0) answer.series.push({ ...base, label: 'None', value: null, group: 'none', points: points(periods, series.metric, line('none', '')) });
     }
     return answer;
-  });
+  }, signal);
 }
 
 // --- Export (AN-069, AN-211) -----------------------------------------------------------------

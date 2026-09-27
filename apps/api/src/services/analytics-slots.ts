@@ -57,12 +57,18 @@ export class QuerySlots {
     return this.held.size;
   }
 
+  /** How many queries wait for a slot now, for tests and diagnostics. */
+  get waiting(): number {
+    return this.queue.length;
+  }
+
   /**
    * Waits for a slot, runs `work`, and frees the slot whatever happens. Throws
-   * `analytics_busy` when no slot came within the wait.
+   * `analytics_busy` when no slot came within the wait, and the signal's reason when the
+   * client went away while it waited.
    */
-  async run<T>(caller: QueryCaller, kind: QueryKind, work: () => Promise<T>): Promise<T> {
-    const release = await this.acquire(caller, kind);
+  async run<T>(caller: QueryCaller, kind: QueryKind, work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    const release = await this.acquire(caller, kind, signal);
     try {
       return await work();
     } finally {
@@ -70,21 +76,33 @@ export class QuerySlots {
     }
   }
 
-  acquire(caller: QueryCaller, kind: QueryKind): Promise<() => void> {
+  acquire(caller: QueryCaller, kind: QueryKind, signal?: AbortSignal): Promise<() => void> {
+    if (signal?.aborted) return Promise.reject(signal.reason);
     // A caller already waiting in this lane waits behind itself, even when a slot is free:
     // its queries run in the order it sent them.
     if (!this.queue.some((waiter) => waiter.caller.id === caller.id && waiter.kind === kind) && this.eligible(caller, kind)) {
       return Promise.resolve(this.take(caller, kind));
     }
     return new Promise((resolve, reject) => {
+      // A client that went away leaves the queue at once, so its caller's next query (the
+      // chart it asked for instead) is not held behind it (AN-205).
+      const leave = () => {
+        clearTimeout(waiter.timer);
+        const index = this.queue.indexOf(waiter);
+        if (index !== -1) this.queue.splice(index, 1);
+        reject(signal!.reason);
+        this.drain();
+      };
       const waiter: Waiter = {
         caller,
         kind,
         grant: () => {
           clearTimeout(waiter.timer);
+          signal?.removeEventListener('abort', leave);
           resolve(this.take(caller, kind));
         },
         timer: setTimeout(() => {
+          signal?.removeEventListener('abort', leave);
           const index = this.queue.indexOf(waiter);
           if (index !== -1) this.queue.splice(index, 1);
           reject(
@@ -100,6 +118,7 @@ export class QuerySlots {
         }, querySlotTimings.waitMs),
       };
       waiter.timer.unref?.();
+      signal?.addEventListener('abort', leave, { once: true });
       this.queue.push(waiter);
     });
   }

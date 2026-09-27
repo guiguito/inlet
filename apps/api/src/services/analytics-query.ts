@@ -1,4 +1,5 @@
 import { and, eq, inArray, isNull } from 'drizzle-orm';
+import type { FastifyReply } from 'fastify';
 import type { z } from 'zod';
 import {
   ANALYTICS_RANGE_PRESETS,
@@ -171,9 +172,40 @@ export function resolveRange(range: AnalyticsRange, timezone: string, nowMs: num
 /** AN-064: the hour interval covers at most seven days. */
 export const HOUR_INTERVAL_MAX_DAYS = 7;
 
-export function checkInterval(range: { from: string; to: string }, interval: AnalyticsInterval, path = 'interval'): void {
+/** AN-064, 9.2: a range spans at most 1,000 periods of its interval. */
+export const RANGE_MAX_PERIODS = 1_000;
+
+/** How many periods of `interval` the range touches, a period the range cuts included. */
+export function periodCount(range: { from: string; to: string }, interval: AnalyticsInterval): number {
+  switch (interval) {
+    case 'hour':
+      return daysInRange(range) * 24;
+    case 'day':
+      return daysInRange(range);
+    case 'week':
+      return (dayNumber(mondayOf(range.to)) - dayNumber(mondayOf(range.from))) / 7 + 1;
+    case 'month': {
+      const month = (day: string) => Number(day.slice(0, 4)) * 12 + Number(day.slice(5, 7));
+      return month(range.to) - month(range.from) + 1;
+    }
+    case 'year':
+      return Number(range.to.slice(0, 4)) - Number(range.from.slice(0, 4)) + 1;
+  }
+}
+
+/**
+ * AN-064: the hour interval covers at most seven days (at `path`), and any range at most 1,000
+ * periods of its interval (at `rangePath`), so that no answer grows without bound: the widest
+ * range by day was 65,000 points a series (DECISIONS 33.4). Every query with an interval or a
+ * granularity calls this after `resolveRange`, so funnels and cohorts inherit both rules.
+ */
+export function checkInterval(range: { from: string; to: string }, interval: AnalyticsInterval, path = 'interval', rangePath = 'range'): void {
   if (interval === 'hour' && daysInRange(range) > HOUR_INTERVAL_MAX_DAYS) {
     throw invalidAt(path, `The hour interval covers at most ${HOUR_INTERVAL_MAX_DAYS} days; this range has ${daysInRange(range)}. Choose a shorter range or the day interval.`);
+  }
+  const periods = periodCount(range, interval);
+  if (periods > RANGE_MAX_PERIODS) {
+    throw invalidAt(rangePath, `A range spans at most ${RANGE_MAX_PERIODS.toLocaleString('en-US')} periods of its interval; this one spans ${periods.toLocaleString('en-US')} ${interval}s. Choose a shorter range or a coarser interval.`);
   }
 }
 
@@ -328,7 +360,7 @@ export function coverageOf(range: { from: string; to: string }, keptFrom: string
  * the partition key are answered from the parts' own min/max index (`_minmax_count_projection`),
  * so this reads no event.
  */
-export async function oldestKeptDay(store: EventStore, database: AnalyticsDatabaseRow, settings: QuerySettings): Promise<string | null> {
+export async function oldestKeptDay(store: ReadStore, database: AnalyticsDatabaseRow, settings: QuerySettings): Promise<string | null> {
   const [row] = await store.query<{ oldest: string; events: string }>(
     'SELECT toString(min(local_day)) AS oldest, count() AS events FROM events WHERE database_key = {databaseKey:UInt32}',
     { databaseKey: database.key },
@@ -683,20 +715,41 @@ export async function querySettings(ctx: AppContext, store: EventStore, kind: Qu
   };
 }
 
+/** What a slot query reads through: `store.query`, bound to the request's abort signal. */
+export type ReadStore = Pick<EventStore, 'query'>;
+
+/**
+ * An abort signal for a request whose client may go away before the answer (AN-205): it fires
+ * when the connection closes before the response was sent, so the query stops waiting for a
+ * slot, or is cancelled in the event store, and frees the caller's slot at once. A response
+ * sent in full closes the connection too, but after `writableEnded`; MCP's calls through
+ * `app.inject` end that way, and so never abort.
+ */
+export function clientGoneSignal(reply: FastifyReply): AbortSignal {
+  const controller = new AbortController();
+  reply.raw.once('close', () => {
+    if (!reply.raw.writableEnded) controller.abort(new DOMException('The client closed the connection.', 'AbortError'));
+  });
+  return controller.signal;
+}
+
 /**
  * AN-205: runs `work` holding one of the caller's slots, with the event store and the per-query
  * limits it passes to every `store.query`. The store's readiness is checked before waiting, so
- * an outage answers `analytics_unavailable` at once rather than after the slot wait.
+ * an outage answers `analytics_unavailable` at once rather than after the slot wait. `signal`
+ * (from `clientGoneSignal`) stops the wait and cancels the running statement when it fires.
  */
 export async function runAnalyticsQuery<T>(
   ctx: AppContext,
   principal: Principal,
   kind: QueryKind,
-  work: (store: EventStore, settings: QuerySettings) => Promise<T>,
+  work: (store: ReadStore, settings: QuerySettings) => Promise<T>,
+  signal?: AbortSignal,
 ): Promise<T> {
   const store = requireEventStore(ctx.eventStore);
   slotCapacity = ctx.env.limits.analyticsQuerySlots;
-  return querySlots.run(queryCaller(principal), kind, async () => work(store, await querySettings(ctx, store, kind)));
+  const bound: ReadStore = { query: (sql, params, settings) => store.query(sql, params, settings, signal) };
+  return querySlots.run(queryCaller(principal), kind, async () => work(bound, await querySettings(ctx, store, kind)), signal);
 }
 
 /** The in-memory state of the query layer, for the test harness and a simulated restart. */

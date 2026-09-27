@@ -27,7 +27,7 @@ import {
   updateEvent,
   updateParam,
 } from '../services/analytics-catalog.js';
-import { invalidQuery } from '../services/analytics-query.js';
+import { clientGoneSignal, invalidQuery } from '../services/analytics-query.js';
 import { runTrend, trendCsv, trendRows } from '../services/analytics-trends.js';
 import { requireManagementPrincipal } from '../services/principal.js';
 import { databaseIdParam, errorsFor } from './schemas.js';
@@ -143,10 +143,10 @@ export function analyticsEventRoutes(ctx: AppContext): FastifyPluginAsyncZod {
           response: { 200: detailSchema, ...errorsFor(400, 401, 403, 404, 503) },
         },
       },
-      async (request) => {
+      async (request, reply) => {
         const principal = await requireManagementPrincipal(ctx, request);
         const { database } = await requireAnalyticsDatabase(ctx.db, principal, request.params.databaseId, 'viewer');
-        return eventDetail(ctx, database, principal, request.params.name);
+        return eventDetail(ctx, database, principal, request.params.name, Date.now(), clientGoneSignal(reply));
       },
     );
 
@@ -252,11 +252,11 @@ export function analyticsEventRoutes(ctx: AppContext): FastifyPluginAsyncZod {
           response: { 200: z.object({ values: z.array(z.string()), truncated: z.boolean() }), ...errorsFor(400, 401, 403, 404, 503) },
         },
       },
-      async (request) => {
+      async (request, reply) => {
         const principal = await requireManagementPrincipal(ctx, request);
         const { database } = await requireAnalyticsDatabase(ctx.db, principal, request.params.databaseId, 'viewer');
         const { dimension, key, param, event } = request.query;
-        return filterValues(ctx, database, principal, dimension !== undefined ? { dimension, ...(key !== undefined ? { key } : {}) } : { param: param!, event: event! });
+        return filterValues(ctx, database, principal, dimension !== undefined ? { dimension, ...(key !== undefined ? { key } : {}) } : { param: param!, event: event! }, Date.now(), clientGoneSignal(reply));
       },
     );
 
@@ -288,7 +288,7 @@ export function analyticsEventRoutes(ctx: AppContext): FastifyPluginAsyncZod {
           throw parsed.success ? apiError('invalid_query', request.validationError.message) : invalidQuery(parsed.error.issues);
         }
         requireEventStore(ctx.eventStore);
-        const answer = await runTrend(ctx, database, principal, request.body);
+        const answer = await runTrend(ctx, database, principal, request.body, Date.now(), clientGoneSignal(reply));
         const format = request.query.format;
         if (format === undefined) return answer;
         const base = `inlet-${database.id}-trend-${new Date().toISOString().slice(0, 10)}`;

@@ -51,7 +51,7 @@ type RequestOptions = {
   credentials?: RequestCredentials;
 };
 
-async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { method = 'GET', body, headers = {}, signal, credentials = 'same-origin' } = options;
 
   const response = await fetch(path, {
@@ -461,6 +461,44 @@ export type AnalyticsTrendAnswer = {
   }[];
 };
 
+/** AN-140 to AN-144, Appendix E "Overview". */
+export type AnalyticsOverviewQuery = {
+  range: AnalyticsRange;
+  apps: string[];
+  platforms: string[];
+  environments: string[];
+  unit: 'installation' | 'user';
+};
+export type AnalyticsFigure = { value: number | null; previous: number | null; covered: { from: string; to: string } | null };
+export type AnalyticsCrashFree = { rate: number | null; sessions: number; measured: boolean; lowConfidence: boolean };
+export type AnalyticsShare = { value: string; share: number; installations: number; other?: true };
+export type AnalyticsOverview = {
+  range: { from: string; to: string };
+  unit: 'installation' | 'user';
+  timezone: string;
+  keptFrom: string | null;
+  filters: { apps: string[]; platforms: string[]; environments: string[] };
+  figures: {
+    activeLastHour: AnalyticsFigure;
+    dailyActiveLastDay: AnalyticsFigure;
+    dailyActiveToday: AnalyticsFigure;
+    weeklyActive: AnalyticsFigure;
+    monthlyActive: AnalyticsFigure;
+    stickiness: AnalyticsFigure;
+    newInstallations: AnalyticsFigure & { perDay: { day: string; value: number }[] };
+    sessions: AnalyticsFigure & { perDay: { day: string; value: number }[] };
+    d1: AnalyticsFigure & { installations: number };
+    d7: AnalyticsFigure & { installations: number };
+    d30: AnalyticsFigure & { installations: number };
+  };
+  crashFree: { covered: { from: string; to: string } | null; overall: AnalyticsCrashFree & { previous: number | null }; versions: (AnalyticsCrashFree & { version: string })[] };
+  shares: { covered: { from: string; to: string } | null; appVersion: AnalyticsShare[]; platform: AnalyticsShare[]; country: AnalyticsShare[] };
+  topEvents: { computedAt: string | null; events: { name: string; events: number }[] };
+  dailyActive: { covered: { from: string; to: string } | null; points: AnalyticsTrendPoint[] };
+  versionsFirstSeen: { version: string; day: string }[];
+  notices: { code: 'no_events' | 'no_app_started'; message: string }[];
+};
+
 // --- Crash Reports (Release 6) -------------------------------------------------
 
 export type CrashDatabase = {
@@ -627,10 +665,24 @@ export const api = {
       `/v1/analytics-databases/${databaseId}/live${after ? `?after=${encodeURIComponent(after)}` : ''}`,
     ),
   // --- Catalog, Lexicon and trends (AN-050 to AN-069) ---
-  listAnalyticsEvents: (databaseId: string, query: { q?: string; category?: string; includeHidden?: boolean; sort?: 'name' | 'lastSeen' | 'events24h' } = {}) =>
-    request<{ events: AnalyticsCatalogEntry[]; nextCursor: string | null; total: number }>(
-      `/v1/analytics-databases/${databaseId}/events${crashQuery({ q: query.q, category: query.category, includeHidden: query.includeHidden ? 'true' : undefined, sort: query.sort })}`,
-    ),
+  /**
+   * The whole catalog, every page: the API answers 1,000 names a page (AN-204) and an operator
+   * may allow 5,000 names, so this follows `nextCursor` until the last page.
+   */
+  listAnalyticsEvents: async (databaseId: string, query: { q?: string; category?: string; includeHidden?: boolean; sort?: 'name' | 'lastSeen' | 'events24h' } = {}) => {
+    const events: AnalyticsCatalogEntry[] = [];
+    let cursor: string | undefined;
+    let total = 0;
+    do {
+      const page = await request<{ events: AnalyticsCatalogEntry[]; nextCursor: string | null; total: number }>(
+        `/v1/analytics-databases/${databaseId}/events${crashQuery({ q: query.q, category: query.category, includeHidden: query.includeHidden ? 'true' : undefined, sort: query.sort, cursor })}`,
+      );
+      events.push(...page.events);
+      total = page.total;
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor);
+    return { events, total };
+  },
   getAnalyticsEvent: (databaseId: string, name: string) =>
     request<AnalyticsEventDetail>(`/v1/analytics-databases/${databaseId}/events/${encodeURIComponent(name)}`),
   updateAnalyticsEvent: (databaseId: string, name: string, patch: { description?: string | null; hidden?: boolean }) =>
@@ -645,6 +697,20 @@ export const api = {
     request<{ values: string[]; truncated: boolean }>(`/v1/analytics-databases/${databaseId}/filters${crashQuery(query)}`),
   analyticsTrend: (databaseId: string, definition: AnalyticsTrendDefinition, signal?: AbortSignal) =>
     request<AnalyticsTrendAnswer>(`/v1/analytics-databases/${databaseId}/queries/trends`, { method: 'POST', body: definition, ...(signal ? { signal } : {}) }),
+  /** AN-140 to AN-144: the Overview; a filter with several values repeats its parameter. */
+  analyticsOverview: (databaseId: string, query: AnalyticsOverviewQuery, signal?: AbortSignal) => {
+    const search = new URLSearchParams();
+    if ('preset' in query.range) search.set('preset', query.range.preset);
+    else {
+      search.set('from', query.range.from);
+      search.set('to', query.range.to);
+    }
+    for (const app of query.apps) search.append('app', app);
+    for (const platform of query.platforms) search.append('platform', platform);
+    for (const environment of query.environments) search.append('environment', environment);
+    search.set('unit', query.unit);
+    return request<AnalyticsOverview>(`/v1/analytics-databases/${databaseId}/overview?${search.toString()}`, signal ? { signal } : {});
+  },
   /** AN-069: the export is a POST (the definition does not fit an address), so it is fetched and saved as a file. */
   downloadAnalyticsTrend: async (databaseId: string, definition: AnalyticsTrendDefinition, format: 'csv' | 'json') => {
     const response = await fetch(`/v1/analytics-databases/${databaseId}/queries/trends?format=${format}`, {

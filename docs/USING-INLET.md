@@ -317,8 +317,65 @@ your browser's zone, which happens with a zone renamed recently such as `Europe/
 form proposes its former name (`Europe/Kiev`), which counts exactly the same hours.
 
 The database opens on **Insights → Overview**, with four groups: **Insights** (Overview,
-Events, Funnels, Cohorts), **Users**, **Collect** and **Settings**. For now **Events**,
-**Collect** and **Settings** are where the work is.
+Events, Funnels, Cohorts), **Users**, **Collect** and **Settings**. For now **Overview**,
+**Events**, **Users**, **Collect** and **Settings** are where the work is.
+
+### Overview: reading the home
+
+**Insights → Overview** answers "how is the product used right now?" on one screen.
+
+**The filter bar.** A range (the last 30 days unless you choose another; every preset ends
+today and includes it), an app (shown once the database has seen more than one), a platform,
+an environment and what to count. The filters in force are the chips under the bar, the
+defaults marked as such: every app, every client platform, `production` only, installations.
+Remove the environment chip to read every environment the database has seen. Switch **Count**
+to **User IDs** to read active users instead of active installations: it changes the active
+figures only.
+
+**The figures.** Each shows its change from the previous period, or "Change not available"
+when that period begins before the oldest event the database keeps: Inlet never compares
+with a period it only partly remembers, which is why a young database shows few changes.
+
+- **Active in the last hour, yesterday, today so far, weekly and monthly.** Installations
+  (or user IDs) with at least one event in the last 60 minutes, on yesterday, today, the 7
+  days and the 30 days ending today. These follow now, not the range. An event sent by a
+  backend (platform `server`) never makes anyone active, and neither the database's test
+  installation nor a "server installation" (events that carry only a user ID) ever counts.
+  Today so far is compared with yesterday up to the same time.
+- **Stickiness.** The average daily active count over the last 30 days divided by the
+  monthly one: how many of the month's users come on a given day.
+- **New installations.** Installations first seen in the range, filtered by where they were
+  installed (their first app, platform and environment). Installations whose app could not
+  keep its identity (a private window) are left out, since each visit would look new.
+- **Sessions.** Distinct sessions that sent `app_started` in the range, each counted on the day
+  and app version of its first `app_started`. Inlet does not guess sessions from gaps between
+  events: with the SDK's standard events turned off there are none, and the Overview says so
+  in a notice above the figures.
+- **D1, D7, D30.** Of the installations installed in the range whose first, seventh or
+  thirtieth day after installing has already ended, the share that started the app on that
+  day. A young installation is not counted as lost before its day has passed, so D30 over the
+  last 30 days is always empty: widen the range to read it.
+- **Crash-free sessions.** Of the sessions whose app started with a crash module enabled, the
+  share that did not end in a crash, with the number of sessions it counts.
+
+**The chart** shows daily active installations (or user IDs) over the range, with a dashed
+line on the day each app version was first seen; its table below holds every value.
+
+**App version, platform and country** show the installations active in the last 7 days, each
+counted once by its latest value, so the shares add up to 100%.
+
+**Top events** are the ten with the most occurrences in the last 24 hours, hidden events left
+out, from the catalog's figures (at most five minutes old). Each opens its chart in Events.
+
+**Crash-free sessions by app version** shows the five versions with the most sessions. A
+session is flagged crashed when the SDK's crash module reports a crash for it, even if that
+report arrives days later, on the next launch. A version reads **Not measured** when none of
+its sessions started with a crash module enabled: its sessions would otherwise all look
+crash-free. In a browser this also happens when none of the page's scripts lies within the
+crash module's `appRoots`, the fix being to set them (see the SDK's README). Below 100 sessions
+the figure is marked **Low confidence**.
+
+A database that has received no event yet says so and links to **Collect**.
 
 ### Collect: sending events
 
@@ -400,6 +457,69 @@ did it".
 When a chart says every query slot is busy, the server is answering other charts; try again
 in a few seconds. When it says the chart took too long, choose a shorter range or a coarser
 interval.
+
+### Users: looking someone up
+
+Support gets a message from a user, with the user ID your app gave them, or an installation
+ID from a crash report. **Users** finds everything the database knows about them.
+
+**Searching.** Paste an installation ID or a user ID into the search box. You can also type
+the start of either, at least six characters; with fewer, only exact IDs match (a short user
+ID such as `u1` is still found), and the page says so. A user ID lists the user and every
+installation it was seen on. Without a search, the page lists the installations seen most
+recently, newest first, 50 a page, and the filters narrow them to a platform, an app version,
+a country or an environment, as each installation last reported.
+
+Two kinds of installation appear there. A **device** installation is one install of your app on
+one phone, computer or browser profile. A **server** installation, marked *server*, is the one
+Inlet makes for events your backend sends with a user ID and no installation ID; its last-seen
+time is its last event. An installation marked *ephemeral* could not keep its ID (a private
+window, blocked storage), so it lasts only as long as that page or process. The test
+installation of **Send a test event** is never listed.
+
+**An installation's profile** shows:
+
+- **The header**: its ID, its current user ID, when it was installed (the time of its first
+  event, which never moves), first and last seen, and its last event of any kind.
+- **Context**: what its latest event said, platform and version, runtime, app and app version,
+  locale, country, environment, attribution and experiments, and its install attribution, the
+  first attribution it ever reported.
+- **Identity history**: every user ID it carried, the current one first, each with when it was
+  first and last seen on it. A shared tablet shows several; a user who signed out and in again
+  shows one.
+- **Activity**: its events, its sessions (each launch or return after 30 minutes away starts
+  one) and its active days, counted from its events, with a calendar of the days it was active
+  over the storage window. **Active days as a list** gives the same days as text.
+- **Events**: its events newest first, 50 a page (**Older** and **Newer**), grouped by session,
+  so you can read what happened in the session that ended in a crash. Click an event for its
+  params and context. Filter by an event name or a date range.
+- **Crash groups** and **Feedback**: the crash groups whose reports carry its installation ID
+  or one of its user IDs, with how many reports and when the last arrived, and the
+  submissions carrying them, with the first thing the person wrote. Each opens the crash group
+  or the submission. You see only what the crash and feedback databases you can read hold: a
+  database you have no access to adds nothing, and says nothing about itself.
+- **Export** downloads the whole profile as a JSON file: the installation record, its user IDs,
+  the first time it sent each event, and every stored event. That is what you send someone who
+  asks for the data you hold about them.
+
+**A user's profile** lists the installations the user ID was seen on, each with its platform,
+app version, country and last seen, the totals of the events carrying the user ID, their
+calendar and feed, and the crash groups and submissions carrying the user ID or one of those
+installations' IDs. A user ID and an installation are never merged into one person: the same
+user on a phone and a laptop is one user ID and two installations.
+
+A profile lasts as long as its installation's record, and its events as long as the storage
+window keeps them: an installation that stopped sending events long ago disappears with them.
+Everything here needs only the Viewer role.
+
+**The Usage profile link.** A crash report carrying an installation ID (open a report in a
+crash group) and a feedback submission carrying one both show a **Usage profile** link when an
+analytics database of the same project holds that installation and you can read it. It opens
+that installation's profile, where the feed shows what the person did just before. When several
+of your analytics databases hold it, there is one link per database, named after it. The link is
+left out when no analytics database holds the installation, when you cannot read the one that
+does, and while the event store is unreachable; the report or the submission opens as usual
+either way.
 
 ### Settings
 

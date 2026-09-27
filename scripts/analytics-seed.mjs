@@ -18,6 +18,7 @@
  * statement, so they pass through the same views and projections the API's inserts do.
  */
 import { execFileSync } from 'node:child_process';
+import { readdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -131,8 +132,12 @@ async function seed() {
   await ch(`DROP DATABASE IF EXISTS ${DATABASE}`, { database: 'default' });
   await ch(`CREATE DATABASE ${DATABASE}`, { database: 'default' });
   const binary = path.join(repoRoot, '.dev', 'bin', 'clickhouse');
-  execFileSync(binary, ['client', '--port', '9124', '--user', USER, '--password', PASSWORD, '--database', DATABASE,
-    '--queries-file', path.join(repoRoot, 'apps', 'api', 'clickhouse', '0001_events.sql')]);
+  // Every migration, in order, as the API applies them at start.
+  const migrations = path.join(repoRoot, 'apps', 'api', 'clickhouse');
+  for (const file of readdirSync(migrations).filter((name) => /^\d{4}_[a-z0-9_]+\.sql$/.test(name)).sort()) {
+    execFileSync(binary, ['client', '--port', '9124', '--user', USER, '--password', PASSWORD, '--database', DATABASE,
+      '--queries-file', path.join(migrations, file)]);
+  }
 
   const started = performance.now();
   // A million events a statement: four views aggregating whole days at once outgrow the
@@ -151,7 +156,7 @@ async function seed() {
   }
   console.log(`Seeded in ${((performance.now() - started) / 1000).toFixed(0)} s. Merging every partition (OPTIMIZE … FINAL), the steady state a long-lived deployment reaches.`);
   const merge = performance.now();
-  for (const table of ['events', 'installations', 'installation_users', 'installation_first', 'user_first']) {
+  for (const table of ['events', 'installations', 'installation_users', 'installation_first', 'user_first', 'version_first']) {
     await ch(`OPTIMIZE TABLE ${table} FINAL`, { settings: { receive_timeout: 3600, send_timeout: 3600 } });
   }
   console.log(`Merged in ${((performance.now() - merge) / 1000).toFixed(0)} s.`);

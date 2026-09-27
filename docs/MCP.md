@@ -224,9 +224,16 @@ of every unique count, and a user ID the integrator sets after sign-in is the ot
 analytics answer covers the database's storage window (13 months or 500 million events by
 default) and states the range it covers, and a range preset such as `last30Days` ends today
 and includes it. The server's instructions say the same, so an agent reads it before it
-calls anything. The database tools, the test event, the live feed, the catalog and Lexicon
-tools and trends below exist now; the Overview, profile, funnel, cohort, storage and erasure
+calls anything. The database tools, the test event, the live feed, the Overview, the catalog
+and Lexicon tools, trends and profiles below exist now; the funnel, cohort, storage and erasure
 tools arrive with later pieces of Release 8 (UX Analytics PRD section 8.3).
+
+To see how a product is used at a glance, `get_analytics_overview` answers the home screen in
+one call: active installations (or user IDs) in the last hour, yesterday, today, the last 7
+and 30 days, stickiness, new installations, sessions, D1, D7 and D30, crash-free sessions per
+version, the version, platform and country shares, the top events and the day each version
+was first seen, every figure with its previous period's value (null when that period begins
+before the oldest event kept) and the range it covers.
 
 An agent should read the catalog first (`list_analytics_events`): it is the tracking plan,
 every event and param with the team's descriptions. Then `query_analytics_trends` answers
@@ -249,12 +256,17 @@ shorter range or a coarser interval).
 | Tool | What it does |
 | --- | --- |
 | `list_analytics_databases`, `get_analytics_database` | The analytics databases of a project; one of them with its reporting timezone, country derivation, storage settings in force, the deployment's limits, and `eventStore`, whether the event store answers now. Both work while it does not. |
+| `get_analytics_overview` | The Overview (AN-140): `preset` (last 30 days by default) or `from`/`to`, `apps`, `platforms` (client platforms only), `environments` (`production` by default) and `unit` (`installation` or `user`, for the active figures). Each figure has `value`, `previous` and `covered`; `crashFree` overall and for the five versions with the most sessions, with `measured` and `lowConfidence`; `shares`, `topEvents`, `dailyActive`, `versionsFirstSeen` and `notices` (`no_events`, `no_app_started`). One query slot. |
 | `get_analytics_live_events` | The latest events the database accepted, newest first, with name, effective time, installation ID, platform and app version: the last 500 since the server started, empty after a restart. At most 500 per call with a `cursor`; pass it back as `after` to get only what arrived since. Takes no query slot. |
 | `list_analytics_events` | The catalog with its Lexicon: each event's latest category, description, params (types and descriptions), first and last seen, and its events, unique installations and unique user IDs in the last 24 hours as of `computedAt`. `q` searches names and descriptions, whatever their case; hidden events only with `includeHidden`; sorted by name, `lastSeen` or `events24h`. At most 1,000 per call with `nextCursor`. No query slot. |
 | `get_analytics_event` | One event, hidden or not: its params with types, descriptions and the ten most frequent values of each over the last seven days. A query slot. |
 | `list_analytics_filter_values` | Distinct values, without counts, at most 1,000: of a `dimension` over the storage window (an `experiment` lists keys, with `key` its variants), or of a `param` of an `event` over the last seven days. A query slot. |
 | `query_analytics_trends` | One to five series (an event or `*`, a metric, filters, a label), global filters, an optional split, a range and an interval, the definition of UX Analytics 9.2; answers each series' points with `covered`, `notice` and `incomplete`. `format` `csv` or `json` returns the export, one row per period and series. A query slot. |
 | `export_analytics_catalog` | Every event name, hidden ones included, with its Lexicon, as JSON, 1,000 per call with `nextCursor`. The whole catalog as CSV is `GET /exports/catalog?format=csv` over HTTP. |
+| `find_analytics_profiles` | With `q`, the installations whose ID is `q` or starts with it and the user IDs equal to it or starting with it, with their installations; a prefix needs six characters (fewer match exact IDs only, with notice `prefix_too_short`). Without `q`, the installations seen most recently, newest first, filtered by latest `platform`, `appVersion`, `country`, `environment`, 1,000 per call with `nextCursor`. Server installations are marked; the test installation is never listed. A query slot. |
+| `get_analytics_profile` | An installation (pass `installationId`) or a user (`userId`): the record, identity history (user IDs of an installation, installations of a user), events, sessions and active days counted from its events, and `links`: the crash groups and submissions carrying its IDs in the crash and feedback databases of the project, for get_crash_group and get_submission. `profile_not_found` when none exists. No query slot. |
+| `list_analytics_profile_events` | A profile's events, newest first, 1,000 per call with `nextCursor` (stable while events arrive), filtered by `name` and `from`/`to` dates; each with its session ID, params and context. A query slot. |
+| `export_analytics_profile` | For a request for access: the record, identity links, first occurrences and the first 1,000 stored events; pass `nextCursor` back as `cursor` for the next 1,000 until it is null. The whole export as one file is `GET …/export` over HTTP. A query slot per call. |
 
 ### Writing
 

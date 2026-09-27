@@ -7,8 +7,8 @@ import { InletClient, InletError } from './client.js';
 /**
  * The UX Analytics tool surface (UX Analytics PRD section 8.3, AN-200 to AN-204): the
  * database tools of piece 2, the test event and the live feed of piece 3, the catalog, Lexicon
- * and trend tools of piece 4; later pieces add the Overview, profile, funnel, cohort, storage
- * and erasure tools here. Every tool is one authenticated HTTP request, so an agent can do what
+ * and trend tools of piece 4, the Overview of piece 5; later pieces add the profile, funnel, cohort,
+ * storage and erasure tools here. Every tool is one authenticated HTTP request, so an agent can do what
  * a secret server key can do over HTTP and nothing more (FD-021). Descriptions state the
  * defaults, because an agent reads the tool, not the PRD (AN-201).
  */
@@ -225,6 +225,45 @@ export function registerAnalyticsTools(server: McpServer, client: InletClient): 
       guard(async () => {
         const query = new URLSearchParams(Object.entries(rest).filter((entry): entry is [string, string] => entry[1] !== undefined));
         return json(await client.request('GET', `/v1/analytics-databases/${id}/filters?${query.toString()}`));
+      }),
+  );
+
+  server.registerTool(
+    'get_analytics_overview',
+    {
+      title: 'Read the analytics Overview',
+      description: [
+        'The home screen of an analytics database (AN-140 to AN-144), one answer holding one analytics query slot. Read it first to see how the product is used.',
+        'Defaults: the last 30 days (`preset`, or `from` and `to` dates in the reporting timezone, both included, at most 1,000 days); presets (today, yesterday, last7Days, last30Days, last90Days, last12Months, thisMonth, thisYear) end today and include it. Every app, every client platform (web, ios, android, macos, windows, linux, other; never server) and environment `production` unless `apps`, `platforms` or `environments` say otherwise. `unit` is `installation` (the default) or `user`, and changes the active figures only.',
+        'Figures, each with `value`, `previous` (the previous period: the range of the same length just before, or for anchored figures the same figure an hour, a day, 7 or 30 days earlier; null when that period begins before the oldest event kept, never computed from part of it) and `covered` (the range the storage window holds for it). Anchored to now, whatever the range: `activeLastHour` (units with an event in the last 60 minutes, by event time; previous the 60 before), `dailyActiveLastDay` (yesterday), `dailyActiveToday` (today so far; previous yesterday up to the same time), `weeklyActive` and `monthlyActive` (the 7 and 30 days ending today), `stickiness` (mean daily active units over those 30 days ÷ monthly active units). Over the range: `newInstallations` (installations installed then, by their install day and install dimensions; never ephemeral, server or test ones), `sessions` (distinct session IDs of stored app_started events, each on the day, version and dimensions of its first app_started), `d1`, `d7`, `d30` (of installations installed in the range whose Nth day after installing has ended, the share that sent app_started on that day; `installations` is the denominator, null value while none has), each with a `perDay` where relevant.',
+        'Active means an event that is not a background event (platform server) from a device installation: server installations (a user ID without an installation ID) and the test installation count in no active or unique figure, and ephemeral installations count everywhere except new installations and retention. The user unit counts distinct non-empty user IDs of the same events.',
+        '`crashFree`: sessions whose app_started falls in the range and reports a crash module (crashReporting true), `rate` = 1 − sessions flagged by a session_crashed (however late it arrived) ÷ sessions, overall and for the five app versions with the most sessions; `measured` false ("not measured") when no session of it reported a crash module, `lowConfidence` below 100 sessions. `shares`: installations active in the last 7 days by app version, platform and country, each counted once by its latest dimensions, ten values and Other, adding up to 1. `topEvents`: the ten events with the most occurrences in the last 24 hours, hidden ones excluded, from the catalog as of `computedAt`. `dailyActive`: daily active units over the range, a point a day, `incomplete` for today; `versionsFirstSeen`: the day each app version was first seen, for markers. `notices`: `no_events` (nothing has arrived yet) or `no_app_started` (events but no app_started in 24 hours, so sessions, retention and crash-free sessions have no data).',
+        'Errors: analytics_busy after ten seconds without a slot, query_limit_exceeded past 30 seconds or the memory limit — then ask for a shorter range.',
+      ].join(' '),
+      inputSchema: {
+        analyticsDatabaseId,
+        preset: z.enum(['today', 'yesterday', 'last7Days', 'last30Days', 'last90Days', 'last12Months', 'thisMonth', 'thisYear']).optional(),
+        from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe('YYYY-MM-DD in the reporting timezone, with `to`; instead of a preset.'),
+        to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        apps: z.array(z.string().max(256)).max(50).optional().describe('App IDs; every app when omitted.'),
+        platforms: z.array(z.enum(['web', 'ios', 'android', 'macos', 'windows', 'linux', 'other'])).max(7).optional().describe('Client platforms; every one when omitted.'),
+        environments: z.array(z.string().max(256)).max(50).optional().describe('`production` when omitted.'),
+        unit: z.enum(['installation', 'user']).optional(),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ analyticsDatabaseId: id, preset, from, to, apps, platforms, environments, unit }) =>
+      guard(async () => {
+        const query = new URLSearchParams();
+        if (preset) query.set('preset', preset);
+        if (from) query.set('from', from);
+        if (to) query.set('to', to);
+        for (const app of apps ?? []) query.append('app', app);
+        for (const platform of platforms ?? []) query.append('platform', platform);
+        for (const environment of environments ?? []) query.append('environment', environment);
+        if (unit) query.set('unit', unit);
+        const qs = query.toString();
+        return json(await client.request('GET', `/v1/analytics-databases/${id}/overview${qs ? `?${qs}` : ''}`));
       }),
   );
 

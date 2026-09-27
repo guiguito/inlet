@@ -4,10 +4,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeftIcon, TrashIcon } from 'lucide-react';
 import { toast } from 'sonner';
 import { api, ApiError, type CurrentUser } from '@/lib/api';
+import { profilesApi } from '@/lib/analytics-profiles';
 import { AppShell, PageHeader } from '@/components/app-shell';
 import { AnswerList } from '@/components/answer-view';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { EmptyState } from '@/components/empty-state';
+import { UsageProfileLinks } from '@/components/usage-profile-link';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -177,6 +179,13 @@ export function SubmissionPage({ user }: { user: CurrentUser }) {
                         .join(' · ')}
                       mono
                       note="Attached by inlet-sdk (FR-204): the user ID your application set, and random session and installation IDs. None of it is derived from the device."
+                    />
+                  ) : null}
+                  {/* AN-154, FR-066: the usage profile of the installation it carries. */}
+                  {submission.data.installationId ? (
+                    <UsageProfileLinks
+                      queryKey={['submission', databaseId, submissionId]}
+                      load={() => profilesApi.submissionLink(databaseId, submissionId)}
                     />
                   ) : null}
                   <MetaRow

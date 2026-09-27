@@ -38,6 +38,8 @@ import { crashRoutes } from './routes/crashes.js';
 import { crashReadRoutes } from './routes/crash-reads.js';
 import { analyticsRoutes } from './routes/analytics.js';
 import { analyticsEventRoutes } from './routes/analytics-events.js';
+import { analyticsOverviewRoutes } from './routes/analytics-overview.js';
+import { analyticsProfileRoutes } from './routes/analytics-profiles.js';
 import { requireAnalyticsDatabase, requireCrashDatabase } from './services/access.js';
 import { mcpRoutes } from './routes/mcp.js';
 import { projectRoutes } from './routes/projects.js';
@@ -138,6 +140,10 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
       await v1.register(analyticsRoutes(ctx));
       // The catalog, the Lexicon, filter values and trends (AN-050 to AN-069).
       await v1.register(analyticsEventRoutes(ctx));
+      // The Overview (AN-140 to AN-144).
+      await v1.register(analyticsOverviewRoutes(ctx));
+      // Profiles and the Usage profile link of crash reports and submissions (AN-120 to AN-126, AN-154).
+      await v1.register(analyticsProfileRoutes(ctx));
       // And a third time for analytics databases (AN-190). Their messages announce data-health
       // incidents only, so `contentLevel` is stored like any database's and never read for them.
       await v1.register(
@@ -298,6 +304,12 @@ function registerCrossOriginCollection(app: FastifyInstance): void {
  */
 function registerErrorHandler(app: FastifyInstance): void {
   app.setErrorHandler((error, request, reply) => {
+    // An analytics query whose client went away (AN-205, `clientGoneSignal`): nobody reads the
+    // answer, and it is not a failure worth an error in the log.
+    if ((error as Error).name === 'AbortError' && reply.raw.destroyed) {
+      request.log.info('client closed the connection before its analytics query answered');
+      return reply.code(499).send();
+    }
     if (error instanceof ApiError) {
       if (error.status >= 500) request.log.error({ err: error }, 'request failed');
       if (error.retryAfterSeconds !== undefined) reply.header('retry-after', String(error.retryAfterSeconds));
