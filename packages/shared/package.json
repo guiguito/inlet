@@ -21,6 +21,14 @@
     "./analytics-core": {
       "types": "./dist/analytics-core.d.ts",
       "default": "./dist/analytics-core.js"
+    },
+    "./config-core": {
+      "types": "./dist/config-core.d.ts",
+      "default": "./dist/config-core.js"
+    },
+    "./config-check": {
+      "types": "./dist/config-check.d.ts",
+      "default": "./dist/config-check.js"
     }
   },
   "scripts": {
@@ -28,6 +36,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "ajv": "^8.20.0",
     "zod": "^4.5.4"
   },
   "devDependencies": {
