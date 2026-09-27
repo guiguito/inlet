@@ -419,6 +419,13 @@ describe('ETag (B.4)', () => {
     live.parameters[1]!.live = true;
     expect(etag(live, {})).not.toBe(etag(base, {}));
   });
+
+  it('is the same with the server’s native digest as with the shared one, on an answer of many blocks', () => {
+    const native = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest();
+    const big = { values: { copy: 'é€😀', blocks: Array.from({ length: 200 }, (_, i) => ({ id: i, title: `Block ${i}` })) }, experiments: { paywall: 'b' }, live: ['copy'] };
+    expect(configEtag('cfg_1', big, native)).toBe(configEtag('cfg_1', big));
+    expect(configEtag('cfg_1', null, native)).toBe(configEtag('cfg_1', null));
+  });
 });
 
 describe('preview (RC-060)', () => {

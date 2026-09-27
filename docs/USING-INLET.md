@@ -1135,7 +1135,8 @@ parameter still waits for the next fetch, only not for the next launch.
   fetching. **Delete** it, which an Admin does by typing its exact name. The dialog says how
   many versions and parameters go, and offers the **history export** first: every version
   with its template, but not the reach counts, the memberships or the notification settings.
-  Apps that fetch a deleted database fall back to their in-app defaults.
+  Apps that fetch a deleted database are refused and keep the values they last received;
+  unpublish first if they should use their in-app defaults.
 - **Delivery.** Two settings an Admin of the database or the project changes; each applies
   to fetches answered from then on and leaves every version as it is.
   - The **refresh interval**: how long a running app waits between fetches. 60 minutes by

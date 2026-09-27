@@ -529,7 +529,12 @@ function base64url(bytes: Uint8Array): string {
  * over the database ID and `unpublished` when nothing is active (RC-043). The version
  * number is not part of it.
  */
-export function configEtag(databaseId: string, answer: { values: Record<string, JsonValue>; experiments: Record<string, string>; live: readonly string[] } | null): string {
+export function configEtag(
+  databaseId: string,
+  answer: { values: Record<string, JsonValue>; experiments: Record<string, string>; live: readonly string[] } | null,
+  /** The server passes `node:crypto`'s, the same digest many times faster on a large answer (DECISIONS 34.11b). */
+  digest: (bytes: Uint8Array) => Uint8Array = sha256,
+): string {
   const body = answer === null ? 'unpublished' : canonicalJson({ values: answer.values, experiments: answer.experiments, live: [...answer.live].sort() });
-  return base64url(sha256(encoder.encode(`${databaseId}:${body}`)).subarray(0, 16));
+  return base64url(digest(encoder.encode(`${databaseId}:${body}`)).subarray(0, 16));
 }

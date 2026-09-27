@@ -435,6 +435,35 @@ test.describe('the Parameters tab under review', () => {
     await expect(page.getByRole('button', { name: 'Move C up' })).toBeFocused();
   });
 
+  test('Move pressed twice before the first move is answered moves twice, in order (found in piece 11a)', async ({ page, request }) => {
+    const { databaseId } = await seed(request, 'Order twice');
+    for (const name of ['A', 'B', 'C']) {
+      const saved = await request.put(`/v1/config-databases/${databaseId}/draft/conditions/cnd_${name.toLowerCase()}`, {
+        data: { name, kind: 'match', rules: [{ attribute: 'appId', operator: 'contains', value: name }] },
+      });
+      expect(saved.status(), await saved.text()).toBe(200);
+    }
+    const order = async () => (await draftOf(request, databaseId)).template.conditions.map((condition) => condition.name);
+    await signIn(page);
+    await page.goto(`/config-databases/${databaseId}?view=conditions`);
+    // Each reorder answers late, so the second press lands while the first is in flight.
+    const sent: string[][] = [];
+    await page.route('**/draft/conditions/order', async (route) => {
+      sent.push((route.request().postDataJSON() as { order: string[] }).order);
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      await route.continue();
+    });
+    await page.getByRole('button', { name: 'Move A down' }).focus();
+    await page.keyboard.press('Enter');
+    await expect.poll(() => sent.length).toBe(1);
+    await page.keyboard.press('Enter');
+    await expect.poll(order, { timeout: 5_000 }).toEqual(['B', 'C', 'A']);
+    expect(sent).toEqual([['cnd_b', 'cnd_a', 'cnd_c'], ['cnd_b', 'cnd_c', 'cnd_a']]);
+    await expect(page.getByTestId('condition-cnd_a')).toContainText('A');
+    await expect(page.getByText('A moved to position 3 of 3.')).toBeAttached();
+    await expect(page.getByRole('list', { name: 'Conditions in priority order' }).getByRole('listitem').nth(2)).toHaveAttribute('data-testid', 'condition-cnd_a');
+  });
+
   test('a split: population, three weighted variants that must total 100%, experiment key, unit, and one value per variant', async ({ page, request }) => {
     const { databaseId } = await seed(request, 'Split');
     await request.put(`/v1/config-databases/${databaseId}/draft/parameters/paywall_copy`, { data: { type: 'json', default: { headline: 'Go Pro' } } });

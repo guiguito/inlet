@@ -6235,3 +6235,243 @@ a parameter value equal to the ID left alone, a rewrite that fails leaving nothi
 forgotten, a publish holding the draft lock while the erasure waits (its new version is
 rewritten too), 300 of 400 versions rewritten well within a second, and a Creator, a Viewer and
 another project's config database refused.
+
+### 34.11b Measured: the fetch load test and Docker (piece 11b, September 27, 2026)
+
+PRD 9.4 sets a target of 2,000 fetches a second on one API instance of the reference deployment,
+with a server-side p95 under 10 ms. Section 12 asks for that load test, recorded here. **The target
+is met on this laptop**, with the product changed once, below. The harness is
+`scripts/config-load.mjs` with its server-side probe `scripts/config-load-probe.mjs` (README,
+"Load-testing Remote Config"), so an owner can rerun every figure on the reference deployment.
+
+**Method.**
+- **Machine.** Apple M5, 10 cores, 24 GB, macOS. The client and the server ran on the same host,
+  so the client's CPU competes with the server's. The laptop was shared the whole time with other
+  agents' test suites and an `ffmpeg` process (load average 6 to 25). Every client-side tail below
+  is mostly that contention.
+- **Server.** `apps/api/dist/server.js` built from the working tree, `NODE_ENV=production`, log level
+  `info`, rate limits on at their defaults, local PostgreSQL 18 with its own database. The
+  analytics event store was off. `INLET_TRUSTED_PROXIES=127.0.0.1`, so the load client acts as
+  the reverse proxy: each installation's `X-Forwarded-For` feeds the bundled IP-to-country
+  database and the per-address ceiling, as behind a real proxy.
+- **Server-side time** comes from a preload (`--import scripts/config-load-probe.mjs`), not from a
+  product change. It runs from Node's `http.server.request.start` diagnostics channel (headers
+  parsed) to `http.server.response.finish` (answer written), so it includes Fastify's routing and
+  hooks, a little more than `reply.elapsedTime`. It does not include time a request waited in the
+  kernel's socket queue while the event loop was busy. The client-side figure does. Every second,
+  the probe also samples RSS, heap, CPU, event-loop delay, and the answer cache's entries, bytes,
+  hits and misses (it wraps `AnswerCache.prototype.get` in the module instance the server loads).
+- **Template** (`setup`): 100 parameters (40 flags, 25 strings, 25 numbers and 10 JSON values,
+  four of them 2 to 5 KiB), each with 0 to 3 conditional values, 63 KiB in all. It has 40
+  conditions in priority order:
+  - a 1,000-value user-ID list;
+  - version rules (below 5.0.0, at least 5.4.0, exactly 5.2.1, at least 5.3.0 as a split's
+    population);
+  - OS-version rules;
+  - platform, country (the 27 EU members and five regional lists), language and locale lists;
+  - percentage rollouts at 1, 5, 10, 25 and 50% by installation, and at 20% by user;
+  - two three-variant splits (`paywall_copy` for mobile, `onboarding` from 5.3.0);
+  - custom attributes (`plan`, `beta`, `sessions`, a `cohort` prefix);
+  - `time` windows and an `appId` suffix.
+- **Mix** (`run`):
+  - The fleet: 30,000 installations. 55% are signed in, with user IDs from 100,000, so about
+    0.55% are on the 1,000-ID list.
+  - Platforms: iOS 40%, Android 45%, web 10%, desktop 5%.
+  - Six app versions (45% on the latest) and eleven locales.
+  - Each installation has one random public IPv4 address.
+  - The warm-up (15 s at 2,000 a second) sweeps the fleet once, so each installation holds the
+    ETag of its answer.
+  - The measured run is 60 s at 2,000 a second, open loop, over 64 keep-alive sockets. Latency
+    counts from each fetch's scheduled send time, so a late answer is not hidden. 90% of fetches
+    come from a random member, sending its last ETag. 10% come from a new installation, with
+    none. All send `Accept-Encoding: br, gzip`.
+  - At 30 s one publish changes the default of `feature_18`, a flag with a value under the 10%
+    rollout. It goes through the API as a Creator does: `GET /draft`, `PUT /draft` with
+    `expectedRevision`, `POST /publish`.
+
+**The fix: B.4's digest, natively** (`apps/api/src/services/config-delivery.ts`,
+`packages/shared/src/config-evaluate.ts`). The first profiled run
+(`--cpu-prof`, 10 s at 2,000 a second, 10,000 installations) found the API process at **98% of
+one core**. Every fetch queued: client p50 399 ms, p95 627 ms. `configEtag` took 67% of the
+non-idle samples, the shared pure-JavaScript SHA-256 46% of them and `canonicalJson` the rest.
+The cause is how few fetches hit the cache. With this template almost every installation has a
+vector of its own (about 31,000 distinct answers among 35,000 full answers a run). The miss
+budget caches 50 new answers a second. So nearly every fetch builds its answer: resolve,
+canonical JSON, a SHA-256 over about 17 KiB, and serialisation. The ETag comparison comes after
+that. `configEtag` now takes an optional digest: the shared one stays the default for the
+browser-safe package, and the server passes `node:crypto`'s. The bytes hashed are unchanged,
+so every ETag is unchanged: a client's cached ETag still matches across the upgrade, and a unit
+test pins the two digests together. An ETag over a 17 KiB answer went from 379 µs to 108 µs.
+The same profiled run afterwards was at 54% of a core. In the new profile, `canonicalJson` is
+22% of samples, the bucket hashing's JavaScript SHA-256 3%, and Fastify's `onSend` cookie hook
+5%. This settles piece 1's "Left out" item: `node:crypto` is worth it for the ETag, not yet for
+buckets.
+
+**Results, the built server on this laptop** (five 60-second runs; runs 1 to 3 in one process, 4
+and 5 in a second one started with `--expose-gc`; milliseconds):
+
+| Run (load average) | Achieved | Answers | Not modified | Server p50 / p95 / p99 | Client p50 / p95 / p99 | CPU, one core = 100% (mean / max) | RSS MB (mean / max) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 (10.2) | 2,000/s | 119,993, all 200 | 70.5% | 0.18 / **0.57** / 1.09 | 2.2 / 51 / 434 | 57 / 86 | 287 / 371 |
+| 2 (11.2) | 2,000/s | 119,998, all 200 | 70.7% | 0.18 / **0.53** / 1.01 | 2.1 / 32 / 104 | 55 / 88 | 299 / 373 |
+| 3 (10.9) | 2,000/s | 119,999, all 200 | 70.5% | 0.20 / **0.66** / 1.43 | 2.4 / 132 / 243 | 64 / 103 | 529 / 692 |
+| 4 (6.3) | 2,000/s | 119,997, all 200 | 70.7% | 0.16 / **0.53** / 1.38 | 1.9 / 397 / 931 | 49 / 115 | 300 / 449 |
+| 5 (25.1) | 2,000/s | 119,998, all 200 | 68.8% | 0.18 / **0.70** / 2.27 | 2.8 / 3,509 / 4,012 | 64 / 110 | 472 / 700 |
+
+- **No refusal**: no 429 and no error in any run. The fleet shared one publishable key (900,000 in
+  five minutes allowed, about 150,000 used a run). No installation came near 30 in five minutes,
+  and no address near 6,000 a minute.
+- **The target**: the server-side p95 was 0.53 to 0.70 ms, a fourteenth to a nineteenth of 10 ms.
+  The worst single second's server p95 was 1.2 to 67 ms: 67 ms in run 4 and 22 ms in run 5, whose
+  machine was at a load average of 25. The client's tails follow the event-loop stalls of a shared machine: the
+  probe's event-loop p99 reached 65 to 317 ms in seconds when the process was at 50 to 60% CPU,
+  so it was waiting to be scheduled, not busy. In the calm seconds the client's p95 was 2.5 to
+  4 ms.
+- **Answers**: a full answer is about 17.5 KB on the wire. 3 to 4% of full answers were Brotli.
+  Only cached answers are compressed, and a fetch past the miss budget is sent uncompressed, as
+  the PRD says. 70% were "not modified": 10% of fetches are new installations, and about a tenth
+  of the fleet was not reached by the warm-up. The reference workload (hourly refreshes, rare
+  publishes) would have a higher share, so less work.
+- **The answer cache** held 1,500 to 1,550 answers (29 MB) at the end of each run and reached its
+  64 MiB bound (67.1 MB counted) in runs 2, 3 and 5, before each publish emptied it. Its hit ratio
+  was 4 to 5%. PRD 9.4's "a fleet falls into few vectors" does not hold for a template with seven
+  independent percentages and splits. The target holds anyway because building an answer is
+  cheap. The cache pays off for templates with few vectors.
+- **One publish during the run**: 21 to 43 ms end to end. The cache dropped to 100 entries, then
+  refilled at 50 a second. The server p95 over the next 10 seconds was 0.33 to 0.58 ms (1.13 ms in
+  run 5). The only visible change is one second at 76% CPU.
+- **Memory**:
+  - The heap after a full collection at the end of a run was 92 MB after run 4 and 128 MB after
+    run 5, in the same process.
+  - The growth is the per-installation counters, about 42,000 new installations a run, bounded
+    at 100,000 keys, plus the probe's own samples.
+  - RSS peaked at 692 and 700 MB in the third and second back-to-back runs of a process. V8 keeps
+    the space it grew into.
+  - The answer cache, the compiled versions (200) and the counters are each bounded, so memory
+    is bounded per database, as 9.4 asks. A heap snapshot was not taken.
+
+**What it means for the reference workload.**
+- 9.4's reference is five million fetches a day: 60 a second on average and a few hundred at
+  peak. At about 0.3 ms of CPU a fetch (55 to 64% of a core at 2,000 a second), a peak of 300 a
+  second costs under a tenth of one core.
+- The 2,000 a second target leaves about 1.6 times headroom on this core before one Node thread
+  saturates.
+- *Extrapolation, not measured:* a typical server vCPU is slower single-threaded than an M5
+  performance core, perhaps 1.5 to 2 times. On one, 2,000 a second would take 80 to 100% of the
+  thread. The p95 would still be far under 10 ms as long as the thread keeps up, but the margin
+  is thin.
+- If the reference deployment's run shows that, the next two steps are known:
+  - `canonicalJson` through one native `JSON.stringify` of a key-sorted copy: 1.6 times faster on
+    a 42 KB answer, about 22% to 14% of samples.
+  - An ETag cache by vector, small entries apart from the bodies, so that a "not modified" fetch
+    skips resolve, canonical JSON and digest altogether.
+  - Neither is built: the target holds without them.
+
+**Docker** (throwaway project `inlet-p11b`, default profile, no `analytics`; the env file held the
+secret, the first Admin and `INLET_TRUSTED_PROXIES=uniquelocal`):
+- `docker compose up -d --build` built and started the stack in 30 s, with cached layers. On
+  the fresh volume, the baseline migration was applied at start ("database schema is up to date";
+  the six `config_*` tables present). `/v1/health` lists `feedback, crash, feedback-cross-origin,
+  mcp, identity, config`. The log warns once that the event store is not ready, as expected
+  without the profile.
+- Through `http://localhost:3000` (a small script), all of the following held:
+  - A config database was created. A fetch before publishing answers `version: null` and no
+    values.
+  - A two-parameter template with country rules was published as version 1. A fetch answered
+    Brotli (`content-encoding: br`) with version 1.
+  - `X-Forwarded-For: 90.84.0.1` got the French value, `8.8.8.8` the US one, `81.2.69.142` (GB)
+    the default. A context carrying `country: FR` got the French value, and `deriveCountry: false`
+    with a French address got the default.
+  - The answer's ETag sent back got `{"notModified":true,"refreshIntervalSeconds":3600}`.
+  - The publishable key reading the draft was refused with `403`.
+- **The country behind the compose setup**: the container sees the host's requests from the compose
+  network's gateway (172.19.0.1). So without `INLET_TRUSTED_PROXIES` no country is derived: the
+  bundled database has none for a private address, and nothing is refused either. With the
+  reverse proxy trusted (`uniquelocal` covers the compose network), the bundled DB-IP database
+  answers the forwarded address, as above. DEPLOYMENT.md already says to set the trusted proxies
+  behind a proxy.
+- **Load against the container**: 30 s at 2,000 a second after the warm-up, with the probe mounted
+  and `NODE_OPTIONS` set by an override file. Docker Desktop's VM had 10 CPUs and 8 GB, and the
+  client ran on the macOS host through Docker's port forwarding.
+
+  | Achieved | Server p50 / p95 / p99 | Client p50 / p95 / p99 | CPU (mean / max) | RSS MB (mean / max) |
+  | --- | --- | --- | --- | --- |
+  | 2,000/s, 59,998 answers, all 200 | 0.24 / **0.60** / 1.63 | 2.3 / 132 / 375 | 75 / 119 | 342 / 373 |
+
+  One publish at 15 s took 32 ms, and the server p95 over the next 10 seconds was 0.59 ms. The
+  CPU runs about a quarter higher than on the host: the Linux VM and the port forwarding.
+- **Image**: 649 MB (129.18 MB of content) against 647 MB (128.94 MB) for Release 8's image from
+  piece 12c, so about 2 MB more for Release 9.
+- `docker compose down -v` removed the project and its volumes. The image `inlet-p11b-inlet` is
+  kept.
+
+**Not measured.**
+- A separate client machine: the client's CPU and the shared laptop's contention are in every
+  client-side figure.
+- The reference deployment's hardware and a server vCPU (extrapolated above).
+- More than one API instance: 9.4's growth path is documented, not built.
+- A fleet of one million installations. At 2,000 a second over 30,000, each fetched every 15
+  seconds instead of every hour, which is harder on the cache and the counters, not easier.
+- Clients behind a shared NAT address, which would meet the 6,000-a-minute address ceiling at 100
+  a second.
+- A heap snapshot of what the long-lived process holds.
+
+### 34.11a The acceptance audit (piece 11a, September 27, 2026)
+
+Every criterion of PRD section 12, split into its 83 claims, every route of 7.2 against the matrix
+of 7.3, every error code of 7.4, every tool of 8.3 and the instructions, the screens of 8.1, the
+Foundations rows of the plan's coverage map and section 11, each with the test that asserts it:
+`docs/plans/remote-config-release-9-acceptance.md`. 71 claims pass against the running product,
+9 against the SDK's fake server only (the client's own timers, errors and storage), 2 against the
+running API with fake Electron and React Native modules; the load test is 34.11b's. None fails.
+
+**Evidence through the real interface, where the piece tests had a fake or a part.** Four files,
+tagged [11a] in the matrix. `apps/api/test/integration/config-acceptance.test.ts`: criterion 1 in
+full (the key, a feedback and a crash database exist before the config database), the route list,
+the route-pattern log, a probe of 43 route variants by ten principals (430 calls, no mismatch; a
+wrong expectation makes it fail), all 15 codes of 7.4 and nothing else, and one `/v1/mcp` session
+calling all 28 tools of 8.3 and the shared ones with a `cfg_` ID. `e2e/api/config-acceptance-sdk.spec.ts`:
+the built SDK in child Node processes against the running server (an app update, an unpublish, a
+live change, a revocation and a change of user), `inlet-sdk@0.2.0` installed from npm and loaded
+beside the 0.4.0 config module (its crash reports and a feedback submission stored without an
+installation ID while every fetch carried one), and Electron, React Native and RC-129 with fake
+platform modules (the stored analytics event carries the split's experiment beside the
+application's own). `e2e/api/config-acceptance.spec.ts`: an MCP agent session over Streamable HTTP,
+and journeys 5.2, 5.3, 5.6 (200 installations fetched from two projects' databases: the same values
+and buckets), 5.7 and 5.8. `e2e/ui/config-acceptance.spec.ts`: three Chromium tabs of one origin
+under the real Web Locks making one fetch, each role walked, the erasure from the interface checked
+in the API and PostgreSQL, journeys 5.1 (the Integrate tab's Node snippet copied through the
+clipboard and run against the server), 5.3, 5.4 and 5.5, and the 8.1 elements no test asserted.
+
+**Found and fixed.** *The deletion's warning* (the impact's `notice`, the Settings card, the
+`delete_config_database` description and `docs/USING-INLET.md`) said applications fall back to
+their in-app defaults; a deleted database's fetches are refused, and a refusal keeps the cached
+values (RC-122, PRD 13). Each now says so and names unpublishing as the way to the defaults.
+*The MCP instructions* said a split's control units get the default; they fall through to the next
+true condition holding a value first (B.1), as the tools already said. *`docs/API.md`* said the
+fetch answers `revoked_api_key`. *A new test* read the fake Slack's messages by position, and the
+worker's paced deliveries from the previous test broke it on repeats; it reads its own database's
+only. *A failing API test run exited 0*: `embedded-postgres`, imported by every suite's setup
+through `scripts/local-services.mjs`, registers an `async-exit-hook` that calls `process.exit(0)`
+from `beforeExit`, erasing the exit code Vitest sets for failures, so `npm test` and CI passed a red
+API suite. The module now keeps the code from `beforeExit` and restores it on `exit` (a listener
+added after the hook's runs before its deferred exit); rejected: dropping the hook's `beforeExit`
+with `async-exit-hook`'s `unhookEvent`, which reaches into a transitive dependency and would leave a
+started cluster running when the loop drains. *A second Move pressed before the first was answered*
+was computed from the order still on screen and resent it; the Conditions view now moves from the
+order last sent, and sends each move after the one before it is answered.
+
+**Found, not changed.** `revoked_api_key` is unreachable on every route: revocation nulls the
+key's value (FR-085's rotation does too), so the lookup finds nothing and answers
+`invalid_api_key`. That is the right behaviour (a revoked secret must not stay matchable); PRD 7.1
+is to follow. Listing credentials is a project Admin's, so a Creator's Integrate tab shows
+placeholder keys (journey 5.1): an owner decision, proposed in the acceptance file with the other
+two amendments (7.1, and RC-070's "exported" for a reach no export carries). The known flake of
+`e2e/api/config-publish.spec.ts` did not recur in the full suite or eleven repeats; nothing in it
+depends on time, order or another test, and the hypothesis left is two slots rebuilding `dist` in
+place at once.
+
+**Rejected**: typing the new tests (no test in the repository is; `npm run typecheck` covers
+`src`), and upgrading the nine fake-server claims to the real server, which cannot be made to
+answer a `429` with `Retry-After: 120` or a health probe without `config` on demand.
+

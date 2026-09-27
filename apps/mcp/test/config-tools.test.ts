@@ -41,6 +41,9 @@ describe('config tools', () => {
     expect(configs.get('list_config_databases')!.description).toContain('60 within 5 to 1,440 by default');
     expect(configs.get('get_config_database')!.description).toContain('`activeVersion`');
     expect(configs.get('update_config_database')!.description).toContain('setting_out_of_bounds');
+    // RC-122, PRD 13: a refused fetch keeps the cached values; only an unpublish brings the in-app defaults.
+    expect(configs.get('delete_config_database')!.description).toContain('keep the values they last received');
+    expect(configs.get('delete_config_database')!.description).not.toContain('fall back to their in-app defaults');
   });
 
   it('builds each request', async () => {
@@ -135,6 +138,8 @@ describe('config tools', () => {
     expect(instructions).toContain('A fetch returns\nresolved values only');
     expect(instructions).toContain('the first true condition\nholding a value for it decides that value');
     expect(instructions).toContain('control variant usually holds no value');
+    // PRD 5.5, B.1: control units fall through to the next true condition holding a value, not straight to the default.
+    expect(instructions.replace(/\n/g, ' ')).toContain('its units fall through to the next true condition holding a value, else to the default');
     expect(instructions).toContain('at their next launch, and at\nonce for live parameters');
     expect(instructions).toContain('Preview a change against a context before publishing it');
     expect(instructions).toContain('publishing needs the draft revision you last read');

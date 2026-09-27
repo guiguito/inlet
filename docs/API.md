@@ -2769,10 +2769,10 @@ to a `POST` inconsistently.
 preferred), `Content-Encoding` says which, and `Vary: Accept-Encoding` is set. Every answer
 carries `Cache-Control: no-store`.
 
-**Errors.** `401 unauthenticated` (no key), `401 invalid_api_key`, `401 revoked_api_key`;
-`403 config_database_inaccessible` for an unknown database or one of another project (both
-the same, as the other client routes answer); `400 malformed_json`; `413
-payload_too_large`; `415 unsupported_media_type` for a body that is neither `application/json`
+**Errors.** `401 unauthenticated` (no key), `401 invalid_api_key` (an unknown key, or a revoked
+one: revoking erases the key's value); `403 config_database_inaccessible` for an unknown
+database or one of another project (both the same, as the other client routes answer);
+`400 malformed_json`; `413 payload_too_large`; `415 unsupported_media_type` for a body that is neither `application/json`
 nor `text/plain` (a leading byte order mark is ignored); `429 rate_limit_exceeded` with
 `Retry-After` in seconds. A revoked or
 rotated key, a deleted database and a changed setting take effect at once on the instance
@@ -2908,8 +2908,8 @@ true}`, always 10 or more, with a `null` share. Series list only the periods tha
 | `confirmation_mismatch` | 400 | An unpublish or deletion whose echoed name does not match. |
 
 The draft and publishing routes answer every code above but `config_database_inaccessible`,
-which only the fetch route answers. The fetch also answers `invalid_api_key`,
-`revoked_api_key`, `malformed_json`, `payload_too_large` and `rate_limit_exceeded`.
+which only the fetch route answers. The fetch also answers `invalid_api_key` (for a
+revoked key too), `malformed_json`, `payload_too_large` and `rate_limit_exceeded`.
 
 ## Erasing an installation or user ID
 

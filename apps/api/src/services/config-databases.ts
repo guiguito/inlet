@@ -101,7 +101,7 @@ export async function updateConfigDatabase(ctx: AppContext, database: ConfigData
 }
 
 export const CONFIG_DELETION_NOTICE =
-  'Deleting removes the draft, every version and the activity, the reach counts, the memberships, invitations and notification settings. The export offered before deletion is the history export: every version with its template, and not the reach counts, the memberships or the notification settings. Applications fetching this database are refused from then on and fall back to their in-app defaults.';
+  'Deleting removes the draft, every version and the activity, the reach counts, the memberships, invitations and notification settings. The export offered before deletion is the history export: every version with its template, and not the reach counts, the memberships or the notification settings. Applications fetching this database are refused from then on and keep the values they last received (unpublish first to send them to their in-app defaults).';
 
 /** RC-003's export, built by piece 4. */
 export const historyExportPath = (databaseId: string) => `/v1/config-databases/${databaseId}/export/history`;

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronDownIcon, ChevronUpIcon, GripVerticalIcon, PencilIcon, TrashIcon } from 'lucide-react';
 import { toast } from 'sonner';
@@ -44,22 +44,37 @@ export function ConditionsList({ draft, databaseId, canEdit, run, onOpen }: { dr
     (button && !button.disabled ? button : other)?.focus();
   }, [focus, conditions]);
 
-  async function reorder(order: string[], id: string, direction?: 'up' | 'down') {
+  // The order the last Move sent, until the list shows it: a second press before its answer moves
+  // from that order, not from the one still on screen, and is sent once the first is answered.
+  const sent = useRef<{ order: string[]; done: Promise<unknown> } | null>(null);
+  useEffect(() => {
+    if (sent.current && sent.current.order.join() === conditions.map((condition) => condition.id).join()) sent.current = null;
+  }, [conditions]);
+
+  async function reorder(order: string[], id: string, direction?: 'up' | 'down'): Promise<boolean> {
     const name = conditions.find((condition) => condition.id === id)?.name ?? id;
     try {
       await run({ send: () => api.reorderConfigConditions(databaseId, order), apply: (template) => moved(template, order) });
       setAnnouncement(`${name} moved to position ${order.indexOf(id) + 1} of ${order.length}.`);
       if (direction) setFocus({ id, direction });
+      return true;
     } catch (error) {
       toast.error(failureMessage(error));
+      return false;
     }
   }
 
-  function move(index: number, by: -1 | 1) {
-    const order = conditions.map((condition) => condition.id);
-    const [id] = order.splice(index, 1);
-    order.splice(index + by, 0, id!);
-    void reorder(order, id!, by === -1 ? 'up' : 'down');
+  function move(id: string, by: -1 | 1) {
+    const order = [...(sent.current?.order ?? conditions.map((condition) => condition.id))];
+    const index = order.indexOf(id);
+    if (index < 0 || index + by < 0 || index + by >= order.length) return;
+    order.splice(index, 1);
+    order.splice(index + by, 0, id);
+    const done = (sent.current?.done ?? Promise.resolve()).then(async () => {
+      // A refused move leaves the list to the draft read again: the next press starts from it.
+      if (!(await reorder(order, id, by === -1 ? 'up' : 'down')) && sent.current?.order === order) sent.current = null;
+    });
+    sent.current = { order, done };
   }
 
   async function remove(condition: ConfigCondition) {
@@ -149,7 +164,7 @@ export function ConditionsList({ draft, databaseId, canEdit, run, onOpen }: { dr
               <div className="flex shrink-0 items-center gap-0.5">
                 {canEdit ? (
                   <>
-                    <Button variant="ghost" size="icon-sm" data-move={`up:${condition.id}`} disabled={index === 0} aria-label={`Move ${condition.name} up`} onClick={() => move(index, -1)}>
+                    <Button variant="ghost" size="icon-sm" data-move={`up:${condition.id}`} disabled={index === 0} aria-label={`Move ${condition.name} up`} onClick={() => move(condition.id, -1)}>
                       <ChevronUpIcon />
                     </Button>
                     <Button
@@ -158,7 +173,7 @@ export function ConditionsList({ draft, databaseId, canEdit, run, onOpen }: { dr
                       data-move={`down:${condition.id}`}
                       disabled={index === conditions.length - 1}
                       aria-label={`Move ${condition.name} down`}
-                      onClick={() => move(index, 1)}
+                      onClick={() => move(condition.id, 1)}
                     >
                       <ChevronDownIcon />
                     </Button>

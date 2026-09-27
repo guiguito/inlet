@@ -70,7 +70,7 @@ pieces land; a piece that departs from one says so in its report and in that sec
 | 8 | History and Integrate tabs | History, Compare, Roll back, Copy to draft, Unpublish; Integrate; reach shares in both and in Conditions | verified |
 | 9 | `inlet-sdk/config` core, browser and Node | RC-110 to RC-124, RC-127, RC-128 for these entries; the installation ID created by the config module; size and purity checks | verified |
 | 10 | `inlet-sdk/config` Electron and React Native, and RC-129 | RC-125, RC-126, RC-127, RC-129; Metro | verified |
-| 11 | Full verification | Every acceptance criterion of PRD section 12 against the running product; the load test of section 9.4; Docker; the documentation and PRD status | to build |
+| 11 | Full verification | Every acceptance criterion of PRD section 12 against the running product; the load test of section 9.4; Docker; the documentation and PRD status | 11b built (the load test and Docker, DECISIONS 34.11b); 11a verified (the acceptance audit, `docs/plans/remote-config-release-9-acceptance.md`, DECISIONS 34.11a) |
 
 Pieces 2 to 6 build the server in order; 9 and 10 build the SDK against the fetch contract of
 PRD section 9.2 and run beside them; 7 and 8 follow the routes they show.
@@ -665,3 +665,45 @@ Each piece appends what it did not build and the reason.
   set, on any key; an application's `setExperiment` on a key it set makes that key the
   application's. A launch that runs on the in-app defaults counts as an activation of an answer
   without experiments." (The last sentence was added at review.)
+
+### From piece 11b
+
+- **The load test ran on one laptop**, with the client beside the server and the machine shared (DECISIONS 34.11b):
+  2,000 fetches a second at a server-side p95 of 0.53 to 0.70 ms, about 55 to 64% of one core. A separate client machine,
+  the reference deployment's hardware and a server vCPU were not available. On a vCPU half as fast, one Node thread would
+  be near saturation at 2,000 a second, so rerun `scripts/config-load.mjs` there.
+- **Two further optimisations are named, not built**: `canonicalJson` through one native `JSON.stringify` (about 22% of
+  the fetch path's samples today), and an ETag cache by vector so a "not modified" fetch skips building its answer. The
+  target holds without them.
+- **`node:crypto` for buckets** (piece 1's open item) stays out: the bucket hashing is 3% of the samples. The ETag's digest
+  was 46% and is native now.
+- **The answer cache rarely hits for a template with many independent percentages and splits** (4 to 5% at 40
+  conditions, nearly one vector per installation). PRD 9.4's "a fleet falls into few vectors" is optimistic there. The
+  budget holds because building is cheap. No amendment is proposed; the orchestrator may add a sentence to 9.4.
+- **Not measured**: a NAT'd fleet meeting the per-address ceiling, one million distinct installations, more than one API
+  instance, and a heap snapshot.
+
+### From piece 11a
+
+The acceptance matrix is `docs/plans/remote-config-release-9-acceptance.md`; DECISIONS 34.11a has
+what the audit changed.
+
+- **An Integrate tab without keys for a Creator or Viewer** (journey 5.1, PRD 8.1): listing
+  credentials is a project Admin's (Foundations FR-085), so other members see the snippets with a
+  placeholder key and no sentence saying why, as on the other types' tabs. Owner decision: let
+  members list publishable keys, or amend 8.1 and add the sentence (the acceptance file, section 10).
+- **`revoked_api_key` is never answered** by any route: revoking erases the key's value, so a
+  revoked key is `invalid_api_key`. PRD 7.1 and the platform-wide table of `docs/API.md` still name
+  it; the fetch route's own documentation is corrected.
+- **Nine claims are verified against the SDK's fake server only** (its own timers, `429` pause,
+  health check, typed reads and `init` checks), where a real server cannot script the answer, and
+  Electron and React Native ran with fake platform modules against the running API; no Electron app
+  or device was run.
+- **The known flake of `e2e/api/config-publish.spec.ts` was not reproduced** in the full suite and
+  eleven repeats; the cause is unknown. The hypothesis to rule out first is two slots' end-to-end
+  servers rebuilding `dist` in place at once (`scripts/e2e-server.mjs`).
+- **A contended ClickHouse can refuse Release 8's large seed**: `release-8-hardening.test.ts`'s
+  spill test failed once at its 1.2-million-event insert while other runs shared the machine; alone
+  it passes. Not changed.
+- **The new tests are not type-checked**, as no test in the repository is (`npm run typecheck`
+  covers `src`).

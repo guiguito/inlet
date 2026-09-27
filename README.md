@@ -279,6 +279,36 @@ Each step prints its figures and writes them as JSON under `LOAD_OUT` (`.dev/ana
 `passes` imports the built API (`npm run build:server` first) and runs from a checkout; every other
 step needs only Node. The script's header lists every setting.
 
+### Load-testing Remote Config
+
+`scripts/config-load.mjs` measures the fetch target of the Remote Config PRD (9.4: 2,000 fetches a
+second on one API instance, with a server-side p95 under 10 ms). It publishes a realistic template
+(100 parameters, 40 conditions), then sends fetches at a fixed rate, whatever the answers take, from
+a fleet of installations that send back their last ETag. Halfway through, it publishes one change.
+The last runs and what they found are in [DECISIONS.md](docs/DECISIONS.md) §34.11b.
+
+1. Start Inlet with the default rate limits. To get the server-side figures, preload the probe,
+   which records each fetch's time, memory, CPU and the answer cache. Nothing in the product
+   changes. The probe listens on `LOAD_PROBE_LISTEN`, `127.0.0.1:9464` by default:
+   `NODE_OPTIONS="--import ./scripts/config-load-probe.mjs" node apps/api/dist/server.js`
+   (add `--expose-gc` to also get the heap after a full collection). For the country and
+   per-address paths, trust the load client as a proxy with `INLET_TRUSTED_PROXIES=127.0.0.1`.
+   The script sends each installation's own public address in `X-Forwarded-For`.
+2. Set `LOAD_API`, `LOAD_ADMIN_EMAIL` and `LOAD_ADMIN_PASSWORD`, then:
+
+```bash
+node scripts/config-load.mjs setup   # a project, a publishable key, a config database, the template published
+node scripts/config-load.mjs run     # 15 s of warm-up, then 60 s at 2,000 a second, one publish at 30 s
+```
+
+`run` prints the rate it achieved, the answers by status, the client's and the server's
+percentiles (overall, before the publish and for the 10 seconds after it), the process's memory and
+CPU, the answer cache, and one row a second. It writes them as JSON under `LOAD_OUT`
+(`.dev/config-load`). `LOAD_RATE`, `LOAD_SECONDS`, `LOAD_INSTALLATIONS` and the other settings
+are listed in the script's header. Against Docker Compose, mount the probe into the `inlet`
+service, set `NODE_OPTIONS` and `LOAD_PROBE_LISTEN=0.0.0.0:9464`, and publish that port to the
+host's loopback. Run the client on another machine to keep its CPU out of the figures.
+
 ## Repository layout
 
 | Path | What lives there |

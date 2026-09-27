@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { brotliCompressSync, constants as zlib, gzipSync } from 'node:zlib';
 import { and, eq, inArray, lt, sql } from 'drizzle-orm';
 import { compileTemplate, configEtag, parseContext, type CompiledConfig, type ConfigContext, type ConfigContextWarning, type ConfigTemplate } from '@inlet/shared';
@@ -314,10 +315,13 @@ function takeMiss(databaseId: string, now: number): boolean {
   return true;
 }
 
+/** B.4's SHA-256, natively: the shared one, in JavaScript, was nearly half the fetch path's CPU at 2,000 a second (DECISIONS 34.11b). */
+const digest = (bytes: Uint8Array): Uint8Array => createHash('sha256').update(bytes).digest();
+
 function buildAnswer(database: DeliveryDatabase, version: CompiledVersion | null, vector: string): CachedAnswer {
   const resolved = version ? version.config.resolve(vector) : { values: {}, experiments: {} };
   const live = version ? version.config.live : [];
-  const etag = configEtag(database.id, version ? { ...resolved, live } : null);
+  const etag = configEtag(database.id, version ? { ...resolved, live } : null, digest);
   const body = {
     version: database.activeVersion,
     values: resolved.values,

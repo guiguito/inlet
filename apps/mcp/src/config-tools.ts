@@ -86,7 +86,7 @@ export function registerConfigTools(server: McpServer, client: InletClient): voi
     {
       title: 'Permanently delete a config database',
       description:
-        'Deletes the draft, every version, the activity, the reach counts, the memberships, invitations and notification settings (RC-003). Applications fetching it are refused from then on and fall back to their in-app defaults. Read get_deletion_impact first; it names the history export to offer. Pass the config database’s exact name as confirm.',
+        'Deletes the draft, every version, the activity, the reach counts, the memberships, invitations and notification settings (RC-003). Applications fetching it are refused from then on and keep the values they last received; unpublish_config first sends them to their in-app defaults. Read get_deletion_impact first; it names the history export to offer. Pass the config database’s exact name as confirm.',
       inputSchema: { configDatabaseId, confirm: z.string().describe('The config database’s exact name.') },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
     },

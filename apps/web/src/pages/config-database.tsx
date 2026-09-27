@@ -219,7 +219,7 @@ function GeneralSettings({ database, role }: { database: ConfigDatabase; role: R
           <CardHeader>
             <CardTitle>Delete this config database</CardTitle>
             <CardDescription>
-              The draft and every version go with it. Applications fetching it fall back to their in-app defaults.
+              The draft and every version go with it. Applications fetching it are refused and keep the values they last received; unpublish first to send them to their in-app defaults.
             </CardDescription>
           </CardHeader>
           <CardContent>
