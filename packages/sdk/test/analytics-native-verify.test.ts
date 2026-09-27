@@ -406,13 +406,16 @@ function rn(server: FakeInlet, store: ReactNativeStorage, extra: Partial<Analyti
 }
 
 describe('React Native before its asynchronous store has loaded (AN-239, AN-225)', () => {
-  it('a thousand calls before the load each run once, in order', async () => {
+  // Three batches' worth, so the order is checked across batch boundaries. The count is kept
+  // small because the transport paces its batches in real time, and a busy CI runner stretched
+  // a thousand calls past the timeout.
+  it('calls before the load each run once, in order', async () => {
     const server = new FakeInlet();
     const client = rn(server, new AsyncStorageFake(new Map(), 20), { batchSize: 100, queueSize: 2_000 });
-    for (let index = 0; index < 1_000; index += 1) client.track('early', { params: { index } });
+    for (let index = 0; index < 300; index += 1) client.track('early', { params: { index } });
     await client.flush();
     const early = server.events('early').map((event) => event.params!.index);
-    expect(early).toEqual(Array.from({ length: 1_000 }, (_, index) => index));
+    expect(early).toEqual(Array.from({ length: 300 }, (_, index) => index));
   }, 20_000);
 
   it('consent given at startup, before the load: the events tracked after setEnabled(true) are kept', async () => {

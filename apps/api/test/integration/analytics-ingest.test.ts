@@ -249,7 +249,9 @@ describe('analytics ingest', () => {
 
     it('rejects an event over 8 KiB after truncation, stores its neighbours, and never answers a 5xx for data', async () => {
       const heavy = event({ params: Object.fromEntries(Array.from({ length: 25 }, (_, i) => [`p${i}`, 'é'.repeat(256)])) });
-      const nested = event({ params: { deep: JSON.parse('['.repeat(5_000) + ']'.repeat(5_000)) } });
+      // Far past the two levels a param may have, and shallow enough that the test's own
+      // inject can serialise it on Linux's smaller stack; the 100,000-deep case below sends a string.
+      const nested = event({ params: { deep: JSON.parse('['.repeat(1_000) + ']'.repeat(1_000)) } });
       const response = await send([event(), heavy, nested, 'not an event', null]);
       expect(response.statusCode).toBe(200);
       expect(response.json().rejected).toEqual([
