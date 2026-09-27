@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { ANALYTICS_LIMITS, STANDARD_EVENT_NAMES, sanitizeText, truncateText } from '@inlet/shared/analytics-core';
-import { nodeContext } from '../context.js';
+import { electronMainContext } from '../electron-main.js';
 import { sharedIdentity } from '../identity.js';
 import { FileStore } from '../store-node.js';
 import type { AnalyticsClient } from './client.js';
@@ -75,22 +75,7 @@ export async function installElectronMain(
   const { app, ipcMain, webContents } = deps.electron ?? (await electron());
   const { persistenceDir, acceptRendererIdentity = true, app: appOptions, ...rest } = options;
   const debug = rest.debug ?? (() => {});
-  const proc = process as NodeJS.Process & { getSystemVersion?: () => string; versions: { electron?: string } };
-
-  let systemVersion: string | undefined;
-  try {
-    systemVersion = proc.getSystemVersion?.();
-  } catch (error) {
-    debug('The operating system version could not be read; it is left out.', error);
-  }
-  let locale: string | undefined;
-  try {
-    locale = Intl.DateTimeFormat().resolvedOptions().locale;
-  } catch {
-    locale = undefined;
-  }
   const id = appOptions?.id ?? truncateText(app.getName(), ANALYTICS_LIMITS.appIdMaxLength);
-  const electronVersion = proc.versions.electron;
 
   const client = initWith(
     {
@@ -100,13 +85,7 @@ export async function installElectronMain(
       store: new FileStore(persistenceDir ?? join(app.getPath('userData'), 'inlet')),
     },
     {
-      context: nodeContext({
-        mode: 'device',
-        runtime: electronVersion ? { name: 'electron', version: electronVersion } : { name: 'node', ...(proc.versions.node ? { version: proc.versions.node } : {}) },
-        platform: proc.platform,
-        ...(systemVersion ? { release: systemVersion } : {}),
-        ...(locale ? { locale } : {}),
-      }),
+      context: electronMainContext(debug),
       defaultMode: 'device',
     },
   );

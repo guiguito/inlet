@@ -1003,6 +1003,9 @@ if (client.get('new_checkout')) showNewCheckout(); // typed as boolean, from the
 | --- | --- | --- |
 | `inlet-sdk/config/browser` | Web pages | `localStorage`, shared by the origin's tabs |
 | `inlet-sdk/config/node` | Backends (server mode, the default) and command-line tools or desktop applications without Electron (device mode) | Nothing in server mode; files under `persistenceDir` in device mode |
+| `inlet-sdk/config/electron` | The Electron main process (`installElectronMain`) | Files under `<userData>/inlet` |
+| `inlet-sdk/config/electron-renderer` | Electron windows (`createElectronRenderer`); no key, no request | Nothing: main pushes its state |
+| `inlet-sdk/config/react-native` | React Native 0.74 or later | The AsyncStorage-compatible store you give it, under 1 MB |
 | `inlet-sdk/config` | Any other runtime with `fetch` | Memory for the process, or the `store` you give it |
 
 Every entry offers `init`, `getClient`, and on the client `ready`, `get`, `getBoolean`,
@@ -1013,7 +1016,7 @@ entry initialised it: a second `init` returns the first and warns. The module-le
 `getBoolean`, `getNumber`, `getString` and `getJson` read through it, and before `init` warn
 once and return the fallback.
 
-**The browser entry is 7.8 KB minified and gzipped**, and the build fails past 8 KB. A page
+**The browser entry is 7.9 KB minified and gzipped**, and the build fails past 8 KB. A page
 load fetches only when no tab of the origin has fetched within the refresh interval for the
 same app version and user, one tab at a time under a Web Lock where the browser has them; the
 other tabs read the answer from `localStorage`. Without Web Locks, tabs loaded at the same
@@ -1160,6 +1163,107 @@ config module created it. **An application withdrawing consent through analytics
 the config module creates a new ID at its next fetch. A config fetch is not activity: it
 neither starts nor extends a session.
 
+### Electron
+
+The main process owns the one client — the installation ID, the answers and the transport,
+persisted under `<userData>/inlet` (give the other modules the same directory) — and a launch
+is a process start. The app version and ID default to `app.getVersion()` and `app.getName()`,
+and the platform and OS version are the process's:
+
+```ts
+// main.ts
+import { installElectronMain } from 'inlet-sdk/config/electron';
+
+app.whenReady().then(async () => {
+  const config = await installElectronMain({ baseUrl, publishableKey: 'ipk_…', databaseId: 'cfg_…', defaults: DEFAULTS });
+  createWindow();
+});
+```
+
+```ts
+// preload.ts, with contextIsolation on
+import { contextBridge, ipcRenderer } from 'electron';
+
+// Only the config module's two channels: the page must not reach your other IPC handlers.
+contextBridge.exposeInMainWorld('inletConfig', {
+  send: (channel: string, message: unknown) => {
+    if (channel === 'inlet:config') ipcRenderer.send(channel, message);
+  },
+  on: (channel: string, listener: (payload: unknown) => void) => {
+    if (channel === 'inlet:config:state') ipcRenderer.on(channel, (_event, payload) => listener(payload));
+  },
+});
+```
+
+```ts
+// renderer.ts
+import { createElectronRenderer } from 'inlet-sdk/config/electron-renderer';
+
+const config = createElectronRenderer({ defaults: DEFAULTS });
+if (config.get('new_checkout')) showNewCheckout();
+```
+
+**A renderer holds no key and makes no request.** It reads what main last pushed on
+`inlet:config:state` — the active answer, at every activation and staging — and its in-app
+defaults until the first push, so give it the same `defaults` as main. It offers the read
+methods, `getExperiments`, `getInstallationId`, `onUpdate` and `ready()`, which resolves when
+main's does; `activate()` and `refresh()` act on main's client, return promises, and every
+window sees the result. **A renderer's first read counts as the application's**: main then
+stages the launch's first answer rather than activate it, exactly as a read in main would.
+Main applies a renderer's `setUserId` and `setAttributes`, bounded as the server bounds them,
+unless installed with `acceptRendererIdentity: false`; nothing else a renderer sends reaches
+the context. The renderer entry is browser-safe and bundles with Vite. A renderer has no
+`onError`: a remote value of the wrong type is said through its `debug`.
+
+### React Native
+
+```ts
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { AppState, Platform } from 'react-native';
+import * as config from 'inlet-sdk/config/react-native';
+
+const client = config.init({ baseUrl, publishableKey: 'ipk_…', databaseId: 'cfg_…', app: { version: '1.4.2' }, defaults: DEFAULTS, Platform, AppState, store: AsyncStorage });
+```
+
+The entry takes `Platform`, `AppState`, an AsyncStorage-compatible `store` (or MMKV behind the
+same three methods) and, where `crypto.getRandomValues` is missing, `random`, and imports
+nothing. **Give the analytics, crash and feedback modules the same store**: the installation ID
+lives under the one key every module reads, so the analytics module adopts the ID the config
+module created.
+
+- **A launch is a process start, or a return to the foreground after at least 30 minutes in
+  the background**: the staged answer is activated and the launch fetches. A shorter return
+  refreshes when the last fetch is older than the refresh interval, staging what it brings.
+- **What it stores stays under 1 MB** (`maxStoreBytes`), so that the modules together fit the
+  6 MB Android gives AsyncStorage: when the active and staged answers do not both fit, the
+  cached active answer is not stored — its values stay in memory for the launch — then the
+  staged one, said through `debug`.
+- Until AsyncStorage has been read, reads return the in-app defaults; the cached answer's
+  activation is then reported through `onUpdate`.
+- React Native 0.74 or later. Metro resolves the entry without package `exports`.
+
+## With UX Analytics
+
+**Experiments are recorded automatically.** When an analytics client of the application is
+enabled, every activation of an answer sets each of its experiments with analytics'
+`setExperiment` — so `paywall_copy` → `annual_first` rides on every later event — and clears
+each experiment the config module set earlier that the answer no longer carries. An analytics
+client enabled later receives the active answer's experiments at its enable. The module never
+touches an experiment your application set itself, on any key, and remembers across launches
+which ones it set. A live parameter valued by a split applies its value at once; its experiment
+is recorded at the answer's next full activation (the next launch, `activate()`, or an
+`immediate` answer). A launch that runs on its in-app defaults — no cached answer for this app
+version, build and user — is in no experiment, so the experiments the module set earlier are
+cleared until an answer is activated. `close()` leaves the last ones recorded, since the values
+it held are still what the application reads.
+
+**The limit of five experiments is shared** with your application's own `setExperiment` calls
+(UX Analytics AN-224): one past it is not recorded, and the config module says so through its
+`debug`. Nothing happens without an enabled analytics client, and the config module does not
+bundle the analytics module to do this. **The analytics module records them from 0.4.0**: where
+an application bundles an older copy of `inlet-sdk` for analytics beside this one, the config
+module works as usual and no experiment is recorded.
+
 ## Errors
 
 After `init` nothing throws into your application. `init` itself throws for a secret key
@@ -1192,7 +1296,9 @@ launch, said through `debug`.
 | `refreshIntervalMinutes` | 5 | A floor from 5 to 1,440; the database's interval applies when larger |
 | `timeoutMs` | 10,000 | Per request |
 | `locale` | the runtime's | BCP 47 |
-| `store` (core), `persistenceDir` and `mode` (Node) | | Where the answers and the installation ID live |
+| `store` (core, React Native), `persistenceDir` and `mode` (Node), `persistenceDir` (Electron) | | Where the answers and the installation ID live |
+| `Platform`, `AppState`, `maxStoreBytes` (React Native) | 1 MB | The runtime's modules, and the byte budget of what the module stores |
+| `acceptRendererIdentity` (Electron) | `true` | `false` ignores a renderer's `setUserId` and `setAttributes` |
 | `fetch`, `debug`, `onError`, `random` | | As the other modules take them |
 
 ---

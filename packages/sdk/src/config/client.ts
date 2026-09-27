@@ -10,7 +10,7 @@ import type { LockManagerLike } from '../analytics/client.js';
 import { normalizeLocale, type EventContext } from '../context.js';
 import { capabilities, defaultFetch, timeoutSignal } from '../health.js';
 import type { Identity } from '../identity.js';
-import { IDENTITY_KEYS, MemoryIdentityStorage, watchUserId, type IdentityStorage } from '../identity-keys.js';
+import { CONFIG_EXPERIMENTS_SLOT, IDENTITY_KEYS, MemoryIdentityStorage, watchUserId, type IdentityStorage } from '../identity-keys.js';
 import type { ConfigDefaults, ConfigDetails, ConfigErrorReason, ConfigInitOptions, ConfigUpdate, Widen } from './types.js';
 
 export const SDK_NAME = 'inlet-sdk';
@@ -264,13 +264,13 @@ export class ConfigClient<D extends ConfigDefaults = ConfigDefaults> extends Con
   private readonly adapter: ConfigAdapter;
   protected readonly floorMs: number;
   private readonly boot: Promise<void>;
-  private staged: StoredAnswer | null = null;
+  protected staged: StoredAnswer | null = null;
   private attributes: Record<string, ConfigAttributeValue> = {};
   private installationEnabled: boolean;
   private serverInterval: number | null = null;
   private lastSuccess = 0;
   /** The first answer of the launch has been received (RC-114). */
-  private answered = false;
+  protected answered = false;
   /** A change of user whose answer has not arrived (RC-117). */
   private userSwitched = false;
   /** RC-122: a 401, 403 or 404 stops refreshing until the next launch. */
@@ -279,7 +279,7 @@ export class ConfigClient<D extends ConfigDefaults = ConfigDefaults> extends Con
   protected pausedUntil = 0;
   private failures = 0;
   private capable: boolean | null = null;
-  private healthRetryAt = 0;
+  protected healthRetryAt = 0;
   private foregrounded: boolean;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private contextTimer: ReturnType<typeof setTimeout> | null = null;
@@ -287,8 +287,9 @@ export class ConfigClient<D extends ConfigDefaults = ConfigDefaults> extends Con
   private warnedStorage = false;
   private readonly listeners = new Set<(update: ConfigUpdate) => void>();
   private readonly cleanups: (() => void)[] = [];
-  private settleReady!: (ok: boolean) => void;
-  private readonly launched = new Promise<boolean>((resolve) => (this.settleReady = resolve));
+  protected settleReady!: (ok: boolean) => void;
+  /** Settles with the launch's `ready()` result (RC-115). */
+  protected launched = new Promise<boolean>((resolve) => (this.settleReady = resolve));
 
   constructor(options: ConfigInitOptions<D>, adapter: ConfigAdapter = {}) {
     const valid = checked(options);
@@ -489,7 +490,7 @@ export class ConfigClient<D extends ConfigDefaults = ConfigDefaults> extends Con
 
   // --- Launch and activation (RC-114, RC-117, RC-120) -------------------------------------
 
-  private started = false;
+  protected started = false;
 
   private start(): void {
     if (this.closed) return;
@@ -499,7 +500,8 @@ export class ConfigClient<D extends ConfigDefaults = ConfigDefaults> extends Con
     // RC-114: the answer the previous launch staged, else the cached one, if fetched for this app and user.
     const chosen = [record?.staged, record?.active].find((answer) => answer && this.bound(answer, userId === null)) ?? null;
     // Reported: with an asynchronous store the application may have read and subscribed already.
-    if (chosen) this.swap(chosen);
+    // RC-129: null too, as a launch on the in-app defaults is in no experiment.
+    this.swap(chosen);
     if (chosen && chosen === record?.staged) this.persist();
     const cleanup = this.adapter.lifecycle?.(this as unknown as ConfigClient);
     if (cleanup) this.cleanups.push(cleanup);
@@ -550,15 +552,24 @@ export class ConfigClient<D extends ConfigDefaults = ConfigDefaults> extends Con
     this.persist();
   }
 
-  /** Makes `next` the active answer and reports the keys that changed. */
-  private swap(next: StoredAnswer): string[] {
+  /**
+   * Makes `next` the active answer and reports the keys that changed. RC-129: publishes its
+   * experiments for an enabled analytics client, which records them; a live-only application
+   * keeps the experiments of the answer fully activated last, so it records nothing new. Null:
+   * the launch's in-app defaults, which carry none.
+   */
+  protected swap(next: StoredAnswer | null): string[] {
     const changed = changedKeys(this.active, next);
     this.active = next;
+    const holder = globalThis as unknown as Record<symbol, unknown>;
+    holder[CONFIG_EXPERIMENTS_SLOT] = [next?.experiments, this.debug];
+    // Found through its slot, not imported: the analytics module would not fit in 8 KB (RC-123).
+    (holder[Symbol.for('inlet-sdk.analytics.current')] as { syncConfigExperiments?(): void } | null | undefined)?.syncConfigExperiments?.();
     if (changed.length > 0) this.emit({ staged: [], activated: changed });
     return changed;
   }
 
-  private emit(update: ConfigUpdate): void {
+  protected emit(update: ConfigUpdate): void {
     for (const listener of [...this.listeners]) {
       try {
         listener(update);

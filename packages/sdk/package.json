@@ -160,6 +160,21 @@
       "import": "./dist/config/node.js",
       "require": "./dist/config/node.cjs"
     },
+    "./config/electron": {
+      "types": "./dist/config/electron.d.ts",
+      "import": "./dist/config/electron.js",
+      "require": "./dist/config/electron.cjs"
+    },
+    "./config/electron-renderer": {
+      "types": "./dist/config/electron-renderer.d.ts",
+      "import": "./dist/config/electron-renderer.js",
+      "require": "./dist/config/electron-renderer.cjs"
+    },
+    "./config/react-native": {
+      "types": "./dist/config/react-native.d.ts",
+      "import": "./dist/config/react-native.js",
+      "require": "./dist/config/react-native.cjs"
+    },
     "./package.json": "./package.json"
   },
   "engines": {

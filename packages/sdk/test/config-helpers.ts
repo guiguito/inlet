@@ -61,10 +61,10 @@ export class FakeConfig {
   };
 }
 
-/** Fresh globals: the config, crash and analytics slots and the shared identity. */
+/** Fresh globals: the config, crash and analytics slots, the config's experiments (RC-129) and the shared identity. */
 export function resetConfigSlots(): void {
   const holder = globalThis as unknown as Record<symbol, unknown>;
-  for (const name of ['inlet-sdk.analytics.current', 'inlet-sdk.crash.current']) delete holder[Symbol.for(name)];
+  for (const name of ['inlet-sdk.analytics.current', 'inlet-sdk.crash.current', 'inlet-sdk.config.experiments']) delete holder[Symbol.for(name)];
   delete holder[CLIENT_SLOT];
   resetSharedIdentity();
 }

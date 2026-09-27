@@ -22,8 +22,8 @@ const entriesOf = {
   feedback: ['index', 'node', 'browser', 'electron', 'react', 'react-native'],
   // AN-220, AN-238, AN-239.
   analytics: ['index', 'node', 'browser', 'electron', 'electron-renderer', 'react-native'],
-  // RC-110.
-  config: ['index', 'node', 'browser'],
+  // RC-110, RC-125, RC-126.
+  config: ['index', 'node', 'browser', 'electron', 'electron-renderer', 'react-native'],
 };
 const platformOf = {
   index: 'neutral',
@@ -92,6 +92,8 @@ browserSafe(
     'dist/analytics/browser',
     'dist/config/index',
     'dist/config/browser',
+    'dist/config/electron-renderer',
+    'dist/config/react-native',
   ].flatMap((base) => [`${base}.js`, `${base}.cjs`]),
 );
 reactNativeSafe([
@@ -103,6 +105,7 @@ reactNativeSafe([
   'dist/feedback/react.js',
   'dist/analytics/index.js',
   'dist/config/index.js',
+  'dist/config/react-native.js',
 ]);
 // AN-240, RC-123: the README states each size.
 await browserSize('src/analytics/browser.ts', 20);
@@ -152,7 +155,7 @@ function standAlone() {
  * Listed in `files`; the build writes them so they can never point at a file that moved.
  */
 function metroShims() {
-  for (const entry of ['crash', 'crash/react-native', 'feedback', 'feedback/react', 'feedback/react-native', 'analytics', 'analytics/react-native', 'config']) {
+  for (const entry of ['crash', 'crash/react-native', 'feedback', 'feedback/react', 'feedback/react-native', 'analytics', 'analytics/react-native', 'config', 'config/react-native']) {
     const up = entry.split('/').map(() => '..').join('/');
     const target = entry.includes('/') ? entry : `${entry}/index`;
     mkdirSync(entry, { recursive: true });

@@ -4,8 +4,8 @@
  *
  * Packs `inlet-sdk`, installs the tarball into a throwaway React Native 0.74 project and
  * bundles, for both platforms and in release mode, an application that imports every entry
- * a React Native application imports: the React Native entries of crash, feedback and
- * analytics, the bare entries and `inlet-sdk/feedback/react`. React Native 0.74's Metro does not read package `exports`, so
+ * a React Native application imports: the React Native entries of crash, feedback, analytics
+ * and config, the bare entries and `inlet-sdk/feedback/react`. React Native 0.74's Metro does not read package `exports`, so
  * this is what proves the directory shims resolve.
  *
  * Not part of `npm test`: it installs React Native, which takes a minute and a few hundred
@@ -46,8 +46,10 @@ import * as feedback from 'inlet-sdk/feedback';
 import { useFeedbackSession } from 'inlet-sdk/feedback/react';
 import * as analyticsRn from 'inlet-sdk/analytics/react-native';
 import * as analytics from 'inlet-sdk/analytics';
+import * as configRn from 'inlet-sdk/config/react-native';
+import * as config from 'inlet-sdk/config';
 
-globalThis.__inlet = [crashRn.init, crashRn.installReactNativeHandlers, crash.captureException, feedbackRn.init, feedback.createSession, useFeedbackSession, analyticsRn.init, analytics.track];
+globalThis.__inlet = [crashRn.init, crashRn.installReactNativeHandlers, crash.captureException, feedbackRn.init, feedback.createSession, useFeedbackSession, analyticsRn.init, analytics.track, configRn.init, config.getBoolean];
 `,
 );
 
@@ -55,7 +57,7 @@ for (const platform of ['ios', 'android']) {
   const out = join(project, `bundle.${platform}.js`);
   run('npx', ['react-native', 'bundle', '--platform', platform, '--dev', 'false', '--entry-file', 'index.js', '--bundle-output', out, '--reset-cache'], project);
   const bundle = readFileSync(out, 'utf8');
-  for (const marker of ['installReactNativeHandlers', 'inlet-crash:', 'inlet-feedback:', 'inlet-analytics:', 'inlet-sdk.analytics.current']) {
+  for (const marker of ['installReactNativeHandlers', 'inlet-crash:', 'inlet-feedback:', 'inlet-analytics:', 'inlet-sdk.analytics.current', 'inlet-sdk.config.current', 'React Native allows them']) {
     if (!bundle.includes(marker)) throw new Error(`The ${platform} bundle does not contain ${marker}; an inlet-sdk entry was not bundled.`);
   }
   console.log(`Metro bundled every React Native entry of ${tarball} for ${platform} (${Math.round(bundle.length / 1024)} KB).`);

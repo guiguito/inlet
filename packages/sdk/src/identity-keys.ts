@@ -42,6 +42,12 @@ export class MemoryIdentityStorage implements IdentityStorage {
   }
 }
 
+/**
+ * RC-129: where the config module publishes the experiments of its active answer at every
+ * activation, as `[experiments, debug]`; an enabled analytics client records them from it.
+ */
+export const CONFIG_EXPERIMENTS_SLOT = Symbol.for('inlet-sdk.config.experiments');
+
 const USER_WATCHERS = Symbol.for('inlet-sdk.identity.user-watchers');
 
 /**

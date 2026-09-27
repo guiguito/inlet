@@ -18,7 +18,29 @@ module changes nothing: crash reports, submissions and analytics events carry ex
   version, build and user ID they were fetched for. The Node entry's server mode evaluates per
   context (`evaluate(context)`, 1,000 contexts cached); device mode keeps files under
   `persistenceDir`.
-- **The browser entry is 7.8 KB minified and gzipped**; the build fails past 8 KB. Its tabs
+- **`inlet-sdk/config/electron` and `inlet-sdk/config/electron-renderer`** (RC-125). The main
+  process owns the client, persisted under `<userData>/inlet`, and pushes its state to every
+  window on `inlet:config:state`; renderers hold no key, make no request, read what main
+  pushed (their in-app defaults before), and send their first read, `activate`, `refresh`,
+  `setUserId` and `setAttributes` over `inlet:config`. A renderer's first read stages the
+  launch's first answer. `acceptRendererIdentity: false` ignores renderer identity calls.
+- **`inlet-sdk/config/react-native`** (RC-126). `Platform`, `AppState`, an AsyncStorage-compatible
+  store and `random` as parameters, nothing imported. A return to the foreground after 30
+  minutes or more in the background is a launch; a shorter one refreshes when due. What it
+  stores stays under `maxStoreBytes` (1 MB), the cached active answer dropped from storage
+  before the staged one. Metro shim at `config/react-native`.
+- **Experiments into analytics** (RC-129). With an analytics client enabled, each activation
+  sets the active answer's experiments with analytics' `setExperiment` and clears the ones the
+  config module set earlier that the answer no longer carries, never the application's own;
+  an analytics client enabled later receives them. A refusal for the limit of five goes to
+  the config module's `debug`. The analytics client gains `syncConfigExperiments()`, which the
+  config module calls through the `globalThis` slot, and persists the keys config set in its
+  state (`config`). A launch on the in-app defaults clears them; an experiment the application
+  names, in `init` or with `setExperiment`, is its own. An analytics module older than 0.4.0
+  records nothing.
+- **The React Native store no longer leaves an unhandled rejection** when an AsyncStorage that
+  fails rejects its first read (every React Native entry).
+- **The browser entry is 7.9 KB minified and gzipped**; the build fails past 8 KB. Its tabs
   share one fetch per refresh interval under a Web Lock and read the answer from
   `localStorage`.
 - **The config module creates the shared installation ID** when none exists, under the one
