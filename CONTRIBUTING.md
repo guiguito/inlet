@@ -47,6 +47,22 @@ no system log tables). The tests use its `inlet_test` database and the end-to-en
 `inlet_e2e`. To use analytics with `npm run dev`, uncomment the `INLET_CLICKHOUSE_*` lines
 in `.env`.
 
+A local event store seeded before ClickHouse migration 0004 lacks its internal rollups, which
+Release 8 ships without a backfill: drop the local database (`.dev/bin/clickhouse client --port 9124
+--user inlet --password inlet --query "DROP DATABASE inlet"`) and restart the API, which recreates it.
+
+The suites, one at a time:
+
+```bash
+npm run test:unit         # pure logic: validation, hashing, CSV, images
+npm run test:integration  # the API against real PostgreSQL, RustFS and ClickHouse
+npm run test:e2e          # the HTTP contract and the interface in a browser
+npm run test:all
+```
+
+The end-to-end suite builds and starts the server from the same artefacts the Docker
+image ships, so what is tested is what is deployed.
+
 ## What is expected of a change
 
 ```bash
@@ -121,6 +137,86 @@ it is fairly consistent about it. A comment explaining that a loop iterates is n
 comment explaining why the joins are in that order is the difference between a fix and
 a regression. Prose in the interface follows the voice in PRD section 20.6: second
 person, present tense, plain words, no exclamation marks.
+
+## Load tests
+
+Two scripts measure the budgets the PRDs set, against a running Inlet.
+
+### Analytics
+
+`scripts/analytics-load.mjs` measures the analytics budgets of the UX Analytics PRD (9.5) against a
+running Inlet: it seeds an analytics database straight into ClickHouse, then drives the real API
+over HTTP, every budgeted read idle and again while ingest sustains 2,000 events a second. The last
+runs and what they found are in [DECISIONS.md](docs/DECISIONS.md) §33.12c and §33.12d. To run it on your own host,
+such as the reference node (8 vCPU, 32 GB):
+
+1. Start Inlet with the per-credential ingest limits raised for the test and room for the seed's
+   63 names: `INLET_LIMIT_ANALYTICS_PER_KEY_5M=10000000`, `INLET_LIMIT_ANALYTICS_PER_KEY_HOUR=100000000`,
+   `INLET_ANALYTICS_NEW_EVENT_NAMES_PER_HOUR=100`, plus the host's own analytics settings
+   ([DEPLOYMENT.md](docs/DEPLOYMENT.md#the-host-it-needs)). Use a deployment you can throw away:
+   the last step prunes and erases for real.
+2. Make its ClickHouse reachable from where the script runs (with Docker Compose, publish port
+   8123 of the `clickhouse` service for the test), and set `LOAD_API`, `LOAD_ADMIN_EMAIL`,
+   `LOAD_ADMIN_PASSWORD`, `CLICKHOUSE_HTTP`, `CLICKHOUSE_USER`, `CLICKHOUSE_PASSWORD` (the writer)
+   and `CLICKHOUSE_DATABASE`.
+3. Run the steps in order:
+
+```bash
+node scripts/analytics-load.mjs setup    # a project, two keys, an analytics database, the names
+SEED_DAYS=395 SEED_ACTIVE=115000 SEED_EVENTS=87 node scripts/analytics-load.mjs seed   # ~4 billion events
+node scripts/analytics-load.mjs storage  # bytes per event and per installation row
+node scripts/analytics-load.mjs measure  # every budgeted read, idle (LOAD_REPS, 10)
+LOAD_MINUTES=15 LOAD_PIDS=api=<pid>,clickhouse=<pid> node scripts/analytics-load.mjs load
+node scripts/analytics-load.mjs passes   # with the API stopped and the same INLET_* environment
+```
+
+Each step prints its figures and writes them as JSON under `LOAD_OUT` (`.dev/analytics-load`).
+`passes` imports the built API (`npm run build:server` first) and runs from a checkout; every other
+step needs only Node. The script's header lists every setting.
+
+### Remote Config
+
+`scripts/config-load.mjs` measures the fetch target of the Remote Config PRD (9.4: 2,000 fetches a
+second on one API instance, with a server-side p95 under 10 ms). It publishes a realistic template
+(100 parameters, 40 conditions), then sends fetches at a fixed rate, whatever the answers take, from
+a fleet of installations that send back their last ETag. Halfway through, it publishes one change.
+The last runs and what they found are in [DECISIONS.md](docs/DECISIONS.md) §34.11b.
+
+1. Start Inlet with the default rate limits. To get the server-side figures, preload the probe,
+   which records each fetch's time, memory, CPU and the answer cache. Nothing in the product
+   changes. The probe listens on `LOAD_PROBE_LISTEN`, `127.0.0.1:9464` by default:
+   `NODE_OPTIONS="--import ./scripts/config-load-probe.mjs" node apps/api/dist/server.js`
+   (add `--expose-gc` to also get the heap after a full collection). For the country and
+   per-address paths, trust the load client as a proxy with `INLET_TRUSTED_PROXIES=127.0.0.1`.
+   The script sends each installation's own public address in `X-Forwarded-For`.
+2. Set `LOAD_API`, `LOAD_ADMIN_EMAIL` and `LOAD_ADMIN_PASSWORD`, then:
+
+```bash
+node scripts/config-load.mjs setup   # a project, a publishable key, a config database, the template published
+node scripts/config-load.mjs run     # 15 s of warm-up, then 60 s at 2,000 a second, one publish at 30 s
+```
+
+`run` prints the rate it achieved, the answers by status, the client's and the server's
+percentiles (overall, before the publish and for the 10 seconds after it), the process's memory and
+CPU, the answer cache, and one row a second. It writes them as JSON under `LOAD_OUT`
+(`.dev/config-load`). `LOAD_RATE`, `LOAD_SECONDS`, `LOAD_INSTALLATIONS` and the other settings
+are listed in the script's header. Against Docker Compose, mount the probe into the `inlet`
+service, set `NODE_OPTIONS` and `LOAD_PROBE_LISTEN=0.0.0.0:9464`, and publish that port to the
+host's loopback. Run the client on another machine to keep its CPU out of the figures.
+
+## Repository layout
+
+| Path | What lives there |
+| --- | --- |
+| `packages/shared` | Form definitions, answer validation, the crash envelope and its fingerprint, the analytics event envelope and query definitions, the config template and its evaluator, limits, error codes. Shared by the API, the web app and the SDK so the contract cannot drift. |
+| `packages/sdk` | `inlet-sdk`, the client SDK. `feedback`, `crash`, `analytics` and `config`, each with Node, browser, Electron and React Native entries. |
+| `apps/api` | Fastify server, Drizzle schema and migrations, the ClickHouse migrations (`apps/api/clickhouse`), services, routes, tests. |
+| `apps/web` | React management interface, form builder, hosted form page, reference renderer. |
+| `apps/mcp` | `inlet-mcp`, a thin layer over the HTTP API. Runs as a stdio process, and the API serves the same tools at `/v1/mcp`. |
+| `e2e` | Playwright suites: the HTTP contract, the SDK in Node and in a real browser, and the interface in a browser. |
+| `docs` | PRD, API guide, MCP guide, deployment guide, technical decisions, generated OpenAPI. |
+| `scripts` | Local PostgreSQL, RustFS and ClickHouse, the end-to-end server, the analytics storage measurement (`analytics-seed.mjs`) and load test (`analytics-load.mjs`), the config fetch load test (`config-load.mjs`). |
+| `deploy` | Configuration files the bundled services mount, such as ClickHouse's settings and users. |
 
 ## Regenerating the API document
 
