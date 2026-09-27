@@ -149,10 +149,11 @@ test.describe('slack notifications over HTTP', () => {
 
   test('delivers a real message for a real submission', async ({ request }) => {
     const f = await setup(request, 'Slack delivery');
+    const hook = slack.webhook();
 
     const saved = await request.patch(
       `/v1/feedback-databases/${f.databaseId}/slack-notifications`,
-      { data: { webhookUrl: slack.webhookUrl, enabled: true, messageTitle: 'New beta feedback' } },
+      { data: { webhookUrl: hook, enabled: true, messageTitle: 'New beta feedback' } },
     );
     expect(saved.status()).toBe(200);
     const view = await saved.json();
@@ -164,9 +165,9 @@ test.describe('slack notifications over HTTP', () => {
     const submissionId = await submit(request, f, 'The link is much easier than the API.');
 
     // The worker polls every few seconds in the running server.
-    await expect.poll(() => slack.received.length, { timeout: 30_000 }).toBeGreaterThan(0);
+    await expect.poll(() => slack.messagesTo(hook).length, { timeout: 30_000 }).toBeGreaterThan(0);
 
-    const posted = slack.received[0]!;
+    const posted = slack.messagesTo(hook)[0]!;
     expect(posted.body.text).toBe('New beta feedback');
     expect(posted.raw).toContain('The link is much easier than the API.');
     expect(posted.raw).toContain(
@@ -189,16 +190,17 @@ test.describe('slack notifications over HTTP', () => {
 
   test('sends a placeholder test message and reports a refusal', async ({ request }) => {
     const f = await setup(request, 'Slack test message');
+    const hook = slack.webhook();
     await request.patch(`/v1/feedback-databases/${f.databaseId}/slack-notifications`, {
-      data: { webhookUrl: slack.webhookUrl },
+      data: { webhookUrl: hook },
     });
 
     const ok = await request.post(
       `/v1/feedback-databases/${f.databaseId}/slack-notifications/test`,
     );
     expect(ok.status()).toBe(200);
-    expect(slack.received).toHaveLength(1);
-    expect(slack.received[0]?.raw).toContain('Example question');
+    expect(slack.messagesTo(hook)).toHaveLength(1);
+    expect(slack.messagesTo(hook)[0]?.raw).toContain('Example question');
 
     slack.reply = () => ({ status: 404, body: 'no_service' });
     const refused = await request.post(
@@ -229,7 +231,8 @@ test.describe('slack notifications over HTTP', () => {
       );
       expect(response.status(), bad).toBe(400);
     }
-    expect(slack.received).toHaveLength(0);
+    // The one address on the fake's own host was refused before anything was sent to it.
+    expect(slack.messagesTo('http://127.0.0.1:5433/services/T1/B1/abc')).toHaveLength(0);
   });
 
   test('lets a server key configure but not install a webhook', async ({ request, playwright }) => {

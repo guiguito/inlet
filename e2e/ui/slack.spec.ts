@@ -132,7 +132,8 @@ test.describe('setting up Slack notifications', () => {
     await expect(toggle).toBeDisabled();
     await expect(page.getByTestId('slack-status')).toHaveText('Nothing delivered yet.');
 
-    await page.getByLabel(/Webhook URL/).fill(slack.webhookUrl);
+    const hook = slack.webhook();
+    await page.getByLabel(/Webhook URL/).fill(hook);
     await page.getByRole('button', { name: 'Save webhook' }).click();
     await expect(page.getByText('Webhook saved.')).toBeVisible();
 
@@ -148,8 +149,8 @@ test.describe('setting up Slack notifications', () => {
     // --- Prove it before trusting it ---------------------------------------
     await page.getByRole('button', { name: 'Send a test message' }).click();
     await expect(page.getByText('Slack accepted the test message. Check your channel.')).toBeVisible();
-    expect(slack.received).toHaveLength(1);
-    expect(slack.received[0]?.raw).toContain('Example question');
+    expect(slack.messagesTo(hook)).toHaveLength(1);
+    expect(slack.messagesTo(hook)[0]?.raw).toContain('Example question');
     await expect(page.getByTestId('slack-status')).toContainText('Last delivered');
 
     // --- Switch it on and collect ------------------------------------------
@@ -159,9 +160,9 @@ test.describe('setting up Slack notifications', () => {
     await expect(page.getByText('Notifying Slack')).toBeVisible();
 
     await respond(request, f, 'The card freeze toggle takes three taps.');
-    await expect.poll(() => slack.received.length, { timeout: 30_000 }).toBeGreaterThan(0);
+    await expect.poll(() => slack.messagesTo(hook).length, { timeout: 30_000 }).toBeGreaterThan(0);
 
-    const posted = slack.received[0]!;
+    const posted = slack.messagesTo(hook)[0]!;
     expect(posted.body.text).toBe('New response in Notify walk');
     // Answers travel by default, which is the choice that was made for this product.
     expect(posted.raw).toContain('The card freeze toggle takes three taps.');
@@ -172,8 +173,9 @@ test.describe('setting up Slack notifications', () => {
     test.slow();
     const f = await setup(request, 'Notify content');
     await operator(page);
+    const hook = slack.webhook();
     await request.patch(`/v1/feedback-databases/${f.databaseId}/slack-notifications`, {
-      data: { webhookUrl: slack.webhookUrl, enabled: true },
+      data: { webhookUrl: hook, enabled: true },
     });
 
     await page.goto(`/databases/${f.databaseId}?tab=notify`);
@@ -182,24 +184,25 @@ test.describe('setting up Slack notifications', () => {
     await expect(page.getByText('Notification settings updated.')).toBeVisible();
 
     await respond(request, f, 'A private detail nobody should see in Slack.');
-    await expect.poll(() => slack.received.length, { timeout: 30_000 }).toBeGreaterThan(0);
+    await expect.poll(() => slack.messagesTo(hook).length, { timeout: 30_000 }).toBeGreaterThan(0);
 
-    expect(slack.received[0]?.raw).not.toContain('A private detail');
-    expect(slack.received[0]?.raw).toContain('Open in Inlet');
+    expect(slack.messagesTo(hook)[0]?.raw).not.toContain('A private detail');
+    expect(slack.messagesTo(hook)[0]?.raw).toContain('Open in Inlet');
   });
 
   test('says so in the interface when Slack refuses a message', async ({ page, request }) => {
     test.slow();
     const f = await setup(request, 'Notify failure');
     await operator(page);
+    const hook = slack.webhook();
     await request.patch(`/v1/feedback-databases/${f.databaseId}/slack-notifications`, {
-      data: { webhookUrl: slack.webhookUrl, enabled: true },
+      data: { webhookUrl: hook, enabled: true },
     });
 
     // The webhook was deleted in Slack, which is the ordinary way this breaks.
     slack.reply = () => ({ status: 404, body: 'no_service' });
     await respond(request, f, 'Nobody will see this one.');
-    await expect.poll(() => slack.received.length, { timeout: 30_000 }).toBeGreaterThan(0);
+    await expect.poll(() => slack.messagesTo(hook).length, { timeout: 30_000 }).toBeGreaterThan(0);
 
     await page.goto(`/databases/${f.databaseId}?tab=notify`);
     // Without this line, "notifications aren't arriving" would need database access to
@@ -216,14 +219,15 @@ test.describe('setting up Slack notifications', () => {
     test.slow();
     const f = await setup(request, 'Notify escaping');
     await operator(page);
+    const hook = slack.webhook();
     await request.patch(`/v1/feedback-databases/${f.databaseId}/slack-notifications`, {
-      data: { webhookUrl: slack.webhookUrl, enabled: true },
+      data: { webhookUrl: hook, enabled: true },
     });
 
     await respond(request, f, '<!channel> everything is broken');
-    await expect.poll(() => slack.received.length, { timeout: 30_000 }).toBeGreaterThan(0);
+    await expect.poll(() => slack.messagesTo(hook).length, { timeout: 30_000 }).toBeGreaterThan(0);
 
-    const raw = slack.received[0]!.raw;
+    const raw = slack.messagesTo(hook)[0]!.raw;
     expect(raw).not.toContain('<!channel>');
     expect(raw).toContain('&lt;!channel&gt;');
   });

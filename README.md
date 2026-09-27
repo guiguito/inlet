@@ -20,6 +20,7 @@ over MCP.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-C2410C.svg)](LICENSE)
 [![npm: inlet-sdk](https://img.shields.io/npm/v/inlet-sdk?label=inlet-sdk&color=C2410C)](https://www.npmjs.com/package/inlet-sdk)
+[![CI](https://github.com/guiguito/inlet/actions/workflows/ci.yml/badge.svg)](https://github.com/guiguito/inlet/actions/workflows/ci.yml)
 ![Node 22+](https://img.shields.io/badge/node-%3E%3D22-informational)
 
 <br>

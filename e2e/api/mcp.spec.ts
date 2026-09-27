@@ -900,10 +900,11 @@ test.describe('the MCP server', () => {
       expect(isError(rejected)).toBe(true);
 
       // A person saves the webhook, which is the only way it can be saved.
+      const hook = slack.webhook();
       expect(
         (
           await request.patch(`/v1/feedback-databases/${f.databaseId}/slack-notifications`, {
-            data: { webhookUrl: slack.webhookUrl },
+            data: { webhookUrl: hook },
           })
         ).status(),
       ).toBe(200);
@@ -915,7 +916,7 @@ test.describe('the MCP server', () => {
       });
       expect(isError(unconfirmed)).toBe(true);
       expect(textOf(unconfirmed)).toContain('Refusing to continue');
-      expect(slack.received).toHaveLength(0);
+      expect(slack.messagesTo(hook)).toHaveLength(0);
 
       const sent = parsed<{ delivered: boolean }>(
         await session.client.callTool({
@@ -924,7 +925,7 @@ test.describe('the MCP server', () => {
         }),
       );
       expect(sent.delivered).toBe(true);
-      expect(slack.received).toHaveLength(1);
+      expect(slack.messagesTo(hook)).toHaveLength(1);
 
       // The webhook URL is not in anything the agent can read.
       const readBack = textOf(
