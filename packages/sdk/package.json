@@ -1,6 +1,6 @@
 {
   "name": "inlet-sdk",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "The Inlet client SDK. Feedback collection, crash reports and UX analytics, with Node, browser, Electron, React and React Native entries.",
   "license": "MIT",
   "author": "Guilhem Duch\u00e9",

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 — 2026-09-27
 
 UX analytics, and the identity it shares.
 

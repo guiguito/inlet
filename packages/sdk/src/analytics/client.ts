@@ -28,7 +28,7 @@ import { AnalyticsTransport } from './transport.js';
 import type { AnalyticsDropReason, AnalyticsEnvelope, AnalyticsInitOptions, AnalyticsParamValue, StandardEventSwitches, TrackOptions } from './types.js';
 
 export const SDK_NAME = 'inlet-sdk';
-export const SDK_VERSION = '0.2.0';
+export const SDK_VERSION = '0.3.0';
 
 /** What an adapter supplies (AN-236, AN-237); the bare entry supplies nothing. */
 export type AnalyticsAdapter = {

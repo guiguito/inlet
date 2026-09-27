@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { init as initBrowser } from '../src/analytics/browser.js';
-import { AnalyticsClient } from '../src/analytics/client.js';
+import { AnalyticsClient, SDK_VERSION } from '../src/analytics/client.js';
 import * as analytics from '../src/analytics/index.js';
 import { init as initNode } from '../src/analytics/node.js';
 import type { AnalyticsDropReason, AnalyticsInitOptions } from '../src/analytics/types.js';
@@ -255,7 +255,7 @@ describe('track (AN-222, AN-234, AN-235)', () => {
     expect(ok.params).toEqual({ long: 'x'.repeat(256), redacted: true });
     expect(ok.category).toHaveLength(32);
     expect(ok.eventId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7/);
-    expect(ok.sdk).toEqual({ name: 'inlet-sdk', version: '0.2.0' });
+    expect(ok.sdk).toEqual({ name: 'inlet-sdk', version: SDK_VERSION });
   });
 
   it('never throws into the application', () => {
