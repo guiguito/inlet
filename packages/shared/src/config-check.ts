@@ -98,6 +98,8 @@ export function checkConfigSave(raw: unknown): ConfigCheckResult {
 /** A json parameter with a schema, by its index in the template: what the schema phase of a publish checks. */
 export type SchemaJob = { index: number; parameter: ConfigParameter }[];
 export type SchemaJobResult = { invalid: ConfigProblem[]; mismatches: ConfigProblem[] };
+/** What the worker is doing to one parameter: checking and compiling its schema, or checking its values. */
+export type SchemaPhase = 'compile' | 'validate';
 
 /**
  * RC-015 for a publish, per parameter: the schema's validity as a schema (a save's problem,
@@ -106,17 +108,24 @@ export type SchemaJobResult = { invalid: ConfigProblem[]; mismatches: ConfigProb
  * value. `onParameter` hears each index before its parameter starts. Runs in the worker of
  * `checkConfigPublish`, or in this thread when no worker can start.
  */
-export function schemaJobProblems(job: SchemaJob, names: Record<string, string>, onParameter?: (index: number) => void): SchemaJobResult {
+export function schemaJobProblems(job: SchemaJob, names: Record<string, string>, onPhase?: (index: number, phase: SchemaPhase, validatedMs: number) => void): SchemaJobResult {
   const invalid: ConfigProblem[] = [];
   const mismatches: ConfigProblem[] = [];
+  // Measured here rather than by the main thread, whose view of each phase is late by a message.
+  let validatedMs = 0;
   for (const { index, parameter } of job) {
-    onParameter?.(index);
+    onPhase?.(index, 'compile', validatedMs);
     const schemaProblems = jsonSchemaProblems(parameter.schema, `parameters.${index}.schema`);
     if (schemaProblems.length > 0) {
       for (const problem of schemaProblems) invalid.push({ ...problem, parameter: parameter.key });
       continue;
     }
     const validate = compile(parameter.schema!) as ValidateFunction;
+    // V8 compiles a function the first time it runs, and Ajv's are large: run it once on a value
+    // that recurses into nothing, so that compiling ends here and the limit times only the values.
+    validate(null);
+    onPhase?.(index, 'validate', validatedMs);
+    const started = performance.now();
     const check = (value: unknown, path: string, where: string, extra: Partial<ConfigProblem>) => {
       if (validate(value)) return;
       const error = validate.errors?.[0];
@@ -135,6 +144,7 @@ export function schemaJobProblems(job: SchemaJob, names: Record<string, string>,
         condition: entry.condition, ...(entry.variant !== undefined && { variant: entry.variant }),
       });
     });
+    validatedMs += performance.now() - started;
   }
   return { invalid, mismatches };
 }
@@ -142,13 +152,21 @@ export function schemaJobProblems(job: SchemaJob, names: Record<string, string>,
 // --- The schema phase off the main thread -------------------------------------------------
 
 /**
- * How long the schema phase of one publish may take. Compiling is bounded (the heaviest
- * template compiles in about a second), validating is not: `anyOf` branches that recurse cost
- * twice per level of the value, so a Creator's schema could hold the event loop for hours.
+ * RC-015: how long checking the values of one publish against their schemas may take, in all.
+ * Validating is unbounded: `anyOf` branches that recurse cost twice per level of the value, so a
+ * Creator's schema could hold a thread for hours. Compiling is bounded by a schema's 16 KiB and
+ * does not count: the heaviest template compiles in about a second on a laptop and twice that
+ * on a CI runner, which a limit shared with validation refused (DECISIONS 34.12).
  */
 export const SCHEMA_CHECK_TIMEOUT_MS = 2_000;
+/**
+ * How long checking one schema as a schema, compiling it and running it once on `null` may take:
+ * far past the tens of milliseconds a 16 KiB schema takes, a guard against one that never ends.
+ */
+export const SCHEMA_COMPILE_TIMEOUT_MS = 5_000;
 
-type Job = { job: SchemaJob; names: Record<string, string>; timeoutMs: number; resolve: (result: SchemaJobResult | { stoppedAt: number; reason: 'timeout' | 'failed'; error?: string }) => void };
+type Stopped = { stoppedAt: number; reason: 'timeout' | 'compile-timeout' | 'failed'; error?: string };
+type Job = { job: SchemaJob; names: Record<string, string>; timeoutMs: number; resolve: (result: SchemaJobResult | Stopped) => void };
 
 let worker: Worker | null = null;
 /** Set when a worker could not start here: every later publish validates in this thread. */
@@ -156,10 +174,15 @@ let workerUnavailable = false;
 let queue: Promise<void> = Promise.resolve();
 
 /** Runs one job in the persistent worker, one at a time, so each job has its whole time limit. */
-function runInWorker(job: SchemaJob, names: Record<string, string>, timeoutMs: number): Promise<Parameters<Job['resolve']>[0] | null> {
+function runInWorker(job: SchemaJob, names: Record<string, string>, timeoutMs: number, compileTimeoutMs: number): Promise<Parameters<Job['resolve']>[0] | null> {
   const run = () => new Promise<Parameters<Job['resolve']>[0] | null>((resolve) => {
     let started = false;
     let current = job[0]!.index;
+    // The worker reports each phase as it enters it, with the time it has spent validating so
+    // far; only that time, and the validation under way, use up `timeoutMs`.
+    let phase: SchemaPhase = 'compile';
+    let validated = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       worker ??= new Worker(new URL('./config-check-worker.js', import.meta.url));
     } catch {
@@ -178,9 +201,21 @@ function runInWorker(job: SchemaJob, names: Record<string, string>, timeoutMs: n
       if (worker === running) worker = null;
       void running.terminate();
     };
-    const onMessage = (message: { at?: number; done?: SchemaJobResult }) => {
+    const arm = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        drop();
+        finish({ stoppedAt: current, reason: phase === 'validate' ? 'timeout' : 'compile-timeout' });
+      }, phase === 'validate' ? timeoutMs - validated : compileTimeoutMs);
+    };
+    const onMessage = (message: { at?: number; phase?: SchemaPhase; validatedMs?: number; done?: SchemaJobResult }) => {
       started = true;
-      if (message.at !== undefined) current = message.at;
+      if (message.at !== undefined) {
+        current = message.at;
+        phase = message.phase ?? 'compile';
+        validated = message.validatedMs ?? validated;
+        arm();
+      }
       if (message.done) finish(message.done);
     };
     // Before its first message, a failing worker is one that cannot start here; after it, the job failed.
@@ -189,10 +224,7 @@ function runInWorker(job: SchemaJob, names: Record<string, string>, timeoutMs: n
       finish(started ? { stoppedAt: current, reason: 'failed', error: error.message } : null);
     };
     const onExit = () => onError(new Error('the worker exited'));
-    const timer = setTimeout(() => {
-      drop();
-      finish({ stoppedAt: current, reason: 'timeout' });
-    }, timeoutMs);
+    arm();
     running.on('message', onMessage).on('error', onError).on('exit', onExit);
     running.postMessage({ job, names });
   });
@@ -202,8 +234,8 @@ function runInWorker(job: SchemaJob, names: Record<string, string>, timeoutMs: n
 }
 
 /** The schema phase: in the worker under its time limit, else here, never skipped. */
-async function schemaPhase(job: SchemaJob, names: Record<string, string>, timeoutMs: number): Promise<SchemaJobResult> {
-  const result = workerUnavailable ? null : await runInWorker(job, names, timeoutMs);
+async function schemaPhase(job: SchemaJob, names: Record<string, string>, timeoutMs: number, compileTimeoutMs: number): Promise<SchemaJobResult> {
+  const result = workerUnavailable ? null : await runInWorker(job, names, timeoutMs, compileTimeoutMs);
   if (result === null) {
     if (!workerUnavailable) process.emitWarning('Remote Config schema checks run on the main thread: a worker thread could not start.', { code: 'INLET_CONFIG_SCHEMA_WORKER' });
     workerUnavailable = true;
@@ -216,6 +248,11 @@ async function schemaPhase(job: SchemaJob, names: Record<string, string>, timeou
       path: `parameters.${result.stoppedAt}.schema`, parameter: parameter.key, code: 'schema_too_slow',
       message: `Checking the values of ${JSON.stringify(parameter.key)} against its schema took longer than ${timeoutMs / 1000} seconds. A schema whose anyOf or oneOf branches recurse costs twice per level of the value: simplify it.`,
     }
+    : result.reason === 'compile-timeout'
+    ? {
+      path: `parameters.${result.stoppedAt}.schema`, parameter: parameter.key, code: 'schema_too_slow',
+      message: `Checking the schema of ${JSON.stringify(parameter.key)} took longer than ${compileTimeoutMs / 1000} seconds. A schema whose anyOf or oneOf branches recurse can cost that much on any value: simplify it.`,
+    }
     : { path: `parameters.${result.stoppedAt}.schema`, parameter: parameter.key, code: 'schema_check_failed', message: `The values of ${JSON.stringify(parameter.key)} could not be checked against its schema: ${result.error}.` };
   return { invalid: [], mismatches: [problem] };
 }
@@ -224,17 +261,18 @@ async function schemaPhase(job: SchemaJob, names: Record<string, string>, timeou
  * RC-052: everything a save checks, then every rule of sections 6.2 and 6.3: the
  * structural publish rules of `checkTemplateForPublish`, and the schema phase (each schema's
  * validity, then every default and conditional value of a json parameter against it),
- * which runs in a worker thread and is refused with `schema_too_slow` past
- * `SCHEMA_CHECK_TIMEOUT_MS` for the whole template. On success, the template to publish,
- * normalised as a save normalises it. `timeoutMs` is for tests.
+ * which runs in a worker thread and is refused with `schema_too_slow` once checking the values
+ * has taken `SCHEMA_CHECK_TIMEOUT_MS` for the whole template, or compiling one schema
+ * `SCHEMA_COMPILE_TIMEOUT_MS`. On success, the template to publish, normalised as a save
+ * normalises it. The two limits are parameters for tests.
  */
-export async function checkConfigPublish(raw: unknown, timeoutMs = SCHEMA_CHECK_TIMEOUT_MS): Promise<ConfigCheckResult> {
+export async function checkConfigPublish(raw: unknown, timeoutMs = SCHEMA_CHECK_TIMEOUT_MS, compileTimeoutMs = SCHEMA_COMPILE_TIMEOUT_MS): Promise<ConfigCheckResult> {
   const saved = checkTemplateForSave(raw);
   if (!saved.ok) return saved;
   const { template } = saved;
   const job: SchemaJob = template.parameters.flatMap((parameter, index) => (parameter.type === 'json' && parameter.schema !== undefined ? [{ index, parameter }] : []));
   const names = Object.fromEntries(template.conditions.map((condition) => [condition.id, condition.name]));
-  const { invalid, mismatches } = job.length === 0 ? { invalid: [], mismatches: [] } : await schemaPhase(job, names, timeoutMs);
+  const { invalid, mismatches } = job.length === 0 ? { invalid: [], mismatches: [] } : await schemaPhase(job, names, timeoutMs, compileTimeoutMs);
   if (invalid.length > 0) return { ok: false, problems: invalid };
   const problems = [...checkTemplateForPublish(template), ...mismatches];
   return problems.length > 0 ? { ok: false, problems } : saved;

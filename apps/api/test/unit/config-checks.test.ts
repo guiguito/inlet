@@ -318,20 +318,36 @@ describe('publish checks (RC-015, RC-016, RC-021, RC-022, RC-052)', () => {
     expect(elapsed).toBeLessThan(2000);
   });
 
-  it('validates within two seconds a template of the heaviest schemas it can hold (section 11)', async () => {
-    // 128 distinct schemas of about 15 KiB, never compiled before: the most compile work 2 MiB can carry.
-    const parameters = Array.from({ length: 128 }, (_, index) => {
-      const properties = Object.fromEntries(Array.from({ length: 260 }, (_, at) => [`prop_${at}_${index}`, { type: 'integer', minimum: 0, maximum: 7_000 + index }]));
-      return param(`heavy_${index}`, { type: 'json', schema: { type: 'object', properties, required: [`prop_0_${index}`] }, default: { [`prop_0_${index}`]: 1 } });
-    });
-    const value = template(parameters);
-    expect(Buffer.byteLength(JSON.stringify(parameters[0]!.schema))).toBeGreaterThan(15_000);
+  // 128 distinct schemas of about 15 KiB, never compiled before: the most compile work 2 MiB can carry.
+  // `offset` makes a set of schemas new to the worker's cache of compiled ones, at the same size.
+  const heaviest = (offset: number) => template(Array.from({ length: 128 }, (_, index) => {
+    const properties = Object.fromEntries(Array.from({ length: 260 }, (_, at) => [`prop_${at}_${index}`, { type: 'integer', minimum: 0, maximum: 7_000 + offset + index }]));
+    return param(`heavy_${index}`, { type: 'json', schema: { type: 'object', properties, required: [`prop_0_${index}`] }, default: { [`prop_0_${index}`]: 1 } });
+  }));
+
+  it('accepts a template of the heaviest schemas it can hold, however long they take to compile (RC-015, section 11)', async () => {
+    const value = heaviest(0);
+    expect(Buffer.byteLength(JSON.stringify(value.parameters[0]!.schema))).toBeGreaterThan(15_000);
     const started = performance.now();
     const result = await publish(value);
     const elapsed = performance.now() - started;
     console.log(`publish check of 128 distinct 15 KiB schemas, cold: ${elapsed.toFixed(0)} ms`);
     expect(problems(result)).toEqual([]);
-    expect(elapsed).toBeLessThan(2000);
+    // About 1.2 s on a laptop and 2.2 s on a CI runner (DECISIONS 34.12); this bound catches a
+    // tenfold regression without depending on the host.
+    expect(elapsed).toBeLessThan(10_000);
+  });
+
+  it('counts only the checking of values toward the time limit, never the compiling (RC-015)', async () => {
+    // A limit far below the second the compiling takes: the values themselves check in microseconds.
+    expect(problems(await checkConfigPublish(heaviest(1_000), 50))).toEqual([]);
+  });
+
+  it('still refuses a schema whose compiling never ends, naming its parameter (RC-015)', async () => {
+    // A compile limit of 1 ms, which no 15 KiB schema meets: the guard against a compile that never ends.
+    expect(problems(await checkConfigPublish(heaviest(2_000), SCHEMA_CHECK_TIMEOUT_MS, 1))).toEqual([
+      expect.objectContaining({ code: 'schema_too_slow', path: 'parameters.0.schema', parameter: 'heavy_0', message: expect.stringMatching(/^Checking the schema of "heavy_0" took longer than 0.001 seconds/) }),
+    ]);
   });
 });
 

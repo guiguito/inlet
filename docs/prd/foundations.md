@@ -5,7 +5,7 @@
 **Product:** Inlet, the self-hosted place your applications report to
 **Language:** English
 **Notion page:** https://app.notion.com/p/3ddd33dfffca813c87daf018eec9aeb4
-**Last revised:** September 27, 2026 (Release 9 built: the status line and section 28 amended). Earlier the same day (Release 8 built before Release 9 at the owner's request, and built: the status line and sections 17 and 28 amended). Earlier, on September 26, 2026 (Release 9 — Remote Config: FR-082, FR-088, FD-001, FD-002, FD-004, FD-010, FD-012, FD-014, FD-015, FD-016, FD-030, FD-032, FD-033 and sections 1, 6, 9, 10.6, 11, 12.1, 12.2, 15, 17, 20.2, 23 and 28 amended). Earlier the same day (Release 8 — analytics events stored in ClickHouse, an optional bundled service: FD-033 added; FD-005, FD-009, FD-015, FD-032, FR-027 and sections 1, 3, 4, 6, 9.6, 11, 12.3, 12.6, 13, 14, 15, 16, 17, 18 and 28 amended). Previously September 24, 2026 (Release 8 — UX Analytics: FD-016 and FD-032 added; FR-082, FR-087, FR-088, FR-171, FD-002, FD-010, FD-012, FD-014, FD-015, FD-030 and sections 1, 6, 9, 11, 12.1, 12.2, 12.3, 13, 15, 17, 18, 20.2, 20.5, 23 and 28 amended for the analytics capability and the shared SDK identity)
+**Last revised:** September 28, 2026 (sections 20.1 and 20.3: the name, the descriptor and the value proposition describe the platform, not its first capability). Earlier on September 27, 2026 (Release 9 built: the status line and section 28 amended). Earlier the same day (Release 8 built before Release 9 at the owner's request, and built: the status line and sections 17 and 28 amended). Earlier, on September 26, 2026 (Release 9 — Remote Config: FR-082, FR-088, FD-001, FD-002, FD-004, FD-010, FD-012, FD-014, FD-015, FD-016, FD-030, FD-032, FD-033 and sections 1, 6, 9, 10.6, 11, 12.1, 12.2, 15, 17, 20.2, 23 and 28 amended). Earlier the same day (Release 8 — analytics events stored in ClickHouse, an optional bundled service: FD-033 added; FD-005, FD-009, FD-015, FD-032, FR-027 and sections 1, 3, 4, 6, 9.6, 11, 12.3, 12.6, 13, 14, 15, 16, 17, 18 and 28 amended). Previously September 24, 2026 (Release 8 — UX Analytics: FD-016 and FD-032 added; FR-082, FR-087, FR-088, FR-171, FD-002, FD-010, FD-012, FD-014, FD-015, FD-030 and sections 1, 6, 9, 11, 12.1, 12.2, 12.3, 13, 15, 17, 18, 20.2, 20.5, 23 and 28 amended for the analytics capability and the shared SDK identity)
 **Capability PRDs:** Feedback Collection · Crash Reports · UX Analytics · Remote Config — subpages of this page
 **Repository mirror:** `docs/prd/foundations.md`
 
@@ -359,9 +359,10 @@ Inlet is successful as a platform when a second capability ships without a new c
 
 ## 20. Brand
 ### 20.1 Name
-**Inlet.** An inlet is where water flows in. Feedback flows from any client application into one place you own. The name is a noun, five letters, and works unchanged as the product name, CLI command, npm package, and MCP server name. "Feedback Collector" remains the plain-language descriptor used in documentation and search.
+**Inlet.** An inlet is where water flows in. What your applications report — what users say, what breaks, what they do — flows from any client into one place you own, and remote config flows back out. The name is a noun, five letters, and works unchanged as the product name, CLI command, npm package, and MCP server name. "Feedback Collector", the descriptor of Releases 1 to 5, when feedback was the only capability, survives in older documents and the repository's working name.
 - Product name: Inlet
-- Descriptor: the self-hosted feedback collector
+- Descriptor: the self-hosted place your apps report to
+- Tagline: Hear it. Catch it. Count it. Change it. — one verb for each module: feedback, crash reports, analytics, remote config
 - Package and CLI: `inlet`
 - MCP server: `inlet-mcp`
 - Capitalization: "Inlet" in prose, `inlet` in code and commands, never "INLET" or "InLet".
@@ -370,9 +371,9 @@ Inlet is successful as a platform when a second capability ships without a new c
 - **Yours.** Self-hosted by default, your data, your server, your AI agent. No vendor lock-in, no hidden telemetry.
 - **Unsurveilled.** No respondent account, no device fingerprint, no location finer than a country, and no persistent identity the integrator did not ask for: installing the analytics module, or the config module with its installation ID, is that request. Usage profiles exist only where the integrator installs analytics and its users consent. Ask for an email only when you mean it.
 ### 20.3 Value Proposition
-Put a feedback form in any app in an afternoon, then read what users actually said, screenshots included, from your own server or your AI agent.
-**Audience:** developers and small product teams who want feedback inside their own product without adopting a SaaS analytics suite.
-**Differentiators:** one-call submission with screenshots, versioned forms that never break historical answers, and MCP access so an agent can read and manage feedback directly.
+One self-hosted server and one SDK for your apps' feedback, crash reports, analytics and remote config, joined per user: the feedback a person sends, the crash they hit and what they did before it sit on one page, and the fix that cannot wait for a release is a config change you review, publish and roll back. Your coding agent can read and act on all of it.
+**Audience:** developers and small product teams who want feedback, crash reports, analytics and remote config inside their own product without four vendors, four SDKs and a third party holding their users' data.
+**Differentiators:** one identity across the four modules; self-hosted, with everything but analytics on PostgreSQL alone; exact numbers, never sampled; versioned forms and reviewed, versioned config that never break what was collected or shipped; and MCP access so an agent can read and act on everything the interface can.
 ### 20.4 Logo Brief
 *Revised September 9, 2026. The first mark was a rounded rectangle with a gap in its left edge and an arrow entering through it. It was replaced for two reasons: an arrow entering a box is the universal sign-in glyph and was near-identical to a stock icon library's, and the gap — the only part carrying the idea — closed up below 20 pixels, which is exactly where a favicon lives.*
 - **Mark:** the depth contours of a bay narrowing inland — three nested lines that stop at the open mouth. The inlet is the shape the contours describe, not an object placed inside a frame.

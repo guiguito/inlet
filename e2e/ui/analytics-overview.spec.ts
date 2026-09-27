@@ -213,3 +213,21 @@ test('the Overview says why sessions are empty, words figures it cannot compare,
   // The Overview has no interval: it suggests a shorter range only.
   await expect(page.getByTestId('overview-error')).toHaveText('The Overview took too long or needed too much memory; choose a shorter range.');
 });
+
+test('the Overview writes a one-point change in the singular, and the top events time as the interface writes dates', async ({ page, request }) => {
+  const { databaseId } = await createDatabase(request, 'Analytics overview wording');
+  const base = answer();
+  const body = answer({
+    figures: { ...base.figures, stickiness: { value: 0.21, previous: 0.2, covered: base.range } },
+    topEvents: { computedAt: '2026-09-27T22:33:00.000Z', events: [] },
+  });
+  await page.route(`**/v1/analytics-databases/${databaseId}/overview*`, (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) }),
+  );
+  await signIn(page);
+  await page.goto(`/analytics-databases/${databaseId}`);
+  const change = page.getByTestId('figure').filter({ has: page.getByText('Stickiness', { exact: true }) }).getByTestId('figure-change');
+  await expect(change).toHaveText('Up 1 point from 20%');
+  // As every other date of the interface: "Sep 28, 2026, 12:33 AM", never "9/28/2026, 12:33:00 AM".
+  await expect(page.getByText(/The ten events with the most occurrences/)).toContainText(/as of Sep 28, 2026, 12:33\sAM\./);
+});

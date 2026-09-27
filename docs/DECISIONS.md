@@ -6475,3 +6475,36 @@ place at once.
 `src`), and upgrading the nine fake-server claims to the real server, which cannot be made to
 answer a `429` with `Retry-After: 120` or a health probe without `config` on demand.
 
+
+### 34.12 Only the values count toward a publish's two seconds (September 28, 2026)
+
+The first CI run after Release 9 refused the heaviest template a publish can carry, 128 distinct
+schemas of about 15 KiB: the schema phase took 2,177 ms on the GitHub runner against the 1.2 to
+1.3 seconds 34.1 measured on a laptop, and the limit of two seconds covered the whole phase. That
+was a product defect, not a slow test: RC-015 limits "values [that] take more than two seconds to
+check against their schemas", and 34.1 had named the constant to raise if a slower machine
+refused a legitimate template.
+
+**The limit now times the checking of values only.** The worker posts, for each json parameter, a
+message as it starts checking and compiling the schema and another as it starts checking the
+values, each carrying the time its checking of values has taken so far, measured in the worker.
+The main thread arms its timer for what is left of the two seconds while values are checked, and
+for `SCHEMA_COMPILE_TIMEOUT_MS` (5,000) per schema otherwise, a guard against a schema that never
+finishes; past either it terminates the worker and refuses with `schema_too_slow`, "Checking the
+values of …" or "Checking the schema of …". Measuring on the main thread, as the first attempt did,
+added a message's latency to every parameter: 128 of them used up a 50 ms test limit on their own.
+
+**Each validator runs once on `null` before the values are timed.** The worker's own measure first
+put 430 ms into checking 128 one-key values: V8 compiles a function the first time it runs, and
+Ajv's generated validators for 260 properties are large, so compiling showed up as validation. One
+call on `null`, which no keyword recurses into, moves that cost into the compile phase; the 128
+values then check in under a millisecond. A schema whose `anyOf` branches explode on any value,
+`null` included (34.1's `$defs` a0 to a40), is caught by the five-second guard instead of the
+two-second limit, and still refused naming its parameter.
+
+Tests: a 50 ms limit accepts the heaviest template (it failed before the change, refused at
+parameter 14 with the main-thread measure and at once with the whole-phase one); a 1 ms compile
+limit refuses it at `heavy_0` with the schema message; the exponential schema is still refused at
+two seconds while the main thread's timer keeps firing. The wall-clock test of the heaviest
+template now asserts under ten seconds, a bound for a tenfold regression that no runner's speed
+decides, and logs its time. PRD: RC-015 and section 11 say what the two seconds cover.

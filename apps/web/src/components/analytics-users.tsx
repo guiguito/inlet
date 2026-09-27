@@ -26,6 +26,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { bySession } from '@/lib/analytics-format';
 import { formatDateTime, pluralize } from '@/lib/format';
 
 /**
@@ -545,17 +546,6 @@ function LinksCards({ links }: { links: ProfileLinks }) {
 }
 
 // --- The event feed (AN-123) -----------------------------------------------------------------------------
-
-/** Consecutive events of one session, as the feed lists them newest first. */
-function bySession(events: ProfileEvent[]): { sessionId: string | null; events: ProfileEvent[] }[] {
-  const groups: { sessionId: string | null; events: ProfileEvent[] }[] = [];
-  for (const event of events) {
-    const last = groups.at(-1);
-    if (last && last.sessionId === event.sessionId) last.events.push(event);
-    else groups.push({ sessionId: event.sessionId, events: [event] });
-  }
-  return groups;
-}
 
 function EventFeed({ databaseId, subject, unreachable }: { databaseId: string; subject: ProfileSubject; unreachable: string }) {
   const [filters, setFilters] = useState<{ name: string; from: string; to: string }>({ name: '', from: '', to: '' });
