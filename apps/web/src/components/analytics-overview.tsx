@@ -8,6 +8,8 @@ import { queryErrorSentence, todayInZone } from '@/components/analytics-events';
 import { CountryAttribution } from '@/components/country-attribution';
 import { EmptyState } from '@/components/empty-state';
 import { TrendChart } from '@/components/trend-chart';
+import { changeText } from '@/lib/analytics-format';
+import { formatDateTime } from '@/lib/format';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -40,25 +42,6 @@ const DEFAULT_QUERY: AnalyticsOverviewQuery = { range: { preset: 'last30Days' },
 
 const integer = (value: number) => value.toLocaleString();
 const percent = (value: number) => `${(value * 100).toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
-
-/**
- * AN-141: a count's change in percent, a share's in points; "not available" when the previous
- * period begins before the oldest event kept.
- */
-export function changeText(figure: Pick<AnalyticsFigure, 'value' | 'previous'>, kind: 'count' | 'ratio'): string {
-  const { value, previous } = figure;
-  if (previous === null) return 'Change not available';
-  if (value === null) return `No data now, ${kind === 'ratio' ? percent(previous) : integer(previous)} before`;
-  if (kind === 'ratio') {
-    const points = (value - previous) * 100;
-    if (Math.abs(points) < 0.05) return `No change from ${percent(previous)}`;
-    return `${points > 0 ? 'Up' : 'Down'} ${Math.abs(points).toLocaleString(undefined, { maximumFractionDigits: 1 })} points from ${percent(previous)}`;
-  }
-  if (value === previous) return `No change from ${integer(previous)}`;
-  if (previous === 0) return `Up from 0`;
-  const change = ((value - previous) / previous) * 100;
-  return `${change > 0 ? 'Up' : 'Down'} ${Math.abs(change).toLocaleString(undefined, { maximumFractionDigits: 1 })}% from ${integer(previous)}`;
-}
 
 function rangeLabel(range: AnalyticsRange): string {
   return 'preset' in range ? PRESET_LABELS[range.preset] : `${range.from} to ${range.to}`;
@@ -407,7 +390,7 @@ function TopEvents({ data }: { data: AnalyticsOverview }) {
         <CardTitle className="text-base">Top events, last 24 hours</CardTitle>
         <CardDescription>
           The ten events with the most occurrences, hidden ones left out
-          {data.topEvents.computedAt ? `, as of ${new Date(data.topEvents.computedAt).toLocaleString()}` : ''}.
+          {data.topEvents.computedAt ? `, as of ${formatDateTime(data.topEvents.computedAt)}` : ''}.
         </CardDescription>
       </CardHeader>
       <CardContent>

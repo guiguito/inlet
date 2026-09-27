@@ -2,7 +2,7 @@
   "name": "inlet",
   "version": "0.1.0",
   "private": true,
-  "description": "Inlet \u2014 the self-hosted feedback collector",
+  "description": "Inlet \u2014 the self-hosted place your apps report to: feedback, crash reports, analytics and remote config",
   "license": "MIT",
   "author": "Guilhem Duch\u00e9",
   "repository": {
@@ -21,7 +21,11 @@
     "nps",
     "fastify",
     "postgres",
-    "mcp"
+    "mcp",
+    "crash-reporting",
+    "analytics",
+    "remote-config",
+    "feature-flags"
   ],
   "type": "module",
   "engines": {

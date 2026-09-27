@@ -19,6 +19,7 @@ import {
   type AnalyticsSplit,
 } from '@inlet/shared';
 import { api, ApiError, type AnalyticsCatalogEntry, type AnalyticsTrendDefinition } from '@/lib/api';
+import { formatDateTime } from '@/lib/format';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { EmptyState } from '@/components/empty-state';
 import { CountryAttribution } from '@/components/country-attribution';
@@ -216,7 +217,7 @@ function Catalog({ databaseId, onOpen, onDetails }: { databaseId: string; onOpen
           <CardTitle>Events</CardTitle>
           <CardDescription>
             Every event name this database has received. Open one to chart it.
-            {computedAt ? ` Last seen and the 24-hour figures as of ${new Date(computedAt).toLocaleString()}.` : ' The 24-hour figures appear within five minutes of the first events.'}
+            {computedAt ? ` Last seen and the 24-hour figures as of ${formatDateTime(computedAt)}.` : ' The 24-hour figures appear within five minutes of the first events.'}
           </CardDescription>
         </div>
         <div className="flex gap-2">

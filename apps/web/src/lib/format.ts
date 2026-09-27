@@ -34,5 +34,5 @@ export function formatBytes(bytes: number): string {
 
 /** Sentence-case count with a correctly pluralized noun. */
 export function pluralize(count: number, singular: string, plural = `${singular}s`): string {
-  return `${count} ${count === 1 ? singular : plural}`;
+  return `${count.toLocaleString()} ${count === 1 ? singular : plural}`;
 }
