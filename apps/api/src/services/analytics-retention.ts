@@ -28,12 +28,19 @@ const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
 
 /**
- * Every event-store table keyed by the database key (0001_events.sql, 0002_version_first.sql).
- * `events` is partitioned by key and ISO week (its rollup projections live in its parts), the
- * others by key alone, so removing a database drops one partition of each. A test checks this
- * list against every table of the event store that has a `database_key` column.
+ * Every event-store table keyed by the database key (0001_events.sql, 0002_version_first.sql,
+ * 0004_session_rollup_installation_index.sql). `events` and `session_rollup` are partitioned by
+ * key and ISO week (the projections live in the events' parts), the others by key alone, so
+ * removing a database drops every partition of the key in each. A test checks this list against
+ * every table of the event store that has a `database_key` column.
  */
-export const KEYED_TABLES = ['events', 'installations', 'installation_users', 'installation_first', 'user_first', 'version_first'] as const;
+export const KEYED_TABLES = ['events', 'installations', 'installation_users', 'installation_first', 'user_first', 'version_first', 'installation_index', 'session_rollup'] as const;
+
+/**
+ * The tables partitioned by database key and ISO week, with the same partition IDs, whose weeks
+ * retention drops together (AN-164): the events, and the session rollup summarising them (AN-035).
+ */
+export const WEEKLY_TABLES = ['events', 'session_rollup'] as const;
 
 /**
  * The PostgreSQL tables keyed by the database key, which carry no foreign key to the database
@@ -190,7 +197,11 @@ async function retainDatabase(ctx: AppContext, store: EventStore, databaseId: st
   if (plan === null || plan.plan.drops.length === 0) return 0;
   if (plan.plan.keptFrom !== null) raiseAcceptanceFloor(plan.key, plan.plan.keptFrom);
   for (const week of plan.plan.drops) {
-    await store.command(`ALTER TABLE events DROP PARTITION ID {partition:String}`, { partition: week.partition }, DROP_SETTINGS);
+    // The rollup's week first: a failure between the two leaves the week in `events`, which the
+    // next pass plans and drops again, never a rollup week holding what the events no longer do.
+    for (const table of [...WEEKLY_TABLES].reverse()) {
+      await store.command(`ALTER TABLE ${table} DROP PARTITION ID {partition:String}`, { partition: week.partition }, DROP_SETTINGS);
+    }
   }
   return plan.plan.drops.length;
 }
@@ -256,7 +267,7 @@ export async function mutationRunning(store: EventStore, tables: readonly string
 
 // --- The daily pruning (AN-165) --------------------------------------------------------------------
 
-const PRUNE_TABLES = ['installations', 'installation_users', 'installation_first', 'user_first'] as const;
+const PRUNE_TABLES = ['installations', 'installation_index', 'installation_users', 'installation_first', 'user_first'] as const;
 
 export type PruneStep = 'waiting' | 'submitted' | 'done';
 
@@ -265,7 +276,8 @@ export type PruneStep = 'waiting' | 'submitted' | 'done';
  * without waiting, whose completion the next call reads from the rows left:
  *
  * 1. the installation records whose last event of any platform (`last_event`, AN-031) is
- *    older than the maximum age, whether or not the cap already removed their events;
+ *    older than the maximum age, whether or not the cap already removed their events, from
+ *    `installations` and from `installation_index`, which holds the same `last_event` (0004);
  * 2. once none is left, the identity links and first occurrences of installations that no
  *    longer have a record (which also clears what an erasure left, piece 10); ingest's
  *    install-time cache is evicted first, so a pruned installation that sends again starts
@@ -288,12 +300,17 @@ export async function pruneDatabase(ctx: AppContext, store: EventStore, database
     return 'waiting';
   }
   const cutoff = eventStoreTime(nowMs - effectiveStorage(database, ctx.env.limits).maxAgeDays * DAY_MS);
-  const stale = `installation_id IN (SELECT installation_id FROM installations WHERE database_key = {key:UInt32}
-                                      GROUP BY installation_id HAVING max(last_event) < {cutoff:DateTime64(3, 'UTC')})`;
-  if ((await countWhere(store, 'installations', stale, { key, cutoff })) > 0) {
-    await store.command(`DELETE FROM installations WHERE database_key = {key:UInt32} AND ${stale}`, { key, cutoff }, SUBMIT_SETTINGS);
-    return 'submitted';
+  // Each table by its own `last_event`, the same values from the same rows, so both lose the same
+  // installations in the same pass.
+  let records = false;
+  for (const table of ['installations', 'installation_index'] as const) {
+    const stale = `installation_id IN (SELECT installation_id FROM ${table} WHERE database_key = {key:UInt32}
+                                        GROUP BY installation_id HAVING max(last_event) < {cutoff:DateTime64(3, 'UTC')})`;
+    if ((await countWhere(store, table, stale, { key, cutoff })) === 0) continue;
+    await store.command(`DELETE FROM ${table} WHERE database_key = {key:UInt32} AND ${stale}`, { key, cutoff }, SUBMIT_SETTINGS);
+    records = true;
   }
+  if (records) return 'submitted';
   evictInstallations(key);
   const unrecorded = `installation_id NOT IN (SELECT installation_id FROM installations WHERE database_key = {key:UInt32})`;
   let submitted = false;
@@ -421,7 +438,8 @@ export async function sweepOrphans(ctx: AppContext): Promise<{ keys: number; nam
     `SELECT database_key AS k, event_name_id AS id FROM (
        SELECT database_key, event_name_id FROM events GROUP BY database_key, event_name_id
        UNION DISTINCT SELECT database_key, event_name_id FROM installation_first WHERE event_name_id != 0 GROUP BY database_key, event_name_id
-       UNION DISTINCT SELECT database_key, event_name_id FROM user_first WHERE event_name_id != 0 GROUP BY database_key, event_name_id)`,
+       UNION DISTINCT SELECT database_key, event_name_id FROM user_first WHERE event_name_id != 0 GROUP BY database_key, event_name_id
+       UNION DISTINCT SELECT database_key, event_name_id FROM session_rollup GROUP BY database_key, event_name_id)`,
   );
   const storeKeys = keyRows.map((row) => Number(row.k)).filter((key) => key > 0);
 

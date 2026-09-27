@@ -15,6 +15,7 @@ import {
   type UserProfile,
 } from '@/lib/analytics-profiles';
 import { queryErrorSentence } from '@/components/analytics-events';
+import { CountryAttribution } from '@/components/country-attribution';
 import { EmptyState } from '@/components/empty-state';
 import { ERASE_PURPOSE, ErasePanel } from '@/components/erase-panel';
 import { Badge } from '@/components/ui/badge';
@@ -371,6 +372,7 @@ function ContextCard({ profile }: { profile: InstallationProfile }) {
       </CardHeader>
       <CardContent className="pt-0">
         <Pairs entries={[...dimensionEntries(profile.installation.latest), ['Install attribution', profile.installation.installAttribution]]} />
+        {profile.installation.latest.country ? <CountryAttribution className="mt-3" /> : null}
       </CardContent>
     </Card>
   );

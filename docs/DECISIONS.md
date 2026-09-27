@@ -2848,6 +2848,10 @@ budget; a funnel's steps over 14 days 1 to 2 s and its trend by day over 90 days
 - **A session table.** With one window, the events answer every question it served, and
   it would be one more table to erase and delete. A lifetime session count is what is
   lost.
+  *Reversed by measurement (33.12d):* at the reference density, grouping every `app_started` of
+  the Overview's range by session took 6.3 s and 4.7 GiB, and one grouped scan of the events 3.5 s,
+  against a 1 s budget for the whole Overview; `session_rollup` (an internal rollup, AN-035, not
+  AN-038's withdrawn session record) answers the same statement in about 0.3 s.
 - **The Small tier on 4 GB with analytics.** Against ClickHouse's own guidance; the
   deployment without the profile keeps it.
 - **ClickHouse started by the API inside the Inlet image.** About 150 MB more for every
@@ -5033,3 +5037,201 @@ the secret and the first Admin, the image built from the working tree):
 the Small host's 4 vCPU (only its memory and pools were applied, to a native process) and its own
 workload; an ingest p95 on an idle machine; more than one concurrent reader (the slots' fairness is
 covered by the suites, not measured at scale).
+
+### 33.12d The budgets 33.12c missed: connections, two internal rollups, and the Overview at once (piece 12d, September 27, 2026)
+
+33.12c found three budgets of PRD 9.5 missed or at risk: ingest beside the reads, the Overview, and
+the reads of every installation (cohorts, the recent list). This piece fixes each where 12c found
+the cause, proves every answer unchanged, and re-measures with 12c's harness at the same scale.
+
+**Ingest: 100 connections, a 100 ms flush wait** (`apps/api/src/db/clickhouse.ts`). Both clients
+now hold up to 100 sockets (`max_open_connections`), not the client's 10. Inserts in flight are the
+rate times the flush wait (about a quarter of a second), so 100 carries about 400 batches a second,
+ten times the budget's 40; the reader gets the same because ingest's duplicate and install-time
+lookups share it with the slots' long reads. Asynchronous inserts send
+`async_insert_busy_timeout_max_ms = 100` (the default 200); `wait_for_async_insert = 1` stays, so a
+`200` still means stored. Not operator settings: no host measured needs another value, and
+ClickHouse's own connection limits are in the thousands (DEPLOYMENT.md says what a managed
+ClickHouse or proxy must allow). An integration test runs thirty half-second statements on each
+client at once and fails at 10 sockets (1.5 s) where 100 take 0.6 s.
+
+**`session_rollup`** (ClickHouse migration 0004, AN-035). One row per database, ISO week, event
+name, session and installation: for a session's `app_started` of a device installation that is
+not a background event, the minimum of (received, effective time, local day, app, platform,
+environment, app version, `crashReporting`) over that week's rows; for its `session_crashed`, any
+platform, the row alone. Fed by a view from `events_ingest`, replays included, with a `min` state,
+so a duplicate or a replay changes nothing. The view cannot know which catalog ID is `app_started`,
+so `events_ingest` gained `session_event` (`none`, `started`, `crashed`), set by ingest from the name
+and by the erasure's replay from the resolved IDs; `events_mv` keeps the columns it was created
+with, so `events` does not store it. Partitioned like `events`, with the same partition IDs:
+retention drops the rollup's week before the events' (a failure in between leaves a week of events
+the next pass drops again, never rollup rows the events no longer hold); removal and the orphan
+sweep go through `KEYED_TABLES`; the erasure deletes the sessions of every installation it
+re-derives (`ERASED_TABLES`, through the targets table) and the replay rebuilds them; an event
+name's deletion and the sweep's name check include it (`NAME_TABLES`, now checked against every
+table with an `event_name_id`). *The Overview's sessions read the same whole weeks from both
+sources:* the rollup's grain is the week, so the events statement now reads the `app_started` of
+the ISO weeks holding the day before the range to the day after it (it read exactly those days),
+and a session's first `app_started` is the minimum of that tuple (it was an `argMin` keyed on the
+event ID too: a tie on both times now falls to the values, as 33.1 decided for installations).
+Both only widen the one-day clock margin to a week, which AN-043's "first `app_started` accepted"
+favours. *While an erasure is pending* the Overview reads the events (`ReadSkip.erasing`): the
+rollup keeps no received time to hide exactly the rows received before it, as every read already
+scans the events then. *Reading it:* the minimum of a tuple of strings over every session of 60
+days was 0.87 s (hash) to 1.2 s (in order) at 9.2 million sessions, so `rollupSessions` takes the
+row itself for a session with one row over the weeks read (almost all) and aggregates only the
+others (`count() > 1`): 0.28 s, the same answer (checksums equal on the load data; the test below).
+
+**`installation_index`** (0004). The records of `installations` from the same rows by the same rules
+in plain `min`/`max` columns (`install` and `latest` the very tuples, element for element; the
+largest `install` a real event cannot reach, and `has_qualifying` 0, for an installation without a
+qualifying event). A state of `installations` is serialised row by row and must be deserialised
+to be merged; `indexRecords` (analytics-query.ts) takes the row of an installation that has one,
+aggregating only the others; the one-row and the other entries are separate subqueries of one
+statement, which must read one snapshot of the table (`enable_shared_storage_snapshot_in_query`,
+the default since ClickHouse 25.12, stated on every read: off, with the snapshots slowed by
+`merge_tree_storage_snapshot_sleep_ms` and an insert between them, a scratch table's entry was
+listed twice in 2 of 6 tries), and so must `rollupSessions`. The members of the install start over
+917,000 installations: `installations` 0.50 s; the index aggregated 0.39 s; `installations` with the same one-row path
+0.36 s (`finalizeAggregation` still deserialises); the index one-row path 0.09 s. Read by cohorts'
+install start (and so the Overview's new installations and D1, D7, D30), the Overview's shares and
+the recent list, whose first read orders the index by "seen" and whose second reads the page's 50
+rows from `installations` by ID (the `max(seen) OVER ()` of 1.3 GiB is gone: the first row's "seen"
+is the horizon). Pruned with `installations` in the same step, by its own `last_event`; erased,
+removed and swept as `installations`; truncated by the harness.
+
+**Not a table ordered by install day or by last seen**, as 33.12c proposed. An install day is the
+day of the qualifying event *received first*; a view sees one insert block and cannot know whether
+an earlier block exists, so a table ordered by install day holds a candidate row per block (per
+active day of every installation), and deciding which is the install needs every row of the
+installation, which is the scan this was to avoid; an installation ID is random, so looking the
+candidates up by ID touches every granule. Exact without ingest stamping each event with its install
+day, whose correction after an erasure of a shared installation's install event the worker would own.
+The same for last seen. Measured instead: the plain index read in the table's order is linear but
+cheap, within the budgets at five million installations (below). *If a larger database needs it:*
+ingest stamps the install day it already computes (it computes the install ages from it), the view
+orders by it, and the erasure worker writes the re-derived installations' rows itself.
+
+**The Overview at once.** Its seven event-store statements run concurrently inside its one slot
+(`allFinished`: every statement ends before the slot is released, the first failure then thrown).
+The slot (AN-205) bounds how many callers hold a share of the event store; the Overview is one
+caller's one answer, so running its statements side by side changes when that share is used, not
+how many use it. One statement went: new installations are the retention cohort's members per day
+(N = 0, the same `membersSql`). The shares filter the index rows by the week's active
+installations outside `indexRecords` (0.15 s against 0.30 s inside it). Sequential after the
+rollups: 2.1 s; concurrent: 1.0 s; with a merge of the daily active counts and the windows into
+one `GROUPING SETS ((local_day), ())` statement, 0.77 s, each statement with the slot's whole
+limits. Together they peaked at about 1.9 GB at both 917,000 and five million installations (the
+largest, that merged statement, 0.9 GB).
+
+*The slot's share, divided (the orchestrator's decision, verification of 12d).* Each statement at
+the slot's whole limits made one Overview up to seven queries' worth of memory and threads, beyond
+the operator's per-query limits (FD-032) and, with three slots busy, the Small host's 3 GB
+ceiling. So each statement now gets a seventh of the slot's memory and threads, at least one
+thread (`shareOfSlot`), and spills its aggregation to disk past half of it (`withSpill`). Measured
+by bisecting `max_memory_usage` on a seed of 16.8 million events over 35 days, 12,000 active
+installations a day (about the Small workload's), one thread: the merged statement needed 156 MiB,
+over a seventh of the default 768 MiB, where the two statements it merged needed 60 and 56 MiB
+(GROUPING SETS computes every count in every set: a window's set for each day, a 60-day set for
+the total row), so they are two statements again; the sessions from the rollup 54 MiB; from the
+events while an erasure is pending 514 MiB, which spilling answers within a seventh (712,830
+sessions either way, 112 ms against 43). The whole Overview then answers identically at the
+default 768 MiB, and down to a slot of about 310 MiB (453 MiB while an erasure is pending). The
+cost is time: with a thread a statement, its median was 242 ms against 123 ms with the whole
+limits each (1,354 against 722 ms while an erasure is pending), so the 1 s budget at the reference
+workload, already at risk below, is further from it unless the operator gives a query seven
+threads or more (`INLET_ANALYTICS_QUERY_THREADS`). At the reference density, the largest
+statement's 0.9 GB was the merged one; split, each half was about 0.55 GB, within a seventh of
+8 GB (1.14 GB). The response header's `memory_usage` is not the peak (the events' sessions
+statement reported 4 MiB and failed at a 32 MiB limit): peaks here are bisected limits.
+
+**Proof that nothing changed** (`test/integration/analytics-rollups.test.ts`, a randomised database
+in America/New_York stored through ingest: 24 device installations over five weeks, sessions with
+and without a crash module, a second `app_started` minutes or a day later with another version,
+ties in one batch, a session across a local Sunday midnight, `session_crashed` at once, days late or
+from a backend, a background `app_started`, a server installation's, one without a session, a crash
+naming no session, an ephemeral installation and one with only background events). The rollup and
+the events give the same sessions (day, version, crash module, crashed) over three windows with and
+without a platform filter; the index gives every column of `installations`; the Overview answers the
+same figures, crash-free sessions and shares from the rollups and from the events; all of it again
+after every batch is sent twice (replays), after an erasure of a user who shares an installation and
+of an installation (the events-based read while pending; the shared installation re-derived),
+after retention drops weeks, after the orphan sweep and the name deletion remove an unknown ID's
+rows, after the pruning; and the install cohort's sizes per week equal `installations`' install
+days. Reading `max` for `min` fails five of the nine for the sessions, and the cohort sizes for the
+install members. The Overview suites, piece 8's
+cohort reference (D1, D7, D30) and Appendix B.6's cases pass unchanged.
+
+**Measured** as 33.12c did, on the same laptop and seed shape (a ClickHouse of its own, 10 GB, the
+API at 4 threads and 8 GB a query): **324 million events over 33 days, 10 million a day**. This
+machine was worse than for 12c: another workload kept 27 to 30 GB of its 28 to 31 GB of swap in use
+and load averages of 6 to 20 throughout, and with no ingest at all ClickHouse's writes of a few
+thousand rows of its own log tables took up to 1.3 s and one merge of 8,000 rows 12.6 s. "Before"
+is the build before this piece (git `56fa9df`, built in a scratch worktree) on the same data; the
+seed script now sets `session_event` and merges the two new tables, and the harness is unchanged.
+
+| Budgeted read (budget) | Before, idle p50 / p95 | After, idle p50 / p95 | After, during ingest p50 / p95 |
+| --- | --- | --- | --- |
+| Overview (1,000) | 8,960 / 10,090 | **718 / 918** | 996 / 1,574 |
+| Cohort, 12 weekly (2,000) | 776 / 784 | 291 / 303 | 429 / 5,466 |
+| Cohort, 12 monthly (3,000) | 805 / 818 | 332 / 344 | 409 / 1,495 |
+| Recent installations (1,000) | 466 / 529 | 79 / 93 | 139 / 162 |
+| Profile prefix search (1,000) | 83 / 89 | 76 / 81 | 86 / 99 |
+| Profile and a page of its events (300) | 122 / 151 | 88 / 110 | 112 / 1,236 |
+| Funnel steps, 14 days (3,000) | 945 / 1,039 | 806 / 848 | 1,007 / 2,437 |
+| Funnel trend by day, 90 days (10,000) | 2,628 / 2,991 | 2,260 / 2,445 | 3,316 / 10,250 |
+| Erasure preview of a user ID (10,000) | 908 / 948 | 826 / 838 | 934 / 1,000 |
+
+The other rows moved with the machine only (trends 169 to 553 ms idle, the live feed 1 to 2 ms);
+their reads did not change. **Ingest beside the reads** (15 minutes, the same open loop): all 35,999
+batches answered 200, 1,968 events a second accepted, **p50 166 ms, p95 8.6 s**, p99 14.7 s, at most
+712 batches in flight; 12c: 4,092 timeouts, p50 823 ms, p95 51 s. **Ingest alone** (10 minutes):
+p50 129 ms, p95 5.6 s at 100 ms; p50 206 ms, p95 5.6 s at the default 200 ms, so the shorter wait
+is kept and the tail is not it. In `system.query_log` the slow inserts spent their time waiting,
+not computing (under a thousandth of their wall time on a CPU), in bursts of a minute during which parts of 200
+rows took 1 to 3 s to write whatever the reads did: this machine's swap, which the reference node
+must not have. ClickHouse's memory during the run: mean 3.6 GB, max 7.4 GB.
+
+**At five million installations** (4,025,000 older installations added with an event each on a day
+40 to 390 days ago, those weeks then dropped as retention would, so the records outlive their events
+as a 13-month database's do; 4,945,886 installations, the events unchanged), idle:
+
+| Read (budget) | Before p50 / p95 | After p50 / p95 |
+| --- | --- | --- |
+| Overview (1,000) | 28,016 / 34,549 | 1,529 / 1,650 |
+| Cohort, 12 weekly (2,000) | 2,946 / 3,237 | **895 / 1,100** |
+| Cohort, 12 monthly (3,000) | 3,107 / 4,882 | **1,211 / 1,548** |
+| Recent installations (1,000) | 16,618 / 17,179 | **225 / 280** |
+| Profile prefix search (1,000) | 466 / 695 | 500 / 675 |
+
+(load averages 8 to 16 during both). Cohorts and the recent list are within budget at five million.
+**The Overview is not**: about 8 CPU-seconds of statements (the retention cohort 2.4, sessions 2.0,
+the active figures 1.9, shares 1.1, the last hour 0.6) spread over this machine's contended cores.
+
+**Storage**: `session_rollup` 42 bytes a row, 9.2 million rows for 33 days, about 1.2 bytes an event
+(the 50-byte budget holds it: `events` is 43.9); `installation_index` 63 bytes a row at 917,000
+installations, 55 at five million (`installations` 82 and 65).
+
+**Extrapolated to the reference workload** (8 vCPU of its own, 13 months, about five million
+installations): cohorts and the recent list as measured at five million, within budget; ingest's
+p50 within the 300 ms, its p95 a matter of the host's disk, which this laptop could not show; the
+Overview reads 60 days where this seed held 33, so its sessions, active figures and returns roughly
+double, and the retention members grow with installations: about 1.5 to 2 s on this laptop, so
+**the 1 s budget is likely missed** unless the reference node's eight cores are faster than this
+contended laptop by that much. These Overview figures were measured with every statement at the
+slot's whole limits; divided since (above), its statements run on a thread each at the reference
+host's four threads a query, about twice as long on the small seed, so the budget is further off
+still unless the operator sets `INLET_ANALYTICS_QUERY_THREADS` to 7 or more. What it takes, in
+order: measure on the reference node (`scripts/analytics-load.mjs`, unchanged); if still over, an install day stamped at ingest (above)
+makes the members a range read, and the retention returns can be limited to days 1, 7 and 30; or
+the owner amends the budget (below).
+
+**PRD amendments for the orchestrator** (not applied here):
+
+- **AN-038** should read: "(Withdrawn September 26, 2026: sessions, sessions per app version and
+  crash-free sessions are computed from the `app_started` and `session_crashed` events of the
+  storage window (AN-043, AN-152), so no session record is kept; an internal rollup of those events
+  may be (AN-035).)"
+- **9.5**, only if the reference node also misses it: the Overview row "1 s" becomes "2 s", with the
+  note "the Overview's figures are several statements over 60 days and every installation installed
+  in them".

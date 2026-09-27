@@ -763,7 +763,16 @@ function eventRow(
     clock_corrected: candidate.warnings.some((warning) => warning.code === 'clock_corrected'),
     credential_id: extra.credentialId,
     is_replay: extra.replay,
+    session_event: sessionEventOf(event.name),
   };
+}
+
+/**
+ * The marker `session_rollup`'s view reads (0004): event names are catalog IDs the view cannot
+ * resolve, so ingest names the two standard events that make sessions (AN-043, AN-044, AN-152).
+ */
+export function sessionEventOf(name: string): 'started' | 'crashed' | 'none' {
+  return name === 'app_started' ? 'started' : name === 'session_crashed' ? 'crashed' : 'none';
 }
 
 // --- The catalog (AN-021, AN-022, AN-025, AN-034, AN-059) --------------------------------

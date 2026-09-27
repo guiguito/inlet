@@ -26,6 +26,7 @@ import {
   compileFilters,
   coverageOf,
   environmentDefault,
+  indexRecords,
   mondayOf,
   namedEventRows,
   oldestKeptDay,
@@ -307,7 +308,8 @@ function columnsOf(filter: AnalyticsFilter): readonly string[] {
  * start's rows; a statement reading it passes `membersSettings`.
  *
  * - The install (AN-031): the installation record's install day and install dimensions. It never
- *   moves.
+ *   moves. Read from `installation_index` (0004) through `indexRecords`, the same record in plain
+ *   columns, aggregated only where an installation has more than one row (DECISIONS 33.12d).
  * - The first event, or a named event without filters (AN-036): the first occurrence's day and
  *   dimensions, from `installation_first` or `user_first` (event-name ID 0 is any event of a
  *   device installation that is not a background event). A late event may lower it.
@@ -330,10 +332,8 @@ export function membersSql(args: Pick<CohortCountArgs, 'scope' | 'start' | 'unit
   let source: string;
   if (start.kind === 'install') {
     source = `SELECT installation_id AS unit, installation_id, i.day AS day, ${DIMENSIONS.map((name) => `i.${name} AS ${name}`).join(', ')}
-      FROM (SELECT installation_id, minIfMerge(install) AS i FROM installations
-            WHERE database_key = ${key} AND ${scope.skip.installations(p)}
-            GROUP BY installation_id
-            HAVING max(has_qualifying) = 1 AND max(installation_kind) = 'device' AND NOT max(ephemeral))`;
+      FROM (SELECT installation_id, install AS i FROM (${indexRecords(scope.databaseKey, scope.skip, p)})
+            WHERE has_qualifying = 1 AND installation_kind = 'device' AND NOT ephemeral)`;
   } else if (start.kind === 'firstSeen' || start.filters.length === 0) {
     const id = start.kind === 'firstSeen' ? 0 : start.id;
     if (id === null) return none;
@@ -372,8 +372,8 @@ export function membersSql(args: Pick<CohortCountArgs, 'scope' | 'start' | 'unit
  * The settings of a statement reading `membersSql` (DECISIONS 33.8, measured on 900,000
  * installations under the default 768 MiB):
  *
- * - For the install start, aggregation in the order `installations` is sorted in: the install
- *   state is a whole tuple of dimensions, and a hash table of every installation's peaked at about
+ * - For the install start, aggregation in the order `installation_index` is sorted in: the install
+ *   is a whole tuple of dimensions, and a hash table of every installation's peaked at about
  *   1.3 GiB, where reading in order holds one installation's at a time (about 240 MiB, and faster).
  *   The first-occurrence tables do better without it, their states being small (above).
  * - External aggregation past a quarter of the query's memory, so the (period, unit) pairs of a

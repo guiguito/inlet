@@ -292,7 +292,7 @@ describe('the project erasure (FD-033)', () => {
     // mutations still run (a merge-size limit of one byte stops merges only).
     for (const table of ERASED_TABLES) await store.command(`ALTER TABLE ${table} MODIFY SETTING max_bytes_to_merge_at_max_space_in_pool = 1`);
     try {
-      await send(h, db, db.a.id, [event({ installationId: INST1, userId: U }), event({ installationId: INST1, userId: U, name: 'app_started' })]);
+      await send(h, db, db.a.id, [event({ installationId: INST1, userId: U }), event({ installationId: INST1, userId: U, name: 'app_started', sessionId: randomUUID() })]);
       await send(h, db, db.a.id, [event({ installationId: OTHER })]);
       expect((await erase(h, db, { kind: 'installation', id: INST1.toUpperCase(), confirm: INST1.toUpperCase(), databases: [db.a.id] })).statusCode).toBe(200);
       const [pending] = await h.ctx.db.select().from(analyticsPendingErasures);
@@ -303,6 +303,9 @@ describe('the project erasure (FD-033)', () => {
       const masked = (table: string) =>
         count(h, `SELECT count() AS n FROM ${table} WHERE database_key = {key:UInt32} AND installation_id = '${INST1}' AND NOT _row_exists SETTINGS apply_deleted_mask = 0`, { key: db.a.key });
       expect(await masked('events')).toBe(2);
+      // The two internal rollups of 0004 (AN-035) carry their masked rows too.
+      expect(await masked('session_rollup')).toBe(1);
+      expect(await masked('installation_index')).toBeGreaterThan(0);
       // Before half the bound (15 of 30 days), the files are left to the merges.
       await runAnalyticsErasures(h.ctx, at + 14 * DAY_MS);
       await settle(h);
@@ -313,7 +316,7 @@ describe('the project erasure (FD-033)', () => {
       // erasure, which alone held the ID, goes.
       await runAnalyticsErasures(h.ctx, at + 29 * DAY_MS);
       await settle(h);
-      for (const table of ['events', 'installations', 'installation_users', 'installation_first']) expect(await masked(table), table).toBe(0);
+      for (const table of ['events', 'installations', 'installation_users', 'installation_first', 'installation_index', 'session_rollup']) expect(await masked(table), table).toBe(0);
       expect(await count(h, `SELECT count() AS n FROM events WHERE installation_id = '${INST1}' SETTINGS apply_deleted_mask = 0`)).toBe(0);
       expect(await count(h, `SELECT count() AS n FROM user_first WHERE user_id = '${U}' AND NOT _row_exists SETTINGS apply_deleted_mask = 0`)).toBe(0);
       expect(await runAnalyticsErasures(h.ctx, at + 29 * DAY_MS)).toBe(1);

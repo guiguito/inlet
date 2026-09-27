@@ -14,19 +14,22 @@ import {
   compileFilters,
   coverageOf,
   daysInRange,
+  indexRecords,
+  mondayOf,
   oldestKeptDay,
   readSkip,
   resolveEventNames,
   resolveRange,
   runAnalyticsQuery,
   todayIn,
+  withSpill,
   zonedMidnight,
   type Covered,
   type FilterScope,
   type ReadSkip,
   type ReadStore,
 } from './analytics-query.js';
-import { cohortCounts, membersSettings, membersSql } from './analytics-cohorts.js';
+import { cohortCounts } from './analytics-cohorts.js';
 
 /**
  * Insights → Overview (UX Analytics AN-140 to AN-144, AN-043 to AN-048, AN-107, AN-152;
@@ -103,7 +106,8 @@ export const RETENTION_DAYS = [1, 7, 30] as const;
 /**
  * The days either side of a range over which sessions' `app_started` are read: a session lasts
  * at most 24 hours (section 4), so two `app_started` of one session more than a day apart come
- * only from a client clock error.
+ * only from a client clock error. The read is widened to the whole ISO weeks those days fall in,
+ * the grain of `session_rollup` (0004), so the rollup and the events answer alike.
  */
 const SESSION_MARGIN_DAYS = 1;
 const HOUR_MS = 3_600_000;
@@ -189,13 +193,16 @@ export function activeRows(scope: FilterScope, filters: AnalyticsFilter[], p: Sq
 }
 
 /**
- * The installation records a new-installation count reads (AN-031, AN-047): the install start of
- * a cohort (piece 8's `membersSql`), device installations that are not ephemeral installed between
- * `from` and `to`, filtered by their install dimensions. Rows `(unit, day)`.
+ * The ISO weeks a range's sessions are read over: those of the day before it to the day after it
+ * (SESSION_MARGIN_DAYS). `session_rollup` keeps a session's first `app_started` per week, so the
+ * minimum over whole weeks is what both sources can give exactly.
  */
-function installedRows(scope: FilterScope, filters: AnalyticsFilter[], p: SqlParams, from: string, to: string): string {
-  return membersSql({ scope, start: { kind: 'install' }, unit: 'installation', filters, from, to }, p);
+export function sessionWeeks(from: string, to: string): { first: string; last: string } {
+  return { first: mondayOf(addDays(from, -SESSION_MARGIN_DAYS)), last: mondayOf(addDays(to, SESSION_MARGIN_DAYS)) };
 }
+
+/** The values of a session's first `app_started` (after the two times that order it, as 0001's "first"). */
+const SESSION_FIRST = 'f.3 AS day, f.4 AS app_id, f.5 AS platform, f.6 AS environment, f.7 AS app_version, f.8 AS crash_reporting';
 
 /**
  * AN-043, AN-046: sessions are the distinct session IDs of stored `app_started` events of device
@@ -205,41 +212,74 @@ function installedRows(scope: FilterScope, filters: AnalyticsFilter[], p: SqlPar
  * test the session's own dimensions, those of that first `app_started`. Rows:
  * `(session_id, day, app_version, crash_reporting)` for sessions whose day is in the window.
  *
- * Reused by piece 12 and the crash database's Releases tab, with `startedId` the database's
- * `app_started` name ID.
+ * Read from `session_rollup` (0004), an internal rollup (AN-035) holding about one row per session
+ * (`rollupSessions`), where grouping every `app_started` of the range by session
+ * took seconds and gigabytes at the reference workload (DECISIONS 33.12c); from the events while
+ * an erasure is pending, since the rollup keeps no received time to hide exactly the rows received
+ * before it (`ReadSkip.erasing`). Both read the same whole weeks (`sessionWeeks`) and take the same
+ * minimum, so they give the same sessions; a test compares them.
  */
 export function sessionsSource(scope: FilterScope, filters: AnalyticsFilter[], p: SqlParams, startedId: number | null, from: string, to: string): string {
+  const weeks = sessionWeeks(from, to);
+  const key = p.add(scope.databaseKey, 'UInt32');
   const started = startedId === null ? '0' : `event_name_id = ${p.add(startedId, 'UInt32')}`;
-  return `SELECT session_id, day, app_version, crash_reporting FROM (
-      SELECT session_id, f.1 AS day, f.2 AS app_id, f.3 AS platform, f.4 AS environment, f.5 AS app_version, f.6 AS crash_reporting
-      FROM (
-        SELECT session_id,
-               argMin((local_day, app_id, platform, environment, app_version, params['crashReporting'] = 'true'),
-                      (received_time, effective_time, event_id)) AS f
-        FROM events
-        WHERE database_key = ${p.add(scope.databaseKey, 'UInt32')}
-          AND ${started}
-          AND installation_kind = 'device' AND platform != 'server'
-          AND session_id IS NOT NULL
-          AND local_day BETWEEN ${p.add(addDays(from, -SESSION_MARGIN_DAYS), 'Date')} AND ${p.add(addDays(to, SESSION_MARGIN_DAYS), 'Date')}
-          AND ${scope.skip.events(p)}
-        GROUP BY session_id))
+  const first = p.add(weeks.first, 'Date');
+  const last = p.add(weeks.last, 'Date');
+  const perSession = scope.skip.erasing
+    ? `SELECT session_id, min((received_time, effective_time, local_day, app_id, platform, environment, app_version, params['crashReporting'] = 'true')) AS f
+       FROM events
+       WHERE database_key = ${key} AND ${started}
+         AND installation_kind = 'device' AND platform != 'server'
+         AND session_id IS NOT NULL
+         AND local_day BETWEEN ${first} AND ${last} + 6
+         AND ${scope.skip.events(p)}
+       GROUP BY session_id`
+    : rollupSessions(`FROM session_rollup WHERE database_key = ${key} AND ${started} AND week BETWEEN ${first} AND ${last}`);
+  return `SELECT session_id, day, app_version, crash_reporting FROM (SELECT session_id, ${SESSION_FIRST} FROM (${perSession}))
     WHERE day BETWEEN ${p.add(from, 'Date')} AND ${p.add(to, 'Date')} AND ${compileFilters(filters, p, scope)}`;
+}
+
+/**
+ * Each session's first `app_started` from `session_rollup` rows (`from` names the rows). Almost
+ * every session has one row over the weeks read, whose minimum is itself, so only the sessions with
+ * more than one (a second `app_started` in another week, or rows not merged yet) are aggregated:
+ * the minimum of a tuple of strings over every session of the range was most of a second at the
+ * reference workload (DECISIONS 33.12d), counting the rows of a session a sixth of it.
+ */
+function rollupSessions(from: string): string {
+  const multiple = `(SELECT session_id ${from} GROUP BY session_id HAVING count() > 1)`;
+  return `SELECT session_id, first AS f ${from} AND session_id NOT IN ${multiple}
+    UNION ALL
+    SELECT session_id, min(first) AS f ${from} AND session_id IN ${multiple} GROUP BY session_id`;
 }
 
 /**
  * AN-044, AN-152: the sessions a `session_crashed` names, however late it arrived. It is sent
  * after its session began (AN-230: its timestamp is when it was emitted), so its local day is
- * on or after the first day read, give or take the same one-day clock margin.
+ * on or after the first day read, give or take the same margin; from the first week of
+ * `sessionWeeks`, from the rollup or the events as `sessionsSource` reads.
  */
 export function crashedSessions(scope: FilterScope, p: SqlParams, crashedId: number | null, from: string): string {
   if (crashedId === null) return '(SELECT CAST(NULL AS Nullable(UUID)) AS session_id WHERE 0)';
-  return `(SELECT session_id FROM events
-      WHERE database_key = ${p.add(scope.databaseKey, 'UInt32')}
-        AND event_name_id = ${p.add(crashedId, 'UInt32')}
-        AND session_id IS NOT NULL
-        AND local_day >= ${p.add(addDays(from, -SESSION_MARGIN_DAYS), 'Date')}
-        AND ${scope.skip.events(p)})`;
+  const key = p.add(scope.databaseKey, 'UInt32');
+  const crashed = p.add(crashedId, 'UInt32');
+  const first = p.add(sessionWeeks(from, from).first, 'Date');
+  return scope.skip.erasing
+    ? `(SELECT session_id FROM events
+        WHERE database_key = ${key} AND event_name_id = ${crashed} AND session_id IS NOT NULL
+          AND local_day >= ${first} AND ${scope.skip.events(p)})`
+    : `(SELECT session_id FROM session_rollup WHERE database_key = ${key} AND event_name_id = ${crashed} AND week >= ${first})`;
+}
+
+/**
+ * Every read of `reads`, once all have finished: a failure is thrown only then, so that no
+ * statement of the answer is still running once its slot is released.
+ */
+async function allFinished<T extends readonly unknown[]>(reads: T): Promise<{ -readonly [K in keyof T]: Awaited<T[K]> }> {
+  const settled = await Promise.allSettled(reads);
+  const failed = settled.find((result) => result.status === 'rejected');
+  if (failed) throw failed.reason;
+  return settled.map((result) => (result as PromiseFulfilledResult<unknown>).value) as never;
 }
 
 // --- The answer ------------------------------------------------------------------------------------
@@ -258,8 +298,26 @@ type Inputs = {
 
 type FigureParts = Omit<OverviewAnswer, 'range' | 'unit' | 'timezone' | 'keptFrom' | 'filters' | 'topEvents' | 'notices'>;
 
-/** Every event-store figure of the Overview, in eight statements, all inside the caller's slot. */
-export async function overviewFigures(store: ReadStore, settings: QuerySettings, input: Inputs): Promise<FigureParts> {
+/** The statements `overviewFigures` runs at once inside its slot. */
+const OVERVIEW_STATEMENTS = 7;
+
+/**
+ * Each of `statements` run at once inside one slot: its share of the slot's memory and threads,
+ * so the slot as a whole stays within the per-query limits the operator set (FD-032, AN-205), at
+ * least one thread each.
+ */
+function shareOfSlot(settings: QuerySettings, statements: number): QuerySettings {
+  const memory = Number(settings.max_memory_usage ?? 0);
+  const threads = Number(settings.max_threads ?? 0);
+  return {
+    ...settings,
+    ...(memory > 0 ? { max_memory_usage: String(Math.floor(memory / statements)) } : {}),
+    ...(threads > 0 ? { max_threads: Math.max(1, Math.floor(threads / statements)) } : {}),
+  };
+}
+
+/** Every event-store figure of the Overview, in seven statements run at once, all inside the caller's slot. */
+export async function overviewFigures(store: ReadStore, slot: QuerySettings, input: Inputs): Promise<FigureParts> {
   const { scope, filters, unit, timezone, range, keptFrom, nowMs } = input;
   const today = todayIn(timezone, nowMs);
   const yesterday = addDays(today, -1);
@@ -269,6 +327,16 @@ export async function overviewFigures(store: ReadStore, settings: QuerySettings,
   const rangePrevious = previousAvailable(previousRange.from, keptFrom);
   const window = (from: string, to: string) => ({ from, to });
 
+  // Every statement below is independent of the others, so they run at once, each with a seventh of
+  // the slot's memory and threads (`shareOfSlot`). The slot (AN-205) is there so that one caller
+  // holds one share of the event store at a time; the Overview is one caller's one answer, so
+  // running its statements side by side changes when that share is used, not how large it is, and
+  // the other slots are untouched. One after another, their times added up to the answer's
+  // (DECISIONS 33.12d measured both). Each spills its aggregation to disk past half its share
+  // rather than fail (`withSpill`): the sessions read from the events while an erasure is pending
+  // needs several times a seventh (33.12d); the answer is the same, only slower.
+  const settings = withSpill(shareOfSlot(slot, OVERVIEW_STATEMENTS));
+
   // --- Active units: DAU by day (the chart, the last complete day, today, stickiness), WAU, MAU.
   const week = window(addDays(today, -6), today);
   const month = window(addDays(today, -29), today);
@@ -276,18 +344,22 @@ export async function overviewFigures(store: ReadStore, settings: QuerySettings,
   const active = new SqlParams();
   const activeInner = activeRows(scope, filters, active, earliest, today);
   const within = (w: { from: string; to: string }) => `local_day BETWEEN ${active.add(w.from, 'Date')} AND ${active.add(w.to, 'Date')}`;
-  const windowsSql = `SELECT ${unitCount(unit, within(week))} AS wau, ${unitCount(unit, within(previousWindow(week)))} AS wauPrevious,
-       ${unitCount(unit, within(month))} AS mau, ${unitCount(unit, within(previousWindow(month)))} AS mauPrevious
-     FROM (${activeInner})`;
-  const [windows] = await store.query<Record<'wau' | 'wauPrevious' | 'mau' | 'mauPrevious', string>>(windowsSql, active.values, settings);
+  // Two statements, not one with GROUPING SETS: that computes every count in every set, a window's
+  // set for each day and a 60-day set for the total row, and needed 156 MiB where these need 60 and
+  // 56 MiB on the same data (DECISIONS 33.12d), each within a seventh of the default slot.
+  const windowsRead = store.query<Record<'wau' | 'wauPrevious' | 'mau' | 'mauPrevious', string>>(
+    `SELECT ${unitCount(unit, within(week))} AS wau, ${unitCount(unit, within(previousWindow(week)))} AS wauPrevious,
+            ${unitCount(unit, within(month))} AS mau, ${unitCount(unit, within(previousWindow(month)))} AS mauPrevious
+     FROM (${activeInner})`,
+    active.values,
+    settings,
+  );
   const daily = new SqlParams();
-  const dailyRows = await store.query<{ d: string; n: string }>(
+  const dailyRead = store.query<{ d: string; n: string }>(
     `SELECT toString(local_day) AS d, ${unitCount(unit, '1')} AS n FROM (${activeRows(scope, filters, daily, earliest, today)}) GROUP BY d`,
     daily.values,
     settings,
   );
-  const dau = new Map(dailyRows.map((row) => [row.d, Number(row.n)]));
-  const dauOf = (day: string) => dau.get(day) ?? 0;
 
   // --- Figures of absolute time: the last 60 minutes and the 60 before (AN-140, AN-141), and
   // today so far as it read one day earlier (yesterday up to this time). Effective time is not
@@ -299,7 +371,7 @@ export async function overviewFigures(store: ReadStore, settings: QuerySettings,
   // but the day after a daylight-saving change that would start an hour off, even before
   // yesterday began.
   const sameTimeYesterday = zonedMidnight(yesterday, timezone) + (nowMs - zonedMidnight(today, timezone));
-  const [times] = await store.query<Record<'hour' | 'hourPrevious' | 'todayPrevious', string>>(
+  const timesRead = store.query<Record<'hour' | 'hourPrevious' | 'todayPrevious', string>>(
     `SELECT ${unitCount(unit, `effective_time > ${at(nowMs - HOUR_MS)} AND effective_time <= ${at(nowMs)}`)} AS hour,
             ${unitCount(unit, `effective_time > ${at(nowMs - 2 * HOUR_MS)} AND effective_time <= ${at(nowMs - HOUR_MS)}`)} AS hourPrevious,
             ${unitCount(unit, `local_day = ${clock.add(yesterday, 'Date')} AND effective_time <= ${at(sameTimeYesterday)}`)} AS todayPrevious
@@ -312,29 +384,19 @@ export async function overviewFigures(store: ReadStore, settings: QuerySettings,
     clock.values,
     settings,
   );
-  const keptFromMs = keptFrom === null ? null : zonedMidnight(keptFrom, timezone);
 
   // --- New installations and D1, D7, D30, over the range and the one before, when available.
-  const installFrom = rangePrevious ? previousRange.from : (covered?.from ?? range.from);
-  const installTo = covered?.to ?? range.to;
-  const installsNeeded = covered !== null || rangePrevious;
-  const installs = new SqlParams();
-  const installRows = installsNeeded
-    ? await store.query<{ d: string; n: string }>(
-        `SELECT toString(day) AS d, count() AS n FROM (${installedRows(scope, filters, installs, installFrom, installTo)}) GROUP BY d`,
-        installs.values,
-        membersSettings(settings, 'install'),
-      )
-    : [];
-  const installsOn = new Map(installRows.map((row) => [row.d, Number(row.n)]));
-  const sumDays = (map: Map<string, number>, w: { from: string; to: string }) => days(w).reduce((sum, day) => sum + (map.get(day) ?? 0), 0);
-
   // AN-140, AN-107: D1, D7 and D30 are the standard Retention cohort by day, computed by the one
   // retention computation cohorts use (piece 8's `cohortCounts`): a member returned on day N when
   // its installation sent `app_started` on that local day, on any platform and in any environment
   // (population filters do not apply to returns, AN-103); a background `app_started` counts (AN-047).
-  const counts = installsNeeded
-    ? await cohortCounts(store, settings, {
+  // Its members per day (N = 0) are the new installations: the install start's members, device
+  // installations that are not ephemeral, filtered by their install dimensions (AN-031, AN-047).
+  const installFrom = rangePrevious ? previousRange.from : (covered?.from ?? range.from);
+  const installTo = covered?.to ?? range.to;
+  const installsNeeded = covered !== null || rangePrevious;
+  const countsRead = installsNeeded
+    ? cohortCounts(store, settings, {
         scope,
         start: { kind: 'install' },
         return: { kind: 'event', event: 'app_started', id: input.startedId, filters: [] },
@@ -345,7 +407,55 @@ export async function overviewFigures(store: ReadStore, settings: QuerySettings,
         to: installTo,
         returnsTo: yesterday,
       })
-    : [];
+    : Promise.resolve([]);
+
+  // --- Sessions and crash-free sessions (AN-043, AN-046, AN-152).
+  const sessions = new SqlParams();
+  const sessionFrom = installFrom;
+  const sessionsRead = installsNeeded
+    ? store.query<{ d: string; v: string; cr: number; crashed: number; n: string }>(
+        `SELECT toString(day) AS d, app_version AS v, toUInt8(crash_reporting) AS cr, toUInt8(session_id IN ${crashedSessions(scope, sessions, input.crashedId, sessionFrom)}) AS crashed, count() AS n
+         FROM (${sessionsSource(scope, filters, sessions, input.startedId, sessionFrom, installTo)})
+         GROUP BY d, v, cr, crashed`,
+        sessions.values,
+        settings,
+      )
+    : Promise.resolve([]);
+
+  // --- Shares of the installations active in the last 7 days, by their latest dimensions.
+  const shares = new SqlParams();
+  // The latest dimensions from `installation_index` (0004, `indexRecords`), for the installations
+  // active in the week only: the same records as `installations`' states, without deserialising
+  // every installation's (DECISIONS 33.12c: 1.3 GiB at 917,000).
+  const sharesRead = store.query<{ appVersion: string; platform: string; country: string; n: string; gv: number; gp: number }>(
+    `SELECT l.app_version AS appVersion, l.platform AS platform, l.country AS country, count() AS n,
+            grouping(appVersion) AS gv, grouping(platform) AS gp
+     FROM (
+       SELECT latest AS l FROM (${indexRecords(scope.databaseKey, scope.skip, shares)})
+       WHERE has_qualifying = 1 AND installation_id IN (SELECT installation_id FROM (${activeRows(scope, filters, shares, week.from, week.to)})))
+     GROUP BY GROUPING SETS ((appVersion), (platform), (country))`,
+    shares.values,
+    settings,
+  );
+
+  // --- Versions first seen (AN-142), from `version_first` (0002), within the range.
+  const first = new SqlParams();
+  const firstRead = store.query<{ v: string; d: string }>(
+    `SELECT app_version AS v, toString(min(first)) AS d FROM version_first
+     WHERE database_key = ${first.add(scope.databaseKey, 'UInt32')} AND app_version != '' AND ${compileFilters(filters, first, scope)}
+     GROUP BY v`,
+    first.values,
+    settings,
+  );
+
+  const [[windows], dailyRows, [times], counts, sessionRows, shareRows, firstRows] = await allFinished([windowsRead, dailyRead, timesRead, countsRead, sessionsRead, sharesRead, firstRead] as const);
+
+  const dau = new Map(dailyRows.map((row) => [row.d, Number(row.n)]));
+  const dauOf = (day: string) => dau.get(day) ?? 0;
+  const keptFromMs = keptFrom === null ? null : zonedMidnight(keptFrom, timezone);
+
+  const installsOn = new Map(counts.filter((count) => count.n === 0).map((count) => [count.cohort, count.units]));
+  const sumDays = (map: Map<string, number>, w: { from: string; to: string }) => days(w).reduce((sum, day) => sum + (map.get(day) ?? 0), 0);
   const currentFrom = covered?.from ?? installTo;
   const retained: Record<string, number> = {};
   for (const n of RETENTION_DAYS) {
@@ -359,18 +469,6 @@ export async function overviewFigures(store: ReadStore, settings: QuerySettings,
     }
   }
 
-  // --- Sessions and crash-free sessions (AN-043, AN-046, AN-152).
-  const sessions = new SqlParams();
-  const sessionFrom = installFrom;
-  const sessionRows = installsNeeded
-    ? await store.query<{ d: string; v: string; cr: number; crashed: number; n: string }>(
-        `SELECT toString(day) AS d, app_version AS v, toUInt8(crash_reporting) AS cr, toUInt8(session_id IN ${crashedSessions(scope, sessions, input.crashedId, sessionFrom)}) AS crashed, count() AS n
-         FROM (${sessionsSource(scope, filters, sessions, input.startedId, sessionFrom, installTo)})
-         GROUP BY d, v, cr, crashed`,
-        sessions.values,
-        settings,
-      )
-    : [];
   const inWindow = (day: string, w: { from: string; to: string } | null) => w !== null && day >= w.from && day <= w.to;
   const sessionsOn = new Map<string, number>();
   for (const row of sessionRows) sessionsOn.set(row.d, (sessionsOn.get(row.d) ?? 0) + Number(row.n));
@@ -390,33 +488,9 @@ export async function overviewFigures(store: ReadStore, settings: QuerySettings,
     .slice(0, CRASH_FREE_VERSIONS)
     .map(([version]) => ({ version, ...crashFreeIn(covered, version) }));
 
-  // --- Shares of the installations active in the last 7 days, by their latest dimensions.
-  const shares = new SqlParams();
-  const shareRows = await store.query<{ appVersion: string; platform: string; country: string; n: string; gv: number; gp: number }>(
-    `SELECT l.app_version AS appVersion, l.platform AS platform, l.country AS country, count() AS n,
-            grouping(appVersion) AS gv, grouping(platform) AS gp
-     FROM (SELECT DISTINCT installation_id FROM (${activeRows(scope, filters, shares, week.from, week.to)})) AS a
-     INNER JOIN (
-       SELECT installation_id, maxIfMerge(latest) AS l FROM installations
-       WHERE database_key = ${shares.add(scope.databaseKey, 'UInt32')} AND ${scope.skip.installations(shares)}
-       GROUP BY installation_id HAVING max(has_qualifying) = 1) AS i ON i.installation_id = a.installation_id
-     GROUP BY GROUPING SETS ((appVersion), (platform), (country))`,
-    shares.values,
-    settings,
-  );
   // `grouping(x)` is 0 on the rows grouped by x (SQL standard).
   const shareOf = (pick: (row: (typeof shareRows)[number]) => boolean, value: (row: (typeof shareRows)[number]) => string) =>
     sharesOf(shareRows.filter(pick).map((row) => ({ value: value(row), installations: Number(row.n) })));
-
-  // --- Versions first seen (AN-142), from `version_first` (0002), within the range.
-  const first = new SqlParams();
-  const firstRows = await store.query<{ v: string; d: string }>(
-    `SELECT app_version AS v, toString(min(first)) AS d FROM version_first
-     WHERE database_key = ${first.add(scope.databaseKey, 'UInt32')} AND app_version != '' AND ${compileFilters(filters, first, scope)}
-     GROUP BY v`,
-    first.values,
-    settings,
-  );
 
   // A period the storage window holds none of has no value, rather than a zero it cannot know.
   const figure = (value: number | null, previous: number | null, w: Covered): Figure => ({ value: w === null ? null : value, previous, covered: w });

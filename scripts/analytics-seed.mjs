@@ -130,7 +130,9 @@ SELECT
     toUInt16(intDiv(inst_age, 30)) AS install_age_months,
     false AS clock_corrected,
     'key_seed' AS credential_id,
-    false AS is_replay
+    false AS is_replay,
+    -- The marker ingest sets for session_rollup (0004): app_started and session_crashed.
+    multiIf(name_index = 1, 'started', name_index = 2, 'crashed', 'none') AS session_event
 FROM
 (
     SELECT
@@ -198,7 +200,7 @@ async function seed() {
   if (process.env.SEED_MERGE === '0') return;
   console.log(`Merging every partition (OPTIMIZE … FINAL), the steady state a long-lived deployment reaches.`);
   const merge = performance.now();
-  for (const table of ['events', 'installations', 'installation_users', 'installation_first', 'user_first', 'version_first']) {
+  for (const table of ['events', 'installations', 'installation_users', 'installation_first', 'user_first', 'version_first', 'installation_index', 'session_rollup']) {
     await ch(`OPTIMIZE TABLE ${table} FINAL`, { settings: { receive_timeout: 3600, send_timeout: 3600 } });
   }
   console.log(`Merged in ${((performance.now() - merge) / 1000).toFixed(0)} s.`);

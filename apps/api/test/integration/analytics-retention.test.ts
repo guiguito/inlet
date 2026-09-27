@@ -11,7 +11,7 @@ import {
   analyticsPendingErasures,
   type AnalyticsDatabaseRow,
 } from '../../src/db/schema.js';
-import { runEventNameDeletions } from '../../src/services/analytics-catalog.js';
+import { NAME_TABLES, runEventNameDeletions } from '../../src/services/analytics-catalog.js';
 import { pruneDroppedCounts } from '../../src/services/analytics-incidents.js';
 import { flushAnalyticsCounters, ingestAnalyticsBatch } from '../../src/services/analytics-ingest.js';
 import { addDays, todayIn } from '../../src/services/analytics-query.js';
@@ -134,12 +134,25 @@ describe('removal, pruning and the orphan sweep', () => {
     expect(tables.map((t) => t.table).sort()).toEqual([...KEYED_TABLES].sort());
   });
 
+  it('deletes an event name from every event-store table holding rows by event-name ID (AN-056)', async () => {
+    const tables = await h.ctx.eventStore!.query<{ table: string }>(
+      `SELECT DISTINCT c.table AS table FROM system.columns c INNER JOIN system.tables t ON t.database = c.database AND t.name = c.table
+       WHERE c.database = currentDatabase() AND c.name = 'event_name_id' AND t.engine LIKE '%MergeTree%'`,
+    );
+    expect(tables.map((t) => t.table).sort()).toEqual([...NAME_TABLES].sort());
+  });
+
   describe('database removal (AN-004)', () => {
     async function populated(h: Harness, db: Db) {
       const publishable = (await createCredential(h, db.projectId, 'publishable')).secret;
       expect(publishable).toBeTruthy();
       // Catalog rows, params and categories through ingest; volume straight in.
       expect((await ingest(h, db, [event(NOW, { category: 'shop', params: { plan: 'pro' }, userId: 'u1' }), event(NOW, { name: 'signed_up' })])).accepted).toBe(2);
+      // A session and its crash, so the session rollup holds rows of the database too (0004, AN-035).
+      const session = randomUUID();
+      expect((await ingest(h, db, [event(NOW, { name: 'app_started', sessionId: session }), event(NOW, { name: 'session_crashed', sessionId: session })])).accepted).toBe(2);
+      const [rollup] = await h.ctx.eventStore!.query<{ n: string }>('SELECT count() AS n FROM session_rollup WHERE database_key = {key:UInt32}', { key: db.key });
+      expect(Number(rollup!.n)).toBe(2);
       await flushAnalyticsCounters(h.ctx.db);
       await insertVolume(h, { databaseKey: db.key, day: addDays(TODAY, -40), days: 40, events: 200_000, installations: 500, userId: 'u2' });
       await h.ctx.db.insert(analyticsPendingErasures).values({ databaseKey: db.key, kind: 'user', erasedId: 'u9', installationIds: [] });

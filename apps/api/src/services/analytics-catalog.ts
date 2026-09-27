@@ -572,8 +572,8 @@ async function refreshFigures(
 
 // --- The event-name deletion job (AN-056, 9.4) -----------------------------------------------------------
 
-/** The event-store tables that hold rows by event-name ID (piece 1). */
-const NAME_TABLES = ['events', 'installation_first', 'user_first'] as const;
+/** The event-store tables that hold rows by event-name ID (piece 1; the session rollup, 0004, AN-035). */
+export const NAME_TABLES = ['events', 'installation_first', 'user_first', 'session_rollup'] as const;
 
 /**
  * AN-056: removes the rows of deleted names from the event store. For each deletion not yet

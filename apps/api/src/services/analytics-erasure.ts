@@ -6,7 +6,7 @@ import type { Db } from '../db/index.js';
 import { analyticsDatabases, analyticsPendingErasures, erasures } from '../db/schema.js';
 import { eventStoreTime, serverInstallationId } from './analytics-derive.js';
 import { evictInstallations, removeFromLiveFeed } from './analytics-ingest.js';
-import { SqlParams, invalidateReadSkip, readSkip, type ReadSkip, type ReadStore } from './analytics-query.js';
+import { SqlParams, invalidateReadSkip, readSkip, resolveEventNames, type ReadSkip, type ReadStore } from './analytics-query.js';
 import { mutationRunning } from './analytics-retention.js';
 import { eraseCrashReports, eraseSubmissions } from './erasure-deletes.js';
 
@@ -46,9 +46,10 @@ import { eraseCrashReports, eraseSubmissions } from './erasure-deletes.js';
 /**
  * Every event-store table carrying an installation ID or a user ID, which an erasure deletes
  * from. `version_first` carries neither (0002_version_first.sql). A test compares this list
- * with every table of the event store holding one of the two columns.
+ * with every table of the event store holding one of the two columns. The two internal rollups
+ * of 0004 (AN-035) are erased with the installation records they summarise.
  */
-export const ERASED_TABLES = ['events', 'installations', 'installation_users', 'installation_first', 'user_first'] as const;
+export const ERASED_TABLES = ['events', 'installations', 'installation_users', 'installation_first', 'user_first', 'installation_index', 'session_rollup'] as const;
 
 const DAY_MS = 86_400_000;
 /** Submitted, never awaited (DECISIONS 33.1). */
@@ -363,17 +364,34 @@ async function replay(ctx: AppContext, store: EventStore, databaseKey: number, i
   invalidateReadSkip(databaseKey);
   const skip = await readSkip(ctx, databaseKey);
   const r = new SqlParams();
+  // `events` does not store the session marker ingest sets (0004), so it is set again here from
+  // the current IDs of the two names, for `session_rollup` to rebuild the sessions of the
+  // installations re-derived (AN-043, AN-152). A name never seen has no rows to mark.
+  const names = await resolveEventNames(ctx.db, databaseKey, ['app_started', 'session_crashed']);
+  const idOf = (name: string) => {
+    const status = names.get(name);
+    return status?.status === 'current' ? status.id : 0;
+  };
   await store.command(
-    `INSERT INTO events_ingest SELECT *, true AS is_replay FROM events
+    `INSERT INTO events_ingest SELECT *, true AS is_replay,
+            multiIf(event_name_id = ${r.add(idOf('app_started'), 'UInt32')}, 'started', event_name_id = ${r.add(idOf('session_crashed'), 'UInt32')}, 'crashed', 'none') AS session_event
+     FROM events
      WHERE database_key = ${r.add(databaseKey, 'UInt32')} AND (${target.rederived(r, ids)} OR ${target.user(r, ids)}) AND ${skip.events(r)}`,
     r.values,
   );
 }
 
-/** Each state table's condition for these erasures; `user_first` only when a user ID is erased. */
+/**
+ * Each state table's condition for these erasures; `user_first` only when a user ID is erased.
+ * The two rollups of 0004 go with the installations re-derived and are rebuilt by the replay: a
+ * session belongs to one installation, and an erased user's sessions are on the installations
+ * it was seen on, erased or shared.
+ */
 function stateConditions(ids: readonly number[], hasUser: boolean): [string, (p: SqlParams) => string][] {
   return [
     ['installations', (p) => target.rederived(p, ids)],
+    ['installation_index', (p) => target.rederived(p, ids)],
+    ['session_rollup', (p) => target.rederived(p, ids)],
     ['installation_users', (p) => `(${target.erased(p, ids)} OR ${target.user(p, ids)})`],
     ['installation_first', (p) => target.rederived(p, ids)],
     ...(hasUser ? [['user_first', (p: SqlParams) => target.user(p, ids)] as [string, (p: SqlParams) => string]] : []),

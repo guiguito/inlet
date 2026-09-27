@@ -8,8 +8,8 @@ import type { Principal } from '../../src/services/access.js';
 import { refreshAnalyticsCatalog } from '../../src/services/analytics-catalog.js';
 import { testInstallationId } from '../../src/services/analytics-derive.js';
 import { ingestAnalyticsBatch } from '../../src/services/analytics-ingest.js';
-import { activeRows, overviewFilters, runOverview, type OverviewAnswer, type OverviewQuery } from '../../src/services/analytics-overview.js';
-import { SqlParams, addDays, invalidateReadSkip, querySlots, readSkip, runAnalyticsQuery, todayIn } from '../../src/services/analytics-query.js';
+import { activeRows, overviewFigures, overviewFilters, runOverview, type OverviewAnswer, type OverviewQuery } from '../../src/services/analytics-overview.js';
+import { SqlParams, addDays, invalidateReadSkip, querySlots, readSkip, runAnalyticsQuery, todayIn, type ReadStore } from '../../src/services/analytics-query.js';
 import { querySlotTimings } from '../../src/services/analytics-slots.js';
 import { createHarness, type Harness } from '../setup/harness.js';
 import { asAdmin, createCredential, createProject, withKey } from '../setup/api.js';
@@ -594,6 +594,108 @@ describe('the Overview', () => {
         left = await processes(marker);
       }
       expect(left).toBe(0);
+    });
+
+    /**
+     * The Overview's statements at once inside its slot (DECISIONS 33.12d): each statement is
+     * wrapped to take `seconds` in the event store and to carry `marker` in its text.
+     */
+    async function overviewInputs() {
+      const database = await row(h, await setup(h));
+      return {
+        scope: { databaseKey: database.key, skip: await readSkip(h.ctx, database.key) },
+        filters: overviewFilters({ apps: [], platforms: [], environments: [] }),
+        unit: 'installation' as const,
+        timezone: 'UTC',
+        range: { from: day(29), to: TODAY },
+        keptFrom: null,
+        nowMs: NOW,
+        startedId: 1,
+        crashedId: 2,
+      };
+    }
+    const slowed = (store: ReadStore, marker: string, seconds: number, fail?: (n: number) => boolean): ReadStore => {
+      let n = 0;
+      return {
+        query: async (sql, params, settings) => {
+          n += 1;
+          if (fail?.(n)) throw new Error('one statement failed');
+          return store.query(`SELECT * FROM (${sql}) AS q WHERE (SELECT sum(sleepEachRow(0.5)) AS ${marker} FROM numbers(${seconds * 2})) >= 0`, params, { ...settings, max_block_size: 1 });
+        },
+      };
+    };
+
+    it('runs the Overview’s statements at once, and throws a failure only once every other statement has ended (33.12d)', async () => {
+      const input = await overviewInputs();
+      const marker = `overview_${uuid().replaceAll('-', '')}`;
+      const started = performance.now();
+      let running = 0;
+      const outcome = runAnalyticsQuery(h.ctx, ADMIN, 'query', (store, settings) => overviewFigures(slowed(store, marker, 2, (n) => n === 1), settings, input)).then(
+        () => 'answered',
+        (error: Error) => error.message,
+      );
+      for (let i = 0; i < 40 && running < 6; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        running = await processes(marker);
+      }
+      // The other six statements run side by side in the one slot, not one after another.
+      expect(running).toBe(6);
+      expect(querySlots.inUse).toBe(1);
+      expect(await outcome).toBe('one statement failed');
+      // Thrown after the others ended, never with one still running once the slot is free.
+      expect(performance.now() - started).toBeGreaterThan(1_900);
+      expect(await processes(marker)).toBe(0);
+      expect(querySlots.inUse).toBe(0);
+    });
+
+    it('divides the slot’s memory and threads among the statements it runs at once, so the slot stays within the operator’s limits (FD-032, 33.12d)', async () => {
+      const input = await overviewInputs();
+      for (const limits of [{ max_memory_usage: '805306368', max_threads: 8 }, { max_memory_usage: '8589934592', max_threads: 2 }]) {
+        const sent: { memory: number; threads: number; spill: number }[] = [];
+        const recording = (store: ReadStore): ReadStore => ({
+          query: (sql, params, settings) => {
+            sent.push({ memory: Number(settings?.max_memory_usage), threads: Number(settings?.max_threads), spill: Number(settings?.max_bytes_before_external_group_by) });
+            return store.query(sql, params, settings);
+          },
+        });
+        const answer = await runAnalyticsQuery(h.ctx, ADMIN, 'query', (store, settings) => overviewFigures(recording(store), { ...settings, ...limits }, input));
+        expect(answer.figures).toBeDefined();
+        expect(sent).toHaveLength(7);
+        expect(sent.reduce((sum, s) => sum + s.memory, 0)).toBeLessThanOrEqual(Number(limits.max_memory_usage));
+        // At least one thread each: a limit below seven threads is exceeded by the floor only.
+        expect(sent.every((s) => s.threads >= 1)).toBe(true);
+        expect(sent.reduce((sum, s) => sum + s.threads, 0)).toBeLessThanOrEqual(Math.max(limits.max_threads, sent.length));
+        // Each spills its aggregation to disk past half its share at most, rather than fail (withSpill).
+        expect(sent.every((s) => s.spill > 0 && s.spill <= s.memory / 2)).toBe(true);
+      }
+    });
+
+    it('cancels every one of the Overview’s statements and frees the slot when its client goes away (AN-205, 33.12d)', async () => {
+      const input = await overviewInputs();
+      const marker = `overview_${uuid().replaceAll('-', '')}`;
+      const controller = new AbortController();
+      let running = 0;
+      const outcome = runAnalyticsQuery(h.ctx, ADMIN, 'query', (store, settings) => overviewFigures(slowed(store, marker, 10), settings, input), controller.signal).then(
+        () => 'answered',
+        (error: Error) => error.name,
+      );
+      for (let i = 0; i < 40 && running < 7; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        running = await processes(marker);
+      }
+      expect(running).toBe(7);
+      const aborted = performance.now();
+      controller.abort(new DOMException('gone', 'AbortError'));
+      expect(await outcome).toBe('AbortError');
+      expect(querySlots.inUse).toBe(0);
+      let left = running;
+      for (let i = 0; i < 30 && left > 0; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        left = await processes(marker);
+      }
+      // Cancelled in the event store, well before their ten seconds.
+      expect(left).toBe(0);
+      expect(performance.now() - aborted).toBeLessThan(5_000);
     });
 
     it('takes a waiting request out of the queue when its client closes the connection, over a real socket', async () => {

@@ -67,6 +67,28 @@ const RETRY_MAX_MS = 60_000;
 const MAX_PARTITIONS_PER_INSERT_BLOCK = 1000;
 
 /**
+ * Sockets each client may hold open (UX Analytics 9.5, DECISIONS 33.12c and 33.12d). An ingest
+ * batch is one asynchronous insert that holds its socket until the flush is written, about a
+ * quarter of a second, so the client's default of 10 carried about 40 inserts a second and
+ * queued every batch beyond that without bound: exactly the 2,000 events a second of the budget
+ * in batches of 50, with nothing to spare. Inserts in flight are the rate times that wait; 100
+ * carries about 400 a second, ten times the budget's batches. The reader gets the same: its
+ * long reads are bounded by the query slots (AN-205), and ingest's duplicate and install-time
+ * lookups share it, so it must never be what queues them behind a two-minute funnel trend.
+ * ClickHouse's own limits (thousands of connections) are far above both.
+ */
+const MAX_OPEN_CONNECTIONS = 100;
+
+/**
+ * The longest an asynchronous insert waits in ClickHouse's buffer before it is flushed
+ * (`async_insert_busy_timeout_max_ms`, 200 ms by default; the adaptive timeout starts at 50 ms).
+ * Ingest waits for the flush (`wait_for_async_insert`), so this wait is most of the 300 ms a
+ * batch may take (9.5); at 2,000 events a second a flush every 100 ms still writes blocks of
+ * about 200 events, which the merges absorb (DECISIONS 33.12d measured both).
+ */
+const ASYNC_INSERT_BUSY_TIMEOUT_MAX_MS = 100;
+
+/**
  * 64-bit integers as JSON strings. ClickHouse 26.8 defaults to bare numbers, which JSON.parse
  * rounds above 2^53, and a server's profile may say either; stated here, every read gets
  * exact strings whatever the server's defaults.
@@ -76,6 +98,11 @@ const READ_SETTINGS: ClickHouseSettings = {
   // A read whose client went away is cancelled, not run to its time limit (AN-205; measured:
   // without it, an aborted statement kept running in `system.processes`, DECISIONS 33.5).
   cancel_http_readonly_queries_on_client_close: 1,
+  // One snapshot of each table for the whole statement: `indexRecords` and the session rollup's
+  // read (0004) read a table's single-row entries and its multi-row ones in separate subqueries,
+  // which on different snapshots would list an entry twice or not at all while ingest writes.
+  // The default since ClickHouse 25.12; stated so a server profile cannot turn it off.
+  enable_shared_storage_snapshot_in_query: 1,
 };
 
 /**
@@ -186,7 +213,7 @@ export class EventStore {
         format: 'JSONEachRow',
         clickhouse_settings: {
           max_partitions_per_insert_block: String(MAX_PARTITIONS_PER_INSERT_BLOCK),
-          ...(options.async ? { async_insert: 1, wait_for_async_insert: 1 } : {}),
+          ...(options.async ? { async_insert: 1, wait_for_async_insert: 1, async_insert_busy_timeout_max_ms: ASYNC_INSERT_BUSY_TIMEOUT_MAX_MS } : {}),
         },
       });
     } catch (error) {
@@ -514,6 +541,7 @@ function client(url: string, database: string, settings: ClickHouseSettings = {}
     url,
     database,
     clickhouse_settings: settings,
+    max_open_connections: MAX_OPEN_CONNECTIONS,
     ...(requestTimeoutMs === undefined ? {} : { request_timeout: requestTimeoutMs }),
     // The API logs what matters itself, through pino; the client's own console logger
     // would bypass the redaction and the log level.

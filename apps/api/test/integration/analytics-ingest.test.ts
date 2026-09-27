@@ -14,6 +14,7 @@ import {
   removeFromLiveFeed,
   resetAnalyticsIngestState,
 } from '../../src/services/analytics-ingest.js';
+import { addDays } from '../../src/services/analytics-query.js';
 import { startAnalyticsWorker } from '../../src/services/analytics-worker.js';
 import { TEST_CLICKHOUSE_DATABASE } from '../setup/config.js';
 import { createHarness, signIn, type Harness } from '../setup/harness.js';
@@ -642,10 +643,12 @@ describe('analytics ingest', () => {
     });
 
     it('stores the local day of the reporting timezone', async () => {
-      const response = await send([event({ timestamp: '2026-09-20T23:30:00Z' })], { sentAt: new Date().toISOString() });
-      if (Date.now() - Date.parse('2026-09-20T23:30:00Z') > 30 * DAY) return; // beyond the window on a later clock
+      // Yesterday at 23:30 UTC, always in the past and within the lateness window, is already
+      // today in Paris (UTC+1 or UTC+2), whenever the suite runs.
+      const today = new Date().toISOString().slice(0, 10);
+      const response = await send([event({ timestamp: `${addDays(today, -1)}T23:30:00Z` })], { sentAt: new Date().toISOString() });
       expect(response.json().accepted).toBe(1);
-      expect((await storedRows(h, db.databaseKey))[0]!.local_day).toBe('2026-09-21');
+      expect((await storedRows(h, db.databaseKey))[0]!.local_day).toBe(today);
     });
   });
 

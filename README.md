@@ -229,6 +229,10 @@ cp .env.example .env     # for analytics, uncomment its three INLET_CLICKHOUSE_*
 npm run dev              # API on :3000, web on :5173
 ```
 
+A local event store seeded before ClickHouse migration 0004 lacks its internal rollups, which
+Release 8 ships without a backfill: drop the local database (`.dev/bin/clickhouse client --port 9124
+--user inlet --password inlet --query "DROP DATABASE inlet"`) and restart the API, which recreates it.
+
 ```bash
 npm run test:unit         # pure logic: validation, hashing, CSV, images
 npm run test:integration  # the API against real PostgreSQL, RustFS and ClickHouse
@@ -248,7 +252,7 @@ image ships, so what is tested is what is deployed.
 `scripts/analytics-load.mjs` measures the analytics budgets of the UX Analytics PRD (9.5) against a
 running Inlet: it seeds an analytics database straight into ClickHouse, then drives the real API
 over HTTP, every budgeted read idle and again while ingest sustains 2,000 events a second. The last
-run and what it found are in [DECISIONS.md](docs/DECISIONS.md) §33.12c. To run it on your own host,
+runs and what they found are in [DECISIONS.md](docs/DECISIONS.md) §33.12c and §33.12d. To run it on your own host,
 such as the reference node (8 vCPU, 32 GB):
 
 1. Start Inlet with the per-credential ingest limits raised for the test and room for the seed's

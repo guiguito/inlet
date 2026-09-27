@@ -5,7 +5,7 @@ import { requireEventStore, type QuerySettings } from '../db/clickhouse.js';
 import { analyticsDatabases, analyticsEventNames, type AnalyticsDatabaseRow } from '../db/schema.js';
 import { apiError } from '../lib/errors.js';
 import { listAccessibleAnalyticsDatabaseIds, type Principal } from './access.js';
-import { RANGE_BOUNDS, SqlParams, oldestKeptDay, querySettings, readSkip, resolveEventNames, runAnalyticsQuery, todayIn, type ReadSkip, type ReadStore } from './analytics-query.js';
+import { RANGE_BOUNDS, SqlParams, indexRecords, oldestKeptDay, querySettings, readSkip, resolveEventNames, runAnalyticsQuery, todayIn, type ReadSkip, type ReadStore } from './analytics-query.js';
 import { findIdentityLinks, type IdentityLinks } from './identity-links.js';
 
 /**
@@ -156,7 +156,6 @@ export type SummaryRow = {
   last_seen_at: string | null;
   last_event_at: string;
   seen: string;
-  horizon?: string;
   latest: Dims;
 };
 
@@ -264,24 +263,41 @@ export async function findProfiles(ctx: AppContext, database: AnalyticsDatabaseR
       .map(([field, column]) => `tupleElement(latest, '${column}') = ${p.add(query[field as keyof typeof LATEST_FILTERS], 'String')}`);
 
     if (q === '') {
-      const having = [...filters];
+      // Two reads. First the page's installations, ordered by "seen", from `installation_index`
+      // (0004, `indexRecords`): the same records as `installations` in plain columns, without
+      // deserialising any state (DECISIONS 33.12c: the one-read list took half a second and
+      // 1.3 GiB at 917,000 installations). Then those rows' list columns from `installations`.
+      const having = ['has_qualifying = 1', "installation_kind != 'test'", ...filters];
       if (cursor) {
         const s = p.add(cursor.s, "DateTime64(3, 'UTC')");
         having.push(`seen <= ${p.add(cursor.h, "DateTime64(3, 'UTC')")}`, `(seen < ${s} OR (seen = ${s} AND installation_id > ${p.add(normalizeUuid(cursor.i), 'UUID')}))`);
       }
-      const rows = await store.query<SummaryRow>(
-        `SELECT *, max(seen) OVER () AS horizon FROM (${summarySql(database, skip, p, '1', having.join(' AND ') || '1')})
+      const ordered = await store.query<{ installation_id: string; seen: string }>(
+        `SELECT installation_id, ifNull(last_seen, last_event) AS seen FROM (${indexRecords(database.key, skip, p)})
+         WHERE ${having.join(' AND ')}
          ORDER BY seen DESC, installation_id ASC LIMIT ${limit + 1}`,
         p.values,
         settings,
       );
-      const page = rows.slice(0, limit);
-      const users = await latestUserIds(store, settings, database, skip, page.map((row) => row.installation_id));
-      const last = page.at(-1);
+      // The page, whether more follow and the cursor are positions in this order (AN-120): the
+      // pruning deletes a record from `installations` and from the index in two mutations, so a
+      // record gone from the second read may still be here; that shortens the page, never the list.
+      const ids = ordered.slice(0, limit).map((row) => row.installation_id);
+      const position = ordered[limit - 1];
+      const r = new SqlParams();
+      const rows = ids.length === 0
+        ? []
+        : await store.query<SummaryRow>(
+            `${summarySql(database, skip, r, `installation_id IN ${r.add(ids, 'Array(UUID)')}`)} ORDER BY seen DESC, installation_id ASC`,
+            r.values,
+            settings,
+          );
+      const users = await latestUserIds(store, settings, database, skip, rows.map((row) => row.installation_id));
       return {
-        installations: page.map((row) => presentSummary(row, users)),
+        installations: rows.map((row) => presentSummary(row, users)),
         users: [],
-        nextCursor: rows.length > limit && last ? encodeCursor({ h: cursor?.h ?? rows[0]!.horizon!, s: last.seen, i: last.installation_id }) : null,
+        // The first page's newest "seen" is its first row's, the list being ordered by it (Appendix E).
+        nextCursor: ordered.length > limit && position ? encodeCursor({ h: cursor?.h ?? ordered[0]!.seen, s: position.seen, i: position.installation_id }) : null,
         truncated: false,
         notice: null,
       };

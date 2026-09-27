@@ -360,7 +360,14 @@ describe('keepalive when the page is hidden (AN-232, AN-233, AN-241)', () => {
 
 describe('the Electron sentinel with analytics (CR-119, AN-151, AN-230)', () => {
   const dirs: string[] = [];
+  // The crash module's Electron main reads the real clock (src/crash/electron.ts) where the
+  // analytics client reads the injected one; the real clock starts at START so the two agree
+  // whenever the suite runs, and only `Date` is faked, so every timer stays real.
+  beforeEach(() => {
+    vi.useFakeTimers({ now: START, toFake: ['Date'], shouldAdvanceTime: true });
+  });
   afterEach(async () => {
+    vi.useRealTimers();
     await closeCrash(50);
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
   });

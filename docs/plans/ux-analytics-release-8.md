@@ -1,6 +1,6 @@
 # Release 8 (UX Analytics): implementation plan and handoff
 
-**Status as of 26 September 2026: in progress on branch `release-8-ux-analytics`.** This file
+**Status as of 27 September 2026: built and verified on branch `release-8-ux-analytics`, not yet merged; `inlet-sdk` with the analytics module not yet published.** This file
 is the working record of the build: the order of the pieces, the decisions every piece
 follows, the seams each piece leaves for the next, and what was left out. Update it in the
 same change as the code it describes.
@@ -69,7 +69,7 @@ pieces land; a piece that departs from one says so in its report and in that sec
 | 9 | Storage, retention and data health | AN-004 removal worker, AN-160 to AN-169, AN-190 to AN-192, the orphan sweep; Settings → Storage; the Collect notice; tools | verified and committed (DECISIONS 33.9) |
 | 10 | Erasure and event export | FD-033 across crash, feedback and analytics (CR-047, FR-064A); AN-183 to AN-185; AN-210, AN-212; project settings and profile screens; tools | verified and committed (DECISIONS 33.10) |
 | 11 | `inlet-sdk/analytics` | AN-150, AN-151, AN-220 to AN-242, AN-230; CR-111, CR-119; crash and feedback attach rules; build, size and purity checks; Metro | verified and committed (11a 6bfa07c, 11b d30ed9b; DECISIONS 33.11a, 33.11b); end-to-end against the running API left to piece 12 |
-| 12 | Full verification | Every acceptance criterion of PRD section 12 against the running product; the scaled load test; docs, PRD status, DECISIONS, Docker with the profile | 12a (hardening, the SDK against the running API, the documentation pass; DECISIONS 33.12a) implemented, awaiting verification; 12c (load test, Docker) in progress |
+| 12 | Full verification | Every acceptance criterion of PRD section 12 against the running product; the scaled load test; docs, PRD status, DECISIONS, Docker with the profile | verified and committed: hardening and SDK end to end (33.12a), load test and Docker (33.12c), performance fixes (33.12d), acceptance audit (`ux-analytics-release-8-acceptance.md`) |
 
 Profiles come before funnels and cohorts so that the funnel drill-down (AN-088) reuses the
 cross-capability lookup profiles need (AN-124) instead of building it twice.
@@ -1094,10 +1094,8 @@ session another tab rotated to. Left, for a decision or for 11b:
 - **No real Electron or device run.** `process.getSystemVersion()`, `webContents` and
   `AppState` are faked; Metro bundling proves resolution on React Native 0.74, not execution on
   a device.
-- **The Collect snippets** (`apps/web/src/lib/analytics-snippets.ts`) match the surface, but
-  the Electron renderer snippet does not show the preload bridge (`window.inletAnalytics`) it
-  depends on; without it `createElectronRenderer()` sends nothing and says so only through
-  `debug`. For the orchestrator to route to the web piece.
+- ~~The Electron renderer snippet lacks the preload bridge~~ — fixed in piece 4: the Collect
+  snippet now shows the `window.inletAnalytics` bridge exactly as the SDK README documents it.
 - **With AsyncStorage, crash flags are best effort** (AN-151 says so): the flag is written
   through asynchronously and a crash that kills the JavaScript thread at once may lose it.
 - **The React Native byte budget counts values, not keys**; AsyncStorage's own per-key overhead
@@ -1251,10 +1249,6 @@ passed the five-experiment cap and made every later event invalid. Left:
 
 ### From piece 8
 
-- **Budget at scale** (9.5, 2 s for 12 weekly cohorts): 0.82 s for the Retention cohort over
-  900,000 installations and 20 million events on this laptop, at four threads (DECISIONS 33.8);
-  the install members grow with every installation kept, so five million would be about 4 s.
-  Piece 12's load test measures it; a table of install days is the next step if needed.
 - **Columns run to the current period**, as AN-104 says, so a daily cohort of an old range can be
   wide (60 rows × hundreds of columns); the rows are capped, the columns are not.
 - **The Overview's retention now shares the cohort computation** (piece 5's statement is gone); its
@@ -1357,29 +1351,64 @@ The scaled load test and the Docker check (DECISIONS 33.12c); no product code ch
   at 320 million events over 33 days at the reference's daily density on a shared laptop, and
   extrapolated; the Small host approximated by its memory settings only. `scripts/analytics-load.mjs`
   reruns everything on the real machines (README, "Load-testing analytics").
-- **Budgets missed at this scale or by extrapolation**, each with its cause and a proposed fix in
-  33.12c, for the owner:
-  - **Ingest, 2,000 events a second with a p95 of 300 ms: missed.** The writer's 10 sockets
-    (`@clickhouse/client`'s default `max_open_connections`) carry about 40 asynchronous inserts a
-    second, the test's exact rate, so ingest beside the reads backed up and timed out after eight
-    minutes; with 64 sockets (an experiment) the rate held, p50 250 ms, p95 2.5 s on this loaded
-    machine. Fix: raise the writer's `max_open_connections`, shorten the insert's flush wait.
-  - **Overview, 1 s: missed** (9.7 s idle, the crash-free sessions statement 6.9 s and 4.7 GiB over
-    ten million sessions). Fix: a session table kept at ingest; statements run concurrently.
-  - **Cohort, 12 weekly (2 s): missed; 12 monthly (3 s), recent installations (1 s): at risk to
-    missed** once a database holds about five million installations (both read every installation's
-    state). Fix: a table of install days; the recent list from a table ordered by last seen.
+- **Budgets missed at this scale or by extrapolation**: ingest's rate, the Overview, cohorts and the
+  recent list, fixed by piece 12d (below, DECISIONS 33.12d), except what that section keeps.
   - **At risk by extrapolation**: trend over 90 days by day (about 0.7 s for 0.5 s), by week over 13
     months (about 2.4 s for 2 s), split by app version (about 1.7 s for 1.5 s), the funnel trend by
     day over 90 days (8 to 11 s for 10 s), the erasure preview (about 12 s for 10 s); and under the
     concurrent ingest the funnel steps and a profile page passed their budgets at the 95th
     percentile on this machine.
-- **The Small host's 768 MiB a query fails the Overview and the recent installations** on this
-  seed's density, and would at the Small workload for the recent list once it holds about a million
-  installations.
+- **The Small host's 768 MiB a query** failed the Overview and the recent installations at this
+  seed's density; after piece 12d their largest statement peaks at 0.9 GB at the reference density,
+  about a tenth at the Small workload's. Not re-measured under the Small host's settings.
 - **Worker passes at scale are background work within their bounds** (retention 16 ms, the orphan
   sweep 68 ms, pruning 0.4 s to 3.8 s, a name deletion 133 s, an erasure 122 s to deleted and 254 s to
   files removed at 320 million events; about 25 minutes each for the two deletes on a 13-month
   reference database).
 - **Harness limits**: one reader at a time (the secret key's slot), client-side times on loopback,
   `passes` needs the API stopped and a checkout with the built API.
+
+### From piece 12d
+
+The budgets 12c missed (DECISIONS 33.12d): 100 connections a client and a 100 ms flush wait; the
+internal rollups `session_rollup` and `installation_index` (ClickHouse migration 0004, AN-035); the
+Overview's statements at once in its slot. Left:
+
+- **The Overview at five million installations** (1.5 s idle on this laptop) and, extrapolated, at
+  the reference workload (about 1.5 to 2 s): likely over its 1 s, and further since each of its
+  seven statements gets a seventh of the slot's memory and threads (33.12d; about twice as long on a
+  small seed at one thread a statement). Next, if the reference node misses it: seven or more
+  threads a query, an install day stamped at ingest so the retention members are a range read, and
+  returns limited to days 1, 7 and 30; or the budget amendment worded in 33.12d.
+- **Ingest's p95 under 300 ms** not shown: all batches answered and the rate held, p50 166 ms, but
+  p95 8.6 s beside the reads and 5.6 s alone on this machine, whose swap was full (part writes of a
+  few hundred rows took seconds with no ingest). Needs the reference node.
+- **Under ingest on this machine**, the weekly cohort's p95 (5.5 s), a profile page's (1.2 s) and the
+  funnel trend by day's (10.3 s) passed their budgets during the same stalls; idle they are within.
+- **No table ordered by install day or last seen**: exact only with ingest's help (33.12d says why
+  and how); the plain index read is within budget at five million installations.
+- **A development event store seeded before 0004** has no rollup rows for its earlier events and is
+  recreated (Release 8 had not shipped).
+- **The PRD amendments** of 33.12d (AN-038's wording; the Overview budget only if the reference node
+  misses it) are for the orchestrator.
+
+### From piece 12b
+
+The closing acceptance audit: `docs/plans/ux-analytics-release-8-acceptance.md` holds every criterion
+of PRD section 12 with its status and evidence, the 7.2 routes against the 7.3 matrix, the 7.4
+error codes, the 8.3 tools, the 8.1 screen elements and the platform rows. Its tests are
+`apps/api/test/integration/analytics-acceptance.test.ts` and `analytics-acceptance-gaps.test.ts`,
+`packages/sdk/test/analytics-acceptance.test.ts`, `e2e/ui/analytics-acceptance.spec.ts`, and
+`e2e/api/analytics-acceptance-deno.spec.ts` and `analytics-acceptance-native.spec.ts`. One defect
+fixed: the IP-to-country attribution beside the Overview's country shares (UX Analytics 11). Left:
+
+- **Not verifiable on this machine**: the reference and Small workloads (33.12c; piece 12d is on the
+  budgets), Bun, a real Electron and a real device (the built entries ran against the real API with
+  fake platform modules), and the Docker profile, a ClickHouse stop and a restart (33.12c's record;
+  the suites' ClickHouse is shared and stays up, and the tests pin the mechanisms instead).
+- **The Overview's shares show no change**, as AN-141 and Appendix E define them, while criterion 12
+  "Overview" reads as if they did: a PRD amendment, worded in the acceptance file's section 9.
+- **The attribution beside other country values** (a profile's country, a trend split by country) is
+  not added; the owner may want it there too.
+- **FR-211's 1 MB default** for React Native feedback is a constant applied when `maxStoreBytes` is
+  absent; no test fills the store past it with the default.

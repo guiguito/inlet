@@ -631,7 +631,7 @@ analytics.init({
   publishableKey: 'ipk_…',
   analyticsDatabaseId: 'adb_…',
   app: { version: '1.4.0' },
-  enabled: false, // nothing is stored or sent until consent
+  enabled: false, // nothing is sent, and nothing but the opt-out choice is stored, until consent
 });
 
 // In your consent banner's callback, once the person agrees (and at every start after):

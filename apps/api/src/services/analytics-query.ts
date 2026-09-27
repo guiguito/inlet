@@ -393,6 +393,16 @@ export class ReadSkip {
     return this.data.erasures.length === 0 && this.data.deletedNameIds.length === 0;
   }
 
+  /**
+   * Whether an erasure is pending. `session_rollup` (0004, AN-035) keeps no received time, so it
+   * cannot hide exactly the rows received before an erasure, as `events` does; while one is
+   * pending, the Overview reads its sessions from the events instead (correct, slower, as every
+   * read is while something is pending).
+   */
+  get erasing(): boolean {
+    return this.data.erasures.length > 0;
+  }
+
   /** For `events`: an erased installation's or user's rows received before the erasure, and deleted names. */
   events(p: SqlParams): string {
     const parts: string[] = [];
@@ -470,6 +480,31 @@ export async function readSkip(ctx: AppContext, databaseKey: number): Promise<Re
 export function invalidateReadSkip(databaseKey?: number): void {
   if (databaseKey === undefined) skips.clear();
   else skips.delete(databaseKey);
+}
+
+// --- The installation index (0004, AN-031, AN-035) ------------------------------------------------
+
+/**
+ * One row per installation of a database from `installation_index` (0004): `installation_id`,
+ * `has_qualifying`, `installation_kind`, `ephemeral`, `last_seen`, `last_event`, `install` and
+ * `latest`, the same values `installations` gives (AN-031). Every reader tests `has_qualifying = 1`
+ * first, the existence rule, and applies the erasure skip, as readers of `installations` do.
+ *
+ * Almost every installation has one row once its parts have merged, and that row is its record:
+ * only those with more than one (recently active, their rows not merged yet) are aggregated. The
+ * aggregation of a tuple of strings per installation is what cost most of a read of every
+ * installation (DECISIONS 33.12d: 0.39 s at 917,000 installations against 0.09 s this way).
+ */
+export function indexRecords(databaseKey: number, skip: ReadSkip, p: SqlParams): string {
+  const rows = `FROM installation_index WHERE database_key = ${p.add(databaseKey, 'UInt32')} AND ${skip.installations(p)}`;
+  const multiple = `(SELECT installation_id ${rows} GROUP BY installation_id HAVING count() > 1)`;
+  return `SELECT installation_id, has_qualifying, installation_kind, ephemeral, last_seen, last_event, install, latest
+      ${rows} AND installation_id NOT IN ${multiple}
+    UNION ALL
+    SELECT installation_id, max(has_qualifying) AS q, max(installation_kind) AS k, max(ephemeral) AS e, max(last_seen) AS s, max(last_event) AS l,
+           min(install) AS i, max(latest) AS t
+      ${rows} AND installation_id IN ${multiple}
+      GROUP BY installation_id`;
 }
 
 // --- Event names (AN-056, 9.4) ----------------------------------------------------------------------

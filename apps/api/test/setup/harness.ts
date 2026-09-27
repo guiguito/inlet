@@ -75,7 +75,7 @@ const TABLES = [
  * Every event-store table that holds data (UX Analytics 11: the harness resets the tables
  * of a real ClickHouse). `events_ingest` stores nothing and the views hold no rows.
  */
-const EVENT_STORE_TABLES = ['events', 'installations', 'installation_users', 'installation_first', 'user_first', 'version_first', 'analytics_erasure_targets'];
+const EVENT_STORE_TABLES = ['events', 'installations', 'installation_users', 'installation_first', 'user_first', 'version_first', 'analytics_erasure_targets', 'installation_index', 'session_rollup'];
 
 /**
  * `overrides` replaces TEST_ENV's values. `{ INLET_CLICKHOUSE_URL: '' }` builds an app with

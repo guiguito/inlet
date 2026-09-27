@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { XIcon } from 'lucide-react';
 import { ANALYTICS_PLATFORMS, ANALYTICS_RANGE_PRESETS, type AnalyticsRange } from '@inlet/shared';
 import { api, ApiError, type AnalyticsCrashFree, type AnalyticsFigure, type AnalyticsOverview, type AnalyticsOverviewQuery, type AnalyticsShare, type AnalyticsTrendAnswer } from '@/lib/api';
 import { queryErrorSentence, todayInZone } from '@/components/analytics-events';
+import { CountryAttribution } from '@/components/country-attribution';
 import { EmptyState } from '@/components/empty-state';
 import { TrendChart } from '@/components/trend-chart';
 import { Badge } from '@/components/ui/badge';
@@ -116,7 +117,12 @@ export function OverviewPanel({ databaseId, timezone, unreachable }: { databaseI
           <div className="grid gap-4 lg:grid-cols-3">
             <ShareTable title="App version" rows={data.shares.appVersion} testId="share-app-version" />
             <ShareTable title="Platform" rows={data.shares.platform} testId="share-platform" />
-            <ShareTable title="Country" rows={data.shares.country} testId="share-country" />
+            <ShareTable
+              title="Country"
+              rows={data.shares.country}
+              testId="share-country"
+              note={<CountryAttribution className="mt-3" />}
+            />
           </div>
           <div className="grid gap-4 lg:grid-cols-2">
             <TopEvents data={data} />
@@ -350,7 +356,7 @@ function DailyActive({ data }: { data: AnalyticsOverview }) {
 
 // --- Shares, top events, crash-free sessions ---------------------------------------------------------
 
-function ShareTable({ title, rows, testId }: { title: string; rows: AnalyticsShare[]; testId: string }) {
+function ShareTable({ title, rows, testId, note }: { title: string; rows: AnalyticsShare[]; testId: string; note?: ReactNode }) {
   return (
     <Card>
       <CardHeader>
@@ -387,6 +393,7 @@ function ShareTable({ title, rows, testId }: { title: string; rows: AnalyticsSha
             </TableBody>
           </Table>
         )}
+        {note}
       </CardContent>
     </Card>
   );

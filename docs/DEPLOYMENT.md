@@ -193,8 +193,8 @@ in memory on the API process (see Health and observability).
 | `INLET_ANALYTICS_QUERY_SLOTS` | `3` | 2 to 64 | Analytics queries running at once; one is always kept for signed-in users |
 | `INLET_ANALYTICS_QUERY_TIME_S` | `30` | 1 to 600 | Time limit of an analytics query |
 | `INLET_ANALYTICS_FUNNEL_TREND_TIME_S` | `120` | 1 to 3,600 | Time limit of a funnel's trend view |
-| `INLET_ANALYTICS_QUERY_MEMORY_BYTES` | `805306368` (768 MiB) | 64 MiB to 1 TiB | Memory limit of an analytics query. Sized for the Small host, whose ClickHouse is capped at about 3 GB: three slots use 2.25 GiB and leave the rest to inserts and merges. Raise it to about 8 GB on the reference host |
-| `INLET_ANALYTICS_QUERY_THREADS` | `0` | 0 to 256 | Threads per analytics query; `0` means half of what the event store reports as its own `max_threads`, its cores by default |
+| `INLET_ANALYTICS_QUERY_MEMORY_BYTES` | `805306368` (768 MiB) | 64 MiB to 1 TiB | Memory limit of an analytics query. Sized for the Small host, whose ClickHouse is capped at about 3 GB: three slots use 2.25 GiB and leave the rest to inserts and merges. The Overview runs seven statements at once in its slot and gives each a seventh of this limit, past half of which it spills to the temporary disk (below). Raise it to about 8 GB on the reference host |
+| `INLET_ANALYTICS_QUERY_THREADS` | `0` | 0 to 256 | Threads per analytics query; the Overview divides them among the seven statements it runs at once, at least one each, so below 7 its slot uses 7. `0` means half of what the event store reports as its own `max_threads`, its cores by default |
 | `INLET_ANALYTICS_ERASURE_BOUND_DAYS` | `30` | 1 to 30 | Days within which erased analytics events leave the event store's files ([Erasure on disk](#erasure-on-disk)). The worker forces the rewrite of the partitions still carrying them once half of it has passed. You may only shorten it |
 
 Narrowing the retention bounds rewrites nobody's setting. A crash database whose stored
@@ -396,9 +396,9 @@ not stored with the event, not logged, and not kept anywhere.
   SHA-256) into `apps/api/ip-country/`. **IP to country data by
   [DB-IP](https://db-ip.com), licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).**
   Its licence allows bundling it with attribution, which Inlet shows under an analytics
-  database's Settings; MaxMind's GeoLite licence does not. It is as current as the image you
-  run; to use a newer file, point `INLET_IP_COUNTRY_DB` at it, or update the pin in
-  `scripts/ip-country-db.mjs` (the file says how) and rebuild.
+  database's Settings and beside the Overview's country shares; MaxMind's GeoLite licence does
+  not. It is as current as the image you run; to use a newer file, point `INLET_IP_COUNTRY_DB` at
+  it, or update the pin in `scripts/ip-country-db.mjs` (the file says how) and rebuild.
 
 A server started without the file logs once that it could not read it and records no
 country; everything else works. `npm run services:up` downloads the same pinned file for
@@ -446,9 +446,11 @@ container, if you need to change anything else.
 **Temporary disk for long funnels and cohorts.** A funnel or a cohort over a long range holds an
 array per installation while it aggregates, and past half of `INLET_ANALYTICS_QUERY_MEMORY_BYTES`
 ClickHouse writes that aggregation to its temporary directory instead of refusing the query with
-`query_limit_exceeded` (DECISIONS 33.12a). The answer is the same; it takes longer. The bundled
-service keeps that directory at ClickHouse's default, `/var/lib/clickhouse/tmp/`, inside the
-`clickhousedata` volume, so it uses the same disk as the events. Keep free space on that volume of
+`query_limit_exceeded` (DECISIONS 33.12a). So does each of the Overview's statements past half of
+its seventh of that limit, as its sessions do at scale while an erasure is pending (DECISIONS
+33.12d). The answer is the same; it takes longer. The bundled service keeps that directory at
+ClickHouse's default, `/var/lib/clickhouse/tmp/`, inside the `clickhousedata` volume, so it uses
+the same disk as the events. Keep free space on that volume of
 at least the query memory limit times the query slots — 2.25 GiB at the defaults (three slots of
 768 MiB), about 24 GB on the reference host at 8 GB a query — beyond what the events take; the
 files are deleted as soon as each query ends. On your own ClickHouse, the same applies to its
@@ -483,6 +485,14 @@ needs `SELECT` on it and a profile with `readonly = 2` (not `1`, which would sto
 setting each query's time and memory limits). Leave out the read URL and Inlet reads as the
 writing user, with `readonly=2` on every read. Inlet sets `max_partitions_per_insert_block`
 to 1000 on its own inserts, since one insert can span several weeks and databases.
+
+**Connections.** Inlet keeps up to 100 HTTP connections open to ClickHouse for each of the two
+users. Each ingest batch is one asynchronous insert that holds its connection until ClickHouse
+has written it (`wait_for_async_insert = 1`, with `async_insert_busy_timeout_max_ms` set to 100
+on those inserts), about a quarter of a second, so the pool carries about 400 batches a second,
+ten times the 2,000 events a second of the reference workload in batches of 50. If your
+ClickHouse, or a proxy in front of it, limits connections per user or per client address, allow
+at least 100 for each user, 200 when both use one address.
 
 Pointing Inlet at a different ClickHouse is not a move: analytics databases then read as
 empty, unless you restore a backup of the first one into it.
@@ -606,7 +616,8 @@ it, the time), and every read skips those rows at once. The worker then, every 3
    pass until none is left (a lightweight delete costs per statement and per part touched, not
    per ID, DECISIONS 33.1);
 2. deletes the installation records, identity links and first occurrences of those IDs, and the
-   records and first occurrences of the installations the erased user shared with someone else,
+   records, first occurrences and the internal rollups of the sessions and records (UX Analytics
+   AN-035) of the installations erased and of those the erased user shared with someone else,
    then derives them again from the events that remain (those the same IDs sent after the
    erasure, and a shared installation's other events);
 3. waits for the rows to leave the event store's files. A lightweight `DELETE` only masks rows;

@@ -17,6 +17,7 @@ import { AppShell } from '@/components/app-shell';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { CopyField } from '@/components/copy-field';
 import { DatabaseSwitcher } from '@/components/database-switcher';
+import { CountryAttribution } from '@/components/country-attribution';
 import { EmptyState } from '@/components/empty-state';
 import { NotifyPanel } from '@/components/notify-panel';
 import { Badge } from '@/components/ui/badge';
@@ -281,13 +282,7 @@ function GeneralSettings({
             <Label htmlFor="country-derivation">Derive the country of each event</Label>
           </div>
           {members.data && !isAdmin ? <p className="text-[13px] text-muted-foreground">Only an Admin can change this.</p> : null}
-          <p className="text-[13px] text-muted-foreground">
-            IP to country data by{' '}
-            <a className="underline" href="https://db-ip.com" target="_blank" rel="noreferrer">
-              DB-IP (db-ip.com)
-            </a>
-            , CC BY 4.0
-          </p>
+          <CountryAttribution className="text-[13px]" />
         </CardContent>
       </Card>
 

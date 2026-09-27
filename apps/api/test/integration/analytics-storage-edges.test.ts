@@ -112,7 +112,8 @@ describe('storage, retention and incidents at their edges', () => {
     const original = store.command.bind(store);
     let drops = 0;
     store.command = async (statement, params, settings) => {
-      if (statement.includes('DROP PARTITION') && ++drops === 2) throw new Error('killed between drops');
+      // Each week goes from the session rollup, then from the events (AN-035): killed at the second week of events.
+      if (statement.startsWith('ALTER TABLE events DROP PARTITION') && ++drops === 2) throw new Error('killed between drops');
       return original(statement, params, settings);
     };
     try {

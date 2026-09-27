@@ -21,6 +21,7 @@ import {
 import { api, ApiError, type AnalyticsCatalogEntry, type AnalyticsTrendDefinition } from '@/lib/api';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { EmptyState } from '@/components/empty-state';
+import { CountryAttribution } from '@/components/country-attribution';
 import { TrendChart } from '@/components/trend-chart';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -501,7 +502,10 @@ function ChartBuilder({
             {queryErrorSentence(trend.error, unreachable)}
           </p>
         ) : trend.data ? (
-          <TrendChart answer={trend.data} />
+          <>
+            <TrendChart answer={trend.data} />
+            {chart.split?.field === 'country' ? <CountryAttribution /> : null}
+          </>
         ) : (
           <Skeleton className="h-60" />
         )}

@@ -1,7 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installElectronMain, type ElectronAnalyticsModule } from '../src/analytics/electron.js';
 import { createElectronRenderer } from '../src/analytics/electron-renderer.js';
 import * as analytics from '../src/analytics/index.js';
@@ -260,6 +260,16 @@ describe('the Electron IPC trust boundary, probed (AN-238, CR-111)', () => {
 });
 
 describe('Electron main defaults (AN-238, AN-229, CR-119)', () => {
+  // The crash module's Electron main reads the real clock (src/crash/electron.ts) where the
+  // analytics client reads the injected one; the real clock starts at START so the two agree
+  // whenever the suite runs, and only `Date` is faked, so every timer stays real.
+  beforeEach(() => {
+    vi.useFakeTimers({ now: START, toFake: ['Date'], shouldAdvanceTime: true });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('every process start begins a launch session in the same installation; a failing getSystemVersion leaves the version out', async () => {
     const userData = tempDir();
     const server = new FakeInlet();
