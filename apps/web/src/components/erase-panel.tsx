@@ -31,10 +31,19 @@ const UNITS: Record<string, [string, string?]> = {
   events: ['event'],
   installations: ['installation'],
 };
-const TYPE_LABELS = { crash: 'Crash', feedback: 'Feedback', analytics: 'Analytics' } as const;
+const TYPE_LABELS = { crash: 'Crash', feedback: 'Feedback', analytics: 'Analytics', config: 'Config' } as const;
 
 export const ERASE_PURPOSE =
-  'To honour a person’s request to delete their data: deletes the crash reports, feedback submissions and analytics events carrying their ID in the databases you select and administer.';
+  'To honour a person’s request to delete their data: deletes the crash reports, feedback submissions and analytics events carrying their ID, and removes it from the config rules that name it, in the databases you select and administer.';
+
+/** RC-100, RC-044: said under the preview when it lists a config database. */
+export const CONFIG_ERASURE_NOTE =
+  'A config database holds no installation or user ID from a fetch, only the IDs your team wrote into its rules. The erasure removes the ID from those rules in the draft and in every version (an equals rule becomes an empty in list, a notEquals rule an empty notIn list); each version keeps its number and record, the active version stays active and is served rewritten at once, and the draft’s revision moves on, so review it again before publishing.';
+
+/** RC-100: rules, not records — they are rewritten, not deleted. */
+function rulesText(counts: Record<string, number>): string {
+  return `${pluralize(counts.draftRules ?? 0, 'rule')} in the draft and ${pluralize(counts.versionRules ?? 0, 'rule')} across the versions`;
+}
 
 function countsText(counts: Record<string, number>): string {
   return Object.entries(counts)
@@ -137,7 +146,7 @@ export function ErasePanel({
                     <span className="sr-only">Erase here</span>
                   </TableHead>
                   <TableHead>Database</TableHead>
-                  <TableHead>What the erasure deletes</TableHead>
+                  <TableHead>What the erasure removes</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -158,7 +167,9 @@ export function ErasePanel({
                     </TableCell>
                     <TableCell className="numeric text-sm">
                       {database.counts
-                        ? countsText(database.counts)
+                        ? database.type === 'config'
+                          ? `${rulesText(database.counts)} name the ID`
+                          : countsText(database.counts)
                         : 'The analytics event store is unreachable, so nothing could be counted; selected, the erasure is recorded and applies once it answers.'}
                     </TableCell>
                   </TableRow>
@@ -166,6 +177,7 @@ export function ErasePanel({
               </TableBody>
             </Table>
             {preview.databases.length === 0 ? <p className="text-sm text-muted-foreground">You administer no database of this project.</p> : null}
+            {preview.databases.some((database) => database.type === 'config') ? <p className="text-sm text-muted-foreground">{CONFIG_ERASURE_NOTE}</p> : null}
             <p className="text-sm text-muted-foreground">{preview.limits}</p>
             <div className="space-y-1.5">
               <Label htmlFor="erase-confirm">
@@ -192,7 +204,9 @@ export function ErasePanel({
                 <li key={database.id}>
                   <span className="font-medium">{database.name}</span>:{' '}
                   {database.deleted
-                    ? countsText(database.deleted)
+                    ? database.type === 'config'
+                      ? `the ID removed from ${rulesText(database.deleted)}`
+                      : countsText(database.deleted)
                     : 'recorded; the event store was unreachable, so it applies once it answers.'}
                 </li>
               ))}

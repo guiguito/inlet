@@ -25,6 +25,17 @@ import { fileURLToPath } from 'node:url';
 import EmbeddedPostgres from 'embedded-postgres';
 import { ensureIpCountryDb } from './ip-country-db.mjs';
 
+// embedded-postgres stops its clusters from an `async-exit-hook` on `beforeExit`, which then calls
+// `process.exit(0)` and erases the exit code a test runner set: `vitest run` with failures exited 0.
+// Our listener runs after that hook, before its exit, so it keeps the code for the `exit` event.
+let exitCodeBeforeHook;
+process.on('beforeExit', () => {
+  exitCodeBeforeHook = process.exitCode;
+});
+process.on('exit', () => {
+  if (exitCodeBeforeHook) process.exitCode = exitCodeBeforeHook;
+});
+
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const devDir = path.join(repoRoot, '.dev');
 const rustfsBinary = path.join(devDir, 'bin', 'rustfs');

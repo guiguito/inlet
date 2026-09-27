@@ -22,13 +22,14 @@ import {
   type SessionRecord,
   type SessionTrigger,
 } from '../identity.js';
+import { CONFIG_EXPERIMENTS_SLOT } from '../identity-keys.js';
 import { identityStorageOver } from '../store.js';
 import { KeyedEventQueue, MemoryEventQueue, type EventQueueStore, type QueuedEvent } from './queue.js';
 import { AnalyticsTransport } from './transport.js';
 import type { AnalyticsDropReason, AnalyticsEnvelope, AnalyticsInitOptions, AnalyticsParamValue, StandardEventSwitches, TrackOptions } from './types.js';
 
 export const SDK_NAME = 'inlet-sdk';
-export const SDK_VERSION = '0.3.0';
+export const SDK_VERSION = '0.4.0';
 
 /** What an adapter supplies (AN-236, AN-237); the bare entry supplies nothing. */
 export type AnalyticsAdapter = {
@@ -58,6 +59,8 @@ type State = {
   appBuild?: string;
   /** The installation ID `app_installed` was sent for (AN-228). */
   installed?: string;
+  /** RC-129: the experiment keys the config module set, so that it clears only its own. */
+  config?: string[];
 };
 
 /**
@@ -96,6 +99,8 @@ export class AnalyticsClient {
   private readonly ownSessions = new Set<string>();
   private attribution: string | null = null;
   private experiments: Record<string, string> = {};
+  /** RC-129: the keys of `experiments` the config module set. */
+  private configKeys: string[] = [];
   /** What this client installs on the identity, so that it takes off only its own (a second `init` may have attached since). */
   private readonly rotateHook = (session: SessionRecord, trigger: SessionTrigger) => this.announce(session, trigger);
 
@@ -200,8 +205,11 @@ export class AnalyticsClient {
       const state = device ? this.readState() : {};
       this.attribution = state.attribution ?? null;
       this.experiments = { ...(state.experiments ?? {}) };
+      // RC-129: an experiment `init` names is the application's, even on a key the config module set.
+      const named = options.experiments ?? {};
+      this.configKeys = Array.isArray(state.config) ? state.config.filter((key) => typeof key === 'string' && !Object.prototype.hasOwnProperty.call(named, key)) : [];
       if (options.attribution !== undefined) this.attribution = this.boundAttribution(options.attribution);
-      for (const [key, variant] of Object.entries(options.experiments ?? {})) this.putExperiment(key, variant);
+      for (const [key, variant] of Object.entries(named)) this.putExperiment(key, variant);
       // AN-225: an explicit `enabled` wins; without one, a persisted opt-out applies.
       const optedOut = device && this.storage.read(IDENTITY_KEYS.optOut) === '1';
       this.setEnabledSync(options.enabled ?? !optedOut);
@@ -278,8 +286,34 @@ export class AnalyticsClient {
       this.waiting.push(() => this.setExperiment(key, variant));
       return;
     }
+    // The application's own from now on: the config module no longer clears it (RC-129).
+    this.configKeys = this.configKeys.filter((own) => own !== key);
     if (variant === null || variant === undefined) delete this.experiments[key];
     else this.putExperiment(key, variant);
+    this.writeState();
+  }
+
+  /**
+   * RC-129: records the experiments of the config module's active answer, which it publishes
+   * at every activation and calls this for; also run at every enable. Clears the ones it set
+   * earlier that the answer no longer carries, never one the application set, and reports a
+   * refusal (the limit of five, AN-224) through the config module's `debug`.
+   */
+  syncConfigExperiments(): void {
+    const slot = (globalThis as Record<symbol, unknown>)[CONFIG_EXPERIMENTS_SLOT] as [Record<string, string>?, ((message: string) => void)?] | undefined;
+    if (!slot || !this.enabled || this.closed || this.mode !== 'device') return;
+    // No experiments: the config module's launch runs on its in-app defaults (RC-114).
+    const [experiments = {}, debug] = slot;
+    const own = (object: object, key: string) => Object.prototype.hasOwnProperty.call(object, key);
+    const set = this.configKeys;
+    for (const key of set) if (!own(experiments, key)) delete this.experiments[key];
+    this.configKeys = [];
+    for (const [key, variant] of Object.entries(experiments)) {
+      // The application's own experiment on the same key stays as it set it.
+      if (own(this.experiments, key) && !set.includes(key)) continue;
+      if (this.putExperiment(key, variant)) this.configKeys.push(key);
+      else debug?.(`The analytics module refused the experiment "${key}": at most ${ANALYTICS_LIMITS.experimentsMax} experiments, the application's own included (AN-224). Events do not record it.`);
+    }
     this.writeState();
   }
 
@@ -375,6 +409,8 @@ export class AnalyticsClient {
       this.writeOptOut();
       return;
     }
+    // RC-129: before the standard events `attach` queues, so they carry the config's experiments.
+    this.syncConfigExperiments();
     if (this.mode === 'device') this.attach();
     // FD-013, AN-241: the health probe is the first request, and tells the transport whether a
     // page hidden before its first flush may send with keepalive.
@@ -482,6 +518,7 @@ export class AnalyticsClient {
     this.identity.clearSession();
     this.attribution = null;
     this.experiments = {};
+    this.configKeys = [];
     this.announcedAny = false;
     await this.transport.clear();
     await this.identity.forgetQueued(forgotten);
@@ -677,26 +714,27 @@ export class AnalyticsClient {
     return truncateText(text, ANALYTICS_LIMITS.attributionMaxLength) || null;
   }
 
-  private putExperiment(key: string, variant: string): void {
+  private putExperiment(key: string, variant: string): boolean {
     if (!EXPERIMENT_KEY_PATTERN.test(key)) {
       this.debug(`setExperiment: "${key}" is not an experiment key (1 to 40 letters, digits, "_", "." or "-"); refused.`);
-      return;
+      return false;
     }
     // The server refuses these keys on every event (a JSON parser's prototype guard), so a sticky
     // one would make every later event invalid.
     if (isReservedObjectKey(key)) {
       this.debug(`setExperiment: "${key}" cannot be an experiment key; refused.`);
-      return;
+      return false;
     }
     // Own keys only: `constructor` or `toString` would otherwise read as already set and pass
     // the cap, and a sixth sticky experiment makes every later event invalid.
     if (!Object.prototype.hasOwnProperty.call(this.experiments, key) && Object.keys(this.experiments).length >= ANALYTICS_LIMITS.experimentsMax) {
       this.debug(`setExperiment: at most ${ANALYTICS_LIMITS.experimentsMax} experiments; "${key}" was refused. Clear one with setExperiment(key, null).`);
-      return;
+      return false;
     }
     const text = String(variant);
     if (text.length > ANALYTICS_LIMITS.experimentVariantMaxLength) this.debug(`setExperiment: a variant is at most ${ANALYTICS_LIMITS.experimentVariantMaxLength} characters; truncated.`);
     this.experiments[key] = truncateText(text, ANALYTICS_LIMITS.experimentVariantMaxLength);
+    return true;
   }
 
   private readState(): State {
@@ -717,6 +755,8 @@ export class AnalyticsClient {
     else delete state.attribution;
     if (Object.keys(this.experiments).length > 0) state.experiments = { ...this.experiments };
     else delete state.experiments;
+    if (this.configKeys.length > 0) state.config = [...this.configKeys];
+    else delete state.config;
     try {
       this.storage.write(IDENTITY_KEYS.state, JSON.stringify(state));
     } catch (error) {

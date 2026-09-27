@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import {
   bigint,
   boolean,
+  check,
   date,
   index,
   integer,
@@ -18,6 +19,7 @@ import {
   SLACK_CONTENT_LEVELS,
   type AnalyticsCohortDefinition,
   type AnalyticsFunnelDefinition,
+  type ConfigTemplate,
   type CrashEnvelope,
   type FormDefinition,
   type StoredAnswers,
@@ -63,6 +65,10 @@ export const deliveryKindEnum = pgEnum('inlet_delivery_kind', [
   'crash_group_regressed',
   // UX Analytics AN-192: the opening or resolution of a data-health incident.
   'analytics_data_health',
+  // Remote Config RC-080: a config activity (publish, rollback, unpublish).
+  'config_published',
+  'config_rolled_back',
+  'config_unpublished',
 ]);
 
 /** CR-026. */
@@ -494,8 +500,10 @@ export const invitations = pgTable(
     }),
     /** FD-007: the third scope. Exactly one of project, feedback database or crash database is set. */
     crashDatabaseId: text('crash_database_id').references(() => crashDatabases.id, { onDelete: 'cascade' }),
-    /** FD-007: the fourth scope (Release 8). Exactly one of the four scope columns is set. */
+    /** FD-007: the fourth scope (Release 8). */
     analyticsDatabaseId: text('analytics_database_id').references(() => analyticsDatabases.id, { onDelete: 'cascade' }),
+    /** Foundations 10.6: the fifth scope (Release 9). Exactly one of the five scope columns is set. */
+    configDatabaseId: text('config_database_id').references(() => configDatabases.id, { onDelete: 'cascade' }),
     role: roleEnum('role').notNull(),
     createdBy: text('created_by').references(() => users.id, { onDelete: 'set null' }),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
@@ -584,7 +592,9 @@ export const notificationDeliveries = pgTable(
      * delivery held back by a Slack outage may meet an incident already resolved.
      */
     analyticsResolution: boolean('analytics_resolution').notNull().default(false),
-    /** The database whose Slack settings render and receive the message; `fdb_`, `cdb_` or `adb_`. */
+    /** RC-080, FD-006: the source of a `config_*` delivery; it goes with its activity. */
+    configActivityId: integer('config_activity_id').references(() => configActivity.id, { onDelete: 'cascade' }),
+    /** The database whose Slack settings render and receive the message; `fdb_`, `cdb_`, `adb_` or `cfg_`. */
     feedbackDatabaseId: text('feedback_database_id').notNull(),
     status: deliveryStatusEnum('status').notNull().default('pending'),
     attempts: integer('attempts').notNull().default(0),
@@ -1164,6 +1174,149 @@ export const erasures = pgTable(
   (table) => [index('erasures_project_idx').on(table.projectId, table.createdAt)],
 );
 
+// ---------------------------------------------------------------------------
+// Remote Config (Remote Config PRD section 9.3). Release 9, additive, PostgreSQL only
+// (Foundations FD-009). Every table of the release is here, so later pieces add routes, not
+// tables (DECISIONS 34.2).
+//
+// "A user or a credential" is two nullable columns with no foreign key, as `erasures` records
+// its actor: the history outlives a deleted account or a revoked key, and a check keeps
+// exactly one of the two set.
+// ---------------------------------------------------------------------------
+
+/** RC-052 to RC-058: what an activity records. */
+export const configActivityKindEnum = pgEnum('inlet_config_activity_kind', ['publish', 'rollback', 'unpublish']);
+/** RC-070: an hourly kind (`fetch`, `not_modified`, `version`, `refused`) or a daily one (`condition`, `variant`). */
+export const configReachKindEnum = pgEnum('inlet_config_reach_kind', ['fetch', 'not_modified', 'version', 'refused', 'condition', 'variant']);
+
+/** RC-001, RC-002. The refresh interval is stored as set; a read applies the operator's current bounds. */
+export const configDatabases = pgTable(
+  'config_databases',
+  {
+    id: text('id').primaryKey(),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    refreshIntervalMinutes: integer('refresh_interval_minutes').notNull(),
+    /** RC-002, RC-045: on by default; applies to fetches answered afterwards. */
+    countryDerivation: boolean('country_derivation').notNull().default(true),
+    /** RC-052 to RC-056: the version fetches are answered from; null before the first publish and after an unpublish. */
+    activeVersionNumber: integer('active_version_number'),
+    createdBy: text('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt,
+    updatedAt,
+  },
+  (table) => [index('config_databases_project_idx').on(table.projectId)],
+);
+
+/**
+ * RC-050: the one editable template, created with its database (empty, revision 0), so every
+ * later read and per-part change finds a row to lock. `revision` grows on every save and is
+ * what a publish asserts (RC-052, `stale_draft_revision`).
+ */
+export const configDrafts = pgTable(
+  'config_drafts',
+  {
+    configDatabaseId: text('config_database_id')
+      .primaryKey()
+      .references(() => configDatabases.id, { onDelete: 'cascade' }),
+    template: jsonb('template').$type<ConfigTemplate>().notNull(),
+    revision: integer('revision').notNull().default(0),
+    updatedByUserId: text('updated_by_user_id'),
+    updatedByCredentialId: text('updated_by_credential_id'),
+    updatedAt,
+  },
+  (table) => [check('config_drafts_one_actor', sql`num_nonnulls(${table.updatedByUserId}, ${table.updatedByCredentialId}) = 1`)],
+);
+
+/** RC-052, RC-059, RC-004: immutable but for the erasure rewrite (RC-100), numbered from 1 per database. */
+export const configVersions = pgTable(
+  'config_versions',
+  {
+    configDatabaseId: text('config_database_id')
+      .notNull()
+      .references(() => configDatabases.id, { onDelete: 'cascade' }),
+    number: integer('number').notNull(),
+    template: jsonb('template').$type<ConfigTemplate>().notNull(),
+    publishedByUserId: text('published_by_user_id'),
+    publishedByCredentialId: text('published_by_credential_id'),
+    publishedAt: timestamp('published_at', { withTimezone: true }).notNull().defaultNow(),
+    note: text('note'),
+    /** The draft revision it was published from; for a rollback, the draft's revision at that moment. */
+    draftRevision: integer('draft_revision').notNull(),
+    /** RC-057: what changed against the version it replaced, as `@inlet/shared` summarises it. */
+    changeSummary: jsonb('change_summary').$type<Record<string, unknown>>().notNull().default({}),
+    /** RC-053: the version a rollback republished. */
+    rolledBackFrom: integer('rolled_back_from'),
+  },
+  (table) => [
+    primaryKey({ columns: [table.configDatabaseId, table.number] }),
+    check('config_versions_one_actor', sql`num_nonnulls(${table.publishedByUserId}, ${table.publishedByCredentialId}) = 1`),
+  ],
+);
+
+/** RC-058: every publish, rollback and unpublish; the source of every config delivery (FD-006). */
+export const configActivity = pgTable(
+  'config_activity',
+  {
+    id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
+    configDatabaseId: text('config_database_id')
+      .notNull()
+      .references(() => configDatabases.id, { onDelete: 'cascade' }),
+    kind: configActivityKindEnum('kind').notNull(),
+    actorUserId: text('actor_user_id'),
+    actorCredentialId: text('actor_credential_id'),
+    /** The version a publish or rollback created; null for an unpublish. */
+    versionNumber: integer('version_number'),
+    note: text('note'),
+    createdAt,
+  },
+  (table) => [
+    index('config_activity_db_created_idx').on(table.configDatabaseId, table.createdAt.desc(), table.id.desc()),
+    check('config_activity_one_actor', sql`num_nonnulls(${table.actorUserId}, ${table.actorCredentialId}) = 1`),
+  ],
+);
+
+/**
+ * RC-070 to RC-072: counts of fetches, written by the worker from counters in memory. The
+ * period is an hour or a day by kind; `subject` is the version number, condition ID, variant
+ * key or refusal reason, empty otherwise. Kept 30 days.
+ */
+export const configReach = pgTable(
+  'config_reach',
+  {
+    configDatabaseId: text('config_database_id')
+      .notNull()
+      .references(() => configDatabases.id, { onDelete: 'cascade' }),
+    periodStart: timestamp('period_start', { withTimezone: true }).notNull(),
+    kind: configReachKindEnum('kind').notNull(),
+    subject: text('subject').notNull().default(''),
+    count: bigint('count', { mode: 'number' }).notNull().default(0),
+  },
+  (table) => [primaryKey({ columns: [table.configDatabaseId, table.periodStart, table.kind, table.subject] })],
+);
+
+/** Same shape as the other database memberships (Foundations 10.6, FD-007). */
+export const configDatabaseMemberships = pgTable(
+  'config_database_memberships',
+  {
+    configDatabaseId: text('config_database_id')
+      .notNull()
+      .references(() => configDatabases.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    role: roleEnum('role').notNull(),
+    createdAt,
+    updatedAt,
+  },
+  (table) => [
+    primaryKey({ columns: [table.configDatabaseId, table.userId] }),
+    index('config_database_memberships_user_idx').on(table.userId),
+  ],
+);
+
 export type UserRow = typeof users.$inferSelect;
 export type ProjectRow = typeof projects.$inferSelect;
 export type FeedbackDatabaseRow = typeof feedbackDatabases.$inferSelect;
@@ -1186,3 +1339,7 @@ export type CrashGroupRow = typeof crashGroups.$inferSelect;
 export type CrashReportRow = typeof crashReports.$inferSelect;
 export type AnalyticsDatabaseRow = typeof analyticsDatabases.$inferSelect;
 export type AnalyticsDatabaseMembershipRow = typeof analyticsDatabaseMemberships.$inferSelect;
+export type ConfigDatabaseRow = typeof configDatabases.$inferSelect;
+export type ConfigDraftRow = typeof configDrafts.$inferSelect;
+export type ConfigVersionRow = typeof configVersions.$inferSelect;
+export type ConfigActivityRow = typeof configActivity.$inferSelect;

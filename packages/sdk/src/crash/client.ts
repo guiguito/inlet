@@ -24,7 +24,7 @@ import type {
 } from './types.js';
 
 export const SDK_NAME = 'inlet-sdk';
-export const SDK_VERSION = '0.3.0';
+export const SDK_VERSION = '0.4.0';
 
 const DEDUPE_KEY = 'dedupe';
 type DedupeState = { byFingerprint: Record<string, number>; recent: number[] };

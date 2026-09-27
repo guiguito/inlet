@@ -7,6 +7,7 @@ import {
   analyticsDatabases,
   analyticsPendingErasures,
   attachments,
+  configDatabases,
   crashDatabases,
   crashGroups,
   crashGroupUsers,
@@ -19,6 +20,7 @@ import {
 import { ApiError, apiError, errors } from '../lib/errors.js';
 import {
   analyticsDatabaseRoleOf,
+  configDatabaseRoleOf,
   crashDatabaseRoleOf,
   databaseRoleOf,
   projectRoleOf,
@@ -29,11 +31,15 @@ import { eventStoreTime, serverInstallationId } from './analytics-derive.js';
 import { analyticsErasureCounts, resolveUserInstallations } from './analytics-erasure.js';
 import { evictInstallations, removeFromLiveFeed, rowsReceivedTime } from './analytics-ingest.js';
 import { invalidateReadSkip, querySettings, readSkip, runAnalyticsQuery, type ReadStore } from './analytics-query.js';
+import { eraseFromConfigDatabase, type ConfigErasureAttribute } from './config-erasure.js';
+import { forgetDraftStates } from './config-draft.js';
+import { configChanged } from './config-publish.js';
 import { carrying, eraseCrashReports, eraseSubmissions } from './erasure-deletes.js';
 
 /**
  * The project's erasure of an installation ID or a user ID (Foundations FD-033, UX Analytics
- * AN-183 to AN-185, Crash Reports CR-047, Feedback Collection FR-064A; DECISIONS 33.10).
+ * AN-183 to AN-185, Crash Reports CR-047, Feedback Collection FR-064A, Remote Config RC-100;
+ * DECISIONS 33.10, 34.6).
  *
  * A project Admin, or a database Admin for the databases they administer, previews what the
  * erasure would delete in each database, then erases in the databases they select, repeating the
@@ -41,14 +47,16 @@ import { carrying, eraseCrashReports, eraseSubmissions } from './erasure-deletes
  * the request records a pending erasure, which every read skips at once and the analytics worker
  * completes (services/analytics-erasure.ts). It works without the event store: the analytics
  * databases it cannot reach are named, and an erasure selected there is recorded to apply once
- * the store answers. Each erasure is recorded with its actor, time, kind and counts, never the ID.
+ * the store answers. In a config database the ID is removed from the rules of the draft and of
+ * every version (services/config-erasure.ts). Each erasure is recorded with its actor, time, kind
+ * and counts, never the ID.
  */
 
 /**
- * The database types an erasure covers. Remote Config's config databases (RC-100), which hold an
- * ID only where a team wrote it into a rule, do not exist yet: they join this list when they do.
+ * The database types an erasure covers. A config database (RC-100) holds an ID only where a team
+ * wrote it into a rule, never one from a fetch (RC-044).
  */
-export const ERASURE_DATABASE_TYPES = ['crash', 'feedback', 'analytics'] as const;
+export const ERASURE_DATABASE_TYPES = ['crash', 'feedback', 'analytics', 'config'] as const;
 export type ErasureDatabaseType = (typeof ERASURE_DATABASE_TYPES)[number];
 
 /** AN-183: said with every preview. */
@@ -65,7 +73,8 @@ export type ErasureSubject = { kind: ErasureKind; id: string };
 type ScopedDatabase =
   | { type: 'crash'; id: string; name: string }
   | { type: 'feedback'; id: string; name: string }
-  | { type: 'analytics'; id: string; name: string; key: number; installationSecret: string };
+  | { type: 'analytics'; id: string; name: string; key: number; installationSecret: string }
+  | { type: 'config'; id: string; name: string };
 
 export type ErasurePreviewDatabase = {
   type: ErasureDatabaseType;
@@ -103,10 +112,11 @@ async function erasureScope(ctx: AppContext, principal: Principal, projectId: st
   rejectPublishableKey(principal, 'erase an installation or user ID');
   const [project] = await ctx.db.select({ id: projects.id }).from(projects).where(eq(projects.id, projectId)).limit(1);
   if (!project) throw errors.projectNotFound();
-  const [crash, feedback, analytics, projectRole] = await Promise.all([
+  const [crash, feedback, analytics, config, projectRole] = await Promise.all([
     ctx.db.select().from(crashDatabases).where(eq(crashDatabases.projectId, projectId)).orderBy(asc(crashDatabases.name)),
     ctx.db.select().from(feedbackDatabases).where(eq(feedbackDatabases.projectId, projectId)).orderBy(asc(feedbackDatabases.name)),
     ctx.db.select().from(analyticsDatabases).where(eq(analyticsDatabases.projectId, projectId)).orderBy(asc(analyticsDatabases.name)),
+    ctx.db.select().from(configDatabases).where(eq(configDatabases.projectId, projectId)).orderBy(asc(configDatabases.name)),
     projectRoleOf(ctx.db, principal, projectId),
   ]);
   let anyRole = projectRole !== null;
@@ -125,6 +135,11 @@ async function erasureScope(ctx: AppContext, principal: Principal, projectId: st
     const role = await analyticsDatabaseRoleOf(ctx.db, principal, database);
     anyRole ||= role !== null;
     if (role === 'admin') scoped.push({ type: 'analytics', id: database.id, name: database.name, key: database.key, installationSecret: database.installationSecret });
+  }
+  for (const database of config) {
+    const role = await configDatabaseRoleOf(ctx.db, principal, database);
+    anyRole ||= role !== null;
+    if (role === 'admin') scoped.push({ type: 'config', id: database.id, name: database.name });
   }
   if (!anyRole) throw errors.projectNotFound();
   if (scoped.length === 0 && projectRole !== 'admin') {
@@ -181,6 +196,9 @@ function identityOf(subject: ErasureSubject, reach: Reach): { installationIds: s
   return { installationIds: [...installationIds], userIds: subject.kind === 'user' ? [subject.id] : [] };
 }
 
+/** RC-100: the rule attribute an erased ID is written under; the erased ID alone, not the installations a user ID resolves to. */
+const configAttribute = (subject: ErasureSubject): ConfigErasureAttribute => (subject.kind === 'installation' ? 'installationId' : 'userId');
+
 async function crashCounts(db: Db, databaseId: string, ids: { installationIds: string[]; userIds: string[] }): Promise<Record<string, number>> {
   const [reports] = await db.select({ n: sql<number>`count(*)::int` }).from(crashReports).where(and(eq(crashReports.crashDatabaseId, databaseId), carrying(crashReports.installationId, crashReports.userId, ids)));
   const [users] =
@@ -213,6 +231,7 @@ export async function previewErasure(ctx: AppContext, principal: Principal, proj
     const base = { type: database.type, id: database.id, name: database.name };
     if (database.type === 'crash') databases.push({ ...base, status: 'counted', counts: await crashCounts(ctx.db, database.id, ids) });
     else if (database.type === 'feedback') databases.push({ ...base, status: 'counted', counts: await feedbackCounts(ctx.db, database.id, ids) });
+    else if (database.type === 'config') databases.push({ ...base, status: 'counted', counts: await eraseFromConfigDatabase(ctx.db, database.id, configAttribute(subject), subject.id, null) });
     else {
       const reached = reach.reached.get(database.id);
       databases.push(reached ? { ...base, status: 'counted', counts: reached.counts } : { ...base, status: 'unreachable', counts: null });
@@ -225,10 +244,11 @@ export type ErasureRequest = ErasureSubject & { confirm: string; databases: stri
 
 /**
  * FD-033, AN-184: erases in the selected databases, the exact ID repeated as `confirm` (FD-022).
- * Crash reports and submissions, and the pending erasure of each analytics database, are written
- * in one transaction with the erasure's record, so what it reports deleted is unreadable when it
- * answers. The analytics databases the event store could not reach are recorded as deferred:
- * their pending erasure applies once it answers, without counts (DECISIONS 33.10).
+ * Crash reports and submissions, the pending erasure of each analytics database and the rewritten
+ * rules of each config database are written in one transaction with the erasure's record, so what
+ * it reports deleted is unreadable when it answers. The analytics databases the event store
+ * could not reach are recorded as deferred: their pending erasure applies once it answers,
+ * without counts (DECISIONS 33.10).
  */
 export async function eraseIdentity(ctx: AppContext, principal: Principal, projectId: string, request: ErasureRequest) {
   if (request.confirm !== request.id) {
@@ -251,6 +271,7 @@ export async function eraseIdentity(ctx: AppContext, principal: Principal, proje
 
   const results: ErasureResultDatabase[] = [];
   const touched: { key: number; installationIds: string[] }[] = [];
+  const rewrittenConfig: string[] = [];
   const selectedOf = (type: ErasureDatabaseType) => selected.filter((id) => byId.get(id)!.type === type);
   const erasureId = await ctx.db.transaction(async (tx) => {
     // The record first, so each pending erasure can name it: the worker adds to its counts what it
@@ -269,7 +290,11 @@ export async function eraseIdentity(ctx: AppContext, principal: Principal, proje
       const base = { type: database.type, id: database.id, name: database.name };
       if (database.type === 'crash') results.push({ ...base, status: 'erased', deleted: await eraseCrashReports(tx, database.id, ids) });
       else if (database.type === 'feedback') results.push({ ...base, status: 'erased', deleted: await eraseSubmissions(tx, database.id, ids) });
-      else {
+      else if (database.type === 'config') {
+        const rewritten = await eraseFromConfigDatabase(tx, database.id, configAttribute(subject), subject.id, principal);
+        if (rewritten.draftRules + rewritten.versionRules > 0) rewrittenConfig.push(database.id);
+        results.push({ ...base, status: 'erased', deleted: rewritten });
+      } else {
         const reached = reach.reached.get(database.id);
         // Without the event store a user's other installations cannot be resolved; its server
         // installation can, and the worker resolves the rest once the store answers.
@@ -304,6 +329,12 @@ export async function eraseIdentity(ctx: AppContext, principal: Principal, proje
     invalidateReadSkip(key);
     removeFromLiveFeed(key, { installationIds, userIds });
     evictInstallations(key, installationIds);
+  }
+  // RC-100, RC-033: the next fetch recompiles the rewritten active version, and the draft's
+  // problems and difference are computed again.
+  for (const databaseId of rewrittenConfig) {
+    configChanged(ctx, databaseId);
+    forgetDraftStates(databaseId);
   }
   return { erasureId, kind: subject.kind, databases: results, limits: ERASURE_LIMITS_NOTE };
 }

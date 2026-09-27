@@ -10,6 +10,8 @@ import {
   crashDatabases,
   analyticsDatabaseMemberships,
   analyticsDatabases,
+  configDatabaseMemberships,
+  configDatabases,
 } from '../db/schema.js';
 import { apiError, errors } from '../lib/errors.js';
 import { countProjectAdmins } from './access.js';
@@ -320,6 +322,55 @@ export async function clearAnalyticsDatabaseRole(ctx: AppContext, databaseId: st
   if (!deleted[0]) throw apiError('not_found', 'That person has no assignment on this analytics database.');
 }
 
+// --- Config-database memberships (Foundations 10.6, Release 9) ---------------------------
+
+async function configProjectId(ctx: AppContext, databaseId: string): Promise<string> {
+  const rows = await ctx.db.select({ projectId: configDatabases.projectId }).from(configDatabases).where(eq(configDatabases.id, databaseId)).limit(1);
+  const projectId = rows[0]?.projectId;
+  if (!projectId) throw apiError('config_database_not_found', 'That config database does not exist.');
+  return projectId;
+}
+
+export async function listConfigDatabaseMembers(ctx: AppContext, databaseId: string): Promise<MemberView[]> {
+  const projectId = await configProjectId(ctx, databaseId);
+  const projectRoles = new Map((await listProjectMembers(ctx, projectId)).map((member) => [member.userId, member]));
+  const overrides = await ctx.db
+    .select({
+      userId: users.id,
+      email: users.email,
+      displayName: users.displayName,
+      role: configDatabaseMemberships.role,
+      createdAt: configDatabaseMemberships.createdAt,
+    })
+    .from(configDatabaseMemberships)
+    .innerJoin(users, eq(users.id, configDatabaseMemberships.userId))
+    .where(eq(configDatabaseMemberships.configDatabaseId, databaseId));
+  return mergeMembers(projectRoles, overrides);
+}
+
+export async function setConfigDatabaseRole(ctx: AppContext, databaseId: string, userId: string, role: Role): Promise<MemberView> {
+  const projectId = await configProjectId(ctx, databaseId);
+  await assertOverridable(ctx, projectId, userId);
+  await ctx.db
+    .insert(configDatabaseMemberships)
+    .values({ configDatabaseId: databaseId, userId, role })
+    .onConflictDoUpdate({
+      target: [configDatabaseMemberships.configDatabaseId, configDatabaseMemberships.userId],
+      set: { role, updatedAt: new Date() },
+    });
+  const updated = (await listConfigDatabaseMembers(ctx, databaseId)).find((member) => member.userId === userId);
+  if (!updated) throw apiError('internal_error', 'The assignment could not be read back.');
+  return updated;
+}
+
+export async function clearConfigDatabaseRole(ctx: AppContext, databaseId: string, userId: string): Promise<void> {
+  const deleted = await ctx.db
+    .delete(configDatabaseMemberships)
+    .where(and(eq(configDatabaseMemberships.configDatabaseId, databaseId), eq(configDatabaseMemberships.userId, userId)))
+    .returning({ userId: configDatabaseMemberships.userId });
+  if (!deleted[0]) throw apiError('not_found', 'That person has no assignment on this config database.');
+}
+
 /** FR-071A and "has an account", shared by every database type. */
 async function assertOverridable(ctx: AppContext, projectId: string, userId: string): Promise<void> {
   const projectRole = await ctx.db
@@ -446,5 +497,10 @@ async function clearDatabaseOverrides(
   await ctx.db.execute(
     sql`delete from analytics_database_memberships where user_id = ${userId}
         and analytics_database_id in (select id from analytics_databases where project_id = ${projectId})`,
+  );
+  // Foundations 10.6: and its config databases.
+  await ctx.db.execute(
+    sql`delete from config_database_memberships where user_id = ${userId}
+        and config_database_id in (select id from config_databases where project_id = ${projectId})`,
   );
 }

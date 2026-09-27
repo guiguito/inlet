@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.4.0 — 2026-09-27
+
+Remote config.
+
+**What an existing application sees.** Upgrading from 0.3.0 without installing the config
+module changes one thing, a fix in the React Native entries (below): crash reports,
+submissions and analytics events carry exactly what 0.3.0 sent, and nothing new is written to
+the device. `SDK_VERSION` is `0.4.0` in every module.
+
+- **`inlet-sdk/config`** (Remote Config RC-110 to RC-129), with `/browser`, `/node`,
+  `/electron`, `/electron-renderer` and `/react-native` entries and the bare entry for any
+  runtime with `fetch`. `init` takes the database ID (`cfg_…`), the publishable key, the app
+  version and in-app `defaults` that type `get`; reads are synchronous and never throw (`get`,
+  `getBoolean`, `getNumber`, `getString`, `getJson`, `getAll`, `getDetails`, `getExperiments`,
+  also module-level); `ready({ timeoutMs })`, `onUpdate`, `activate`, `refresh`,
+  `setAttributes`, `setUserId`, `setInstallationIdEnabled`, `getInstallationId`, `close`.
+  Failures after `init` go to `onError(reason)`. Needs a deployment whose `/v1/health` lists
+  `config`; until then the application reads its defaults and asks again ten minutes later.
+- **When values apply.** At the next launch by default (`activation: 'launch'`), at once for
+  the first fetch before any read, for parameters marked live, for an unpublish and after a
+  change of user; `activate()` or `refresh({ activate: true })` applies a staged answer.
+  Answers are bound to the app version, build and user ID they were fetched for. The client
+  fetches at launch, on return to the foreground after the refresh interval, and every
+  interval (the larger of `refreshIntervalMinutes` and the database's), with jitter.
+- **Browser**: 7.9 KB minified and gzipped, and the build fails past 8 KB. Answers and the
+  installation ID in `localStorage`; the tabs of an origin share one fetch per refresh
+  interval under a Web Lock.
+- **Node**: server mode (the default) evaluates per context with `evaluate(context)`, 1,000
+  contexts cached, and never derives a country from the server's address; device mode
+  (`mode: 'device'`, `persistenceDir`) behaves as the browser entry, with files on disk.
+- **Electron** (`installElectronMain`, `createElectronRenderer`): the main process owns the
+  client under `<userData>/inlet` and pushes its state to every window on
+  `inlet:config:state`; renderers hold no key and make no request, and send their reads,
+  `activate`, `refresh`, `setUserId` and `setAttributes` over `inlet:config` through a
+  preload bridge. `acceptRendererIdentity: false` ignores a renderer's identity calls.
+- **React Native**: `Platform`, `AppState`, an AsyncStorage-compatible `store` and `random`
+  as parameters, nothing imported. A return to the foreground after 30 minutes or more in the
+  background is a launch. What it stores stays under `maxStoreBytes` (1 MB). Metro resolves
+  `inlet-sdk/config/react-native` without package `exports`.
+- **Experiments into analytics** (RC-129). With an analytics client of the application
+  enabled, each activation sets the active answer's split variants with analytics'
+  `setExperiment`, so they ride on every later event, and clears the ones the config module
+  set that the answer no longer carries; an analytics client enabled later receives them. It
+  never touches an experiment your application set, and shares the limit of five with your
+  own calls (a refusal goes to the config module's `debug`). The analytics module gains
+  `syncConfigExperiments()`, which the config module calls; you do not. An analytics module
+  older than 0.4.0 records nothing.
+- **The shared identity.** The config module creates the installation ID when none exists,
+  under the one key every module reads, unless initialised with `installationId: false`
+  (start with it off if the ID needs consent where your users are, then call
+  `setInstallationIdEnabled(true)`); the analytics module adopts it. Crash reports and
+  feedback submissions still carry an installation ID only while an analytics client is
+  enabled. A user ID set by any module (`setUser`, `setUserId`) is seen by the config module,
+  which fetches the new user's values, also when the other module is a 0.2.x or 0.3.0 copy.
+  A config fetch neither starts nor extends a session.
+- **Fix: the React Native store no longer leaves an unhandled rejection** when an
+  AsyncStorage that fails rejects its first read (every React Native entry).
+
 ## 0.3.0 — 2026-09-27
 
 UX analytics, and the identity it shares.

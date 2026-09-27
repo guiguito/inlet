@@ -14,8 +14,8 @@ import {
  * The cross-origin collection surface (FD-015).
  *
  * The browser adapters of `inlet-sdk` run on the integrator's own origin, so the health
- * probe, crash ingest, the four feedback collection routes and analytics ingest (for POST
- * only) answer cross-origin, and everything else does not. What is worth pinning here is the boundary, in both
+ * probe, crash ingest, the four feedback collection routes, analytics ingest and the config
+ * fetch (for POST only) answer cross-origin, and everything else does not. What is worth pinning here is the boundary, in both
  * directions: the paths that must work from a browser, and a list of near neighbours —
  * including the route that returns collected responses — that must not.
  *
@@ -192,6 +192,50 @@ describe('cross-origin collection', () => {
     expect(sent.headers['access-control-allow-origin']).toBe('*');
     expect(sent.headers['access-control-expose-headers']).toContain('retry-after');
     const refused = await withKey(h.app, 'ipk_not_a_real_key', 'POST', batch, { sentAt: new Date().toISOString(), events: [] });
+    expect(refused.statusCode).toBe(401);
+    expect(refused.headers['access-control-allow-origin']).toBe('*');
+  });
+
+  /**
+   * Remote Config RC-049, FD-015: the fetch is open for POST and its preflight only, whose answer
+   * a browser may cache for a day; the draft, preview and reach stay same-origin.
+   */
+  it('answers the config fetch preflight for POST with a day-long max-age, and nothing else under /config-databases', async () => {
+    const configDatabaseId = (await asAdmin(h, 'POST', `/v1/projects/${projectId}/config-databases`, { name: 'Mobile app' })).json().id;
+    const fetchPath = `/v1/config-databases/${configDatabaseId}/fetch`;
+    const open = await preflight(fetchPath, 'POST');
+    expect(open.statusCode).toBe(204);
+    expect(open.headers['access-control-allow-origin']).toBe('*');
+    expect(open.headers['access-control-allow-methods']).toBe('POST, OPTIONS');
+    expect(open.headers['access-control-allow-headers']).toContain('authorization');
+    expect(open.headers['access-control-allow-headers']).toContain('content-type');
+    expect(open.headers['access-control-max-age']).toBe('86400');
+    expect(open.headers['access-control-allow-credentials']).toBeUndefined();
+    for (const method of ['GET', 'PUT', 'DELETE']) expect((await preflight(fetchPath, method)).statusCode, method).toBe(404);
+
+    const closed: [string, string][] = [
+      [`/v1/config-databases/${configDatabaseId}/draft`, 'GET'],
+      [`/v1/config-databases/${configDatabaseId}/draft`, 'PUT'],
+      [`/v1/config-databases/${configDatabaseId}/preview`, 'POST'],
+      [`/v1/config-databases/${configDatabaseId}/reach`, 'GET'],
+      [`/v1/config-databases/${configDatabaseId}/publish`, 'POST'],
+      [`/v1/config-databases/${configDatabaseId}/versions`, 'GET'],
+      [`/v1/config-databases/${configDatabaseId}`, 'GET'],
+      [`/v1/config-databases/${configDatabaseId}/fetch/extra`, 'POST'],
+    ];
+    for (const [url, method] of closed) {
+      const response = await preflight(url, method);
+      expect(response.statusCode, `${method} ${url}`).toBe(404);
+      expect(response.headers['access-control-allow-origin'], url).toBeUndefined();
+    }
+    const draft = await asAdmin(h, 'GET', `/v1/config-databases/${configDatabaseId}/draft`);
+    expect(draft.headers['access-control-allow-origin']).toBeUndefined();
+
+    const sent = await withKey(h.app, publishable, 'POST', fetchPath, {}, { origin: 'https://app.example.com' });
+    expect(sent.statusCode, sent.body).toBe(200);
+    expect(sent.headers['access-control-allow-origin']).toBe('*');
+    expect(sent.headers['access-control-expose-headers']).toContain('retry-after');
+    const refused = await withKey(h.app, 'ipk_not_a_real_key', 'POST', fetchPath, {});
     expect(refused.statusCode).toBe(401);
     expect(refused.headers['access-control-allow-origin']).toBe('*');
   });

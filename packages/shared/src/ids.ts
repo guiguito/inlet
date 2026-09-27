@@ -25,6 +25,8 @@ export const ID_PREFIXES = {
   analyticsDatabase: 'adb',
   analyticsFunnel: 'afn',
   analyticsCohort: 'aco',
+  configDatabase: 'cfg',
+  configCondition: 'cnd',
 } as const;
 
 export type IdKind = keyof typeof ID_PREFIXES;

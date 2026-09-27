@@ -1,6 +1,8 @@
 import { z } from 'zod';
+import type { FastifyRequest } from 'fastify';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import type { AppContext } from '../context.js';
+import { ApiError, apiError } from '../lib/errors.js';
 import { ERASURE_DATABASE_TYPES, eraseIdentity, previewErasure } from '../services/erasure.js';
 import { requireManagementPrincipal } from '../services/principal.js';
 import { errorsFor, projectIdParam } from './schemas.js';
@@ -30,10 +32,10 @@ const previewSchema = z.object({
         id: z.string(),
         name: z.string(),
         status: z.enum(['counted', 'unreachable']).describe('`unreachable`: an analytics database the event store could not be asked about; an erasure selecting it is recorded and applies once the store answers.'),
-        counts: counts.nullable().describe('What the erasure would delete: `reports` and `groupUsers` (the user ID’s group-user associations) in a crash database, `submissions` and `attachments` in a feedback database, `events` and `installations` in an analytics database. Null when unreachable.'),
+        counts: counts.nullable().describe('What the erasure would delete: `reports` and `groupUsers` (the user ID’s group-user associations) in a crash database, `submissions` and `attachments` in a feedback database, `events` and `installations` in an analytics database, `draftRules` and `versionRules` (the rules naming the ID in the draft and across the versions) in a config database. Null when unreachable.'),
       }),
     )
-    .describe('Every crash, feedback and analytics database of the project you administer, crash first, then feedback, then analytics, each by name.'),
+    .describe('Every crash, feedback, analytics and config database of the project you administer, crash first, then feedback, analytics and config, each by name.'),
   notice: z.string().describe('What the erasure matches: the identity fields only (AN-183).'),
   limits: z.string().describe('What erasure does not do (AN-184).'),
 });
@@ -59,6 +61,23 @@ const eraseSchema = z.object({
   limits: z.string(),
 });
 
+/**
+ * FD-033, AN-185: a failure is logged by its kind and code, never its message, since a database
+ * error's message carries the query's parameters, the erased ID among them (as the fetch route
+ * logs, RC-044).
+ */
+async function withoutTheId<T>(request: FastifyRequest, work: () => Promise<T>): Promise<T> {
+  try {
+    return await work();
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    const { name, code } = error as { name?: string; code?: unknown };
+    const cause = (error as { cause?: { code?: unknown } }).cause?.code;
+    request.log.error({ route: request.routeOptions.url, kind: name, code: typeof code === 'string' ? code : typeof cause === 'string' ? cause : undefined }, 'erasure failed');
+    throw apiError('internal_error', 'Something went wrong on our side.');
+  }
+}
+
 export function erasureRoutes(ctx: AppContext): FastifyPluginAsyncZod {
   return async (app) => {
     app.post(
@@ -68,7 +87,7 @@ export function erasureRoutes(ctx: AppContext): FastifyPluginAsyncZod {
           tags: ['Erasure'],
           summary: 'Preview the erasure of an installation or user ID',
           description:
-            'FD-033, AN-183. What erasing the ID would delete in each database of the project you administer: crash reports carrying the user ID or the installation ID of an installation being erased, with the user ID’s group-user associations; submissions carrying them, with their attachments; and analytics events. Erasing a user ID erases, in each analytics database, its server installation and every installation on which it is the only user ID ever seen, and the crash reports and submissions of those installations — reports sent before sign-in included. It matches the identity fields only, not IDs placed in clientContext or params. Project or database Admin, or the secret key. Holds an analytics query slot while it counts events.',
+            'FD-033, AN-183. What erasing the ID would delete in each database of the project you administer: crash reports carrying the user ID or the installation ID of an installation being erased, with the user ID’s group-user associations; submissions carrying them, with their attachments; analytics events; and in a config database, which holds no ID from a fetch, the rules of the draft and of the versions that name the ID (RC-100). Erasing a user ID erases, in each analytics database, its server installation and every installation on which it is the only user ID ever seen, and the crash reports and submissions of those installations — reports sent before sign-in included. It matches the identity fields only, not IDs placed in clientContext or params. Project or database Admin, or the secret key. Holds an analytics query slot while it counts events.',
           params: projectIdParam,
           body: z.object(subjectSchema),
           response: { 200: previewSchema, ...errorsFor(400, 401, 403, 404, 503) },
@@ -76,7 +95,7 @@ export function erasureRoutes(ctx: AppContext): FastifyPluginAsyncZod {
       },
       async (request) => {
         const principal = await requireManagementPrincipal(ctx, request);
-        return previewErasure(ctx, principal, request.params.projectId, request.body);
+        return withoutTheId(request, () => previewErasure(ctx, principal, request.params.projectId, request.body));
       },
     );
 
@@ -87,7 +106,7 @@ export function erasureRoutes(ctx: AppContext): FastifyPluginAsyncZod {
           tags: ['Erasure'],
           summary: 'Erase an installation or user ID across the project',
           description:
-            'FD-033, AN-183 to AN-185. Deletes what the preview lists in the databases you select, the exact ID repeated as `confirm` (`confirmation_mismatch` otherwise). Crash reports and submissions are deleted in the request; analytics events are unreadable when it answers and deleted from the event store by the worker, which keeps events the same IDs send afterwards. Recorded with its actor, time and counts, never the ID. Erasure does not stop an application from sending again (`setEnabled(false, {forget: true})` does) and does not reach backups, past exports or messages already sent to Slack.',
+            'FD-033, AN-183 to AN-185. Deletes what the preview lists in the databases you select, the exact ID repeated as `confirm` (`confirmation_mismatch` otherwise). Crash reports and submissions are deleted in the request; in a config database the ID is removed from the rules of the draft and every version (`equals` becomes `in []`, `notEquals` `notIn []`), each version otherwise unchanged and the active version still active, the draft’s revision incremented and the active version recompiled (RC-100); analytics events are unreadable when it answers and deleted from the event store by the worker, which keeps events the same IDs send afterwards. Recorded with its actor, time and counts, never the ID. Erasure does not stop an application from sending again (`setEnabled(false, {forget: true})` does) and does not reach backups, past exports or messages already sent to Slack.',
           params: projectIdParam,
           body: eraseBody,
           response: { 200: eraseSchema, ...errorsFor(400, 401, 403, 404, 503) },
@@ -95,7 +114,7 @@ export function erasureRoutes(ctx: AppContext): FastifyPluginAsyncZod {
       },
       async (request) => {
         const principal = await requireManagementPrincipal(ctx, request);
-        return eraseIdentity(ctx, principal, request.params.projectId, request.body);
+        return withoutTheId(request, () => eraseIdentity(ctx, principal, request.params.projectId, request.body));
       },
     );
   };

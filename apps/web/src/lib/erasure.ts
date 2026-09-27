@@ -1,9 +1,9 @@
 import { request } from '@/lib/api';
 
-/** The project's erasure (Foundations FD-033, UX Analytics AN-183 to AN-185) and the event export (AN-210), as the API answers them. */
+/** The project's erasure (Foundations FD-033, UX Analytics AN-183 to AN-185, Remote Config RC-100) and the event export (AN-210), as the API answers them. */
 
 export type ErasureKind = 'installation' | 'user';
-export type ErasureDatabaseType = 'crash' | 'feedback' | 'analytics';
+export type ErasureDatabaseType = 'crash' | 'feedback' | 'analytics' | 'config';
 
 export type ErasurePreview = {
   kind: ErasureKind;

@@ -23,6 +23,9 @@ import { registerAnalyticsFunnelTools } from './analytics-funnel-tools.js';
 import { registerAnalyticsCohortTools } from './analytics-cohort-tools.js';
 import { registerAnalyticsErasureTools } from './analytics-erasure-tools.js';
 import { registerCrashTools } from './crash-tools.js';
+import { registerConfigTools } from './config-tools.js';
+import { registerConfigDraftTools } from './config-draft-tools.js';
+import { registerConfigPublishTools } from './config-publish-tools.js';
 
 /**
  * The MCP tool surface (FR-120 to FR-125).
@@ -47,7 +50,7 @@ import { registerCrashTools } from './crash-tools.js';
 const projectId = z.string().describe('The project identifier, like prj_5waxfxyby3st.');
 const databaseId = z
   .string()
-  .describe('The database identifier: a feedback database like fdb_n8b3mj3axdfh, or, for members, invitations, Slack settings and deletion impact, a crash database like cdb_9rdayr4rstbv or an analytics database like adb_4kq2m8vx7ncd.');
+  .describe('The database identifier: a feedback database like fdb_n8b3mj3axdfh, or, for members, invitations, Slack settings and deletion impact, a crash database like cdb_9rdayr4rstbv, an analytics database like adb_4kq2m8vx7ncd or a config database like cfg_7hq3m2vx8ncd.');
 const submissionId = z.string().describe('The submission identifier, like sub_bzq1whs3129d.');
 const userId = z.string().describe('The account identifier, like usr_bz33m9801wz9.');
 const roleArg = z.enum(ROLES).describe('admin, creator or viewer.');
@@ -106,6 +109,7 @@ function assertConfirmed(expected: string, given: string): void {
 function databasePath(id: string): string {
   if (id.startsWith('cdb_')) return `/v1/crash-databases/${id}`;
   if (id.startsWith('adb_')) return `/v1/analytics-databases/${id}`;
+  if (id.startsWith('cfg_')) return `/v1/config-databases/${id}`;
   return `/v1/feedback-databases/${id}`;
 }
 
@@ -117,6 +121,9 @@ export function registerTools(server: McpServer, client: InletClient): void {
   registerAnalyticsFunnelTools(server, client);
   registerAnalyticsCohortTools(server, client);
   registerAnalyticsErasureTools(server, client);
+  registerConfigTools(server, client);
+  registerConfigDraftTools(server, client);
+  registerConfigPublishTools(server, client);
 
   // --- Reading ------------------------------------------------------------
 
@@ -329,7 +336,7 @@ export function registerTools(server: McpServer, client: InletClient): void {
     {
       title: 'Check what deleting a database would destroy',
       description:
-        'In the type’s own units: responses and screenshots for a feedback database, groups and reports for a crash database, events, installations, user IDs, funnels and cohorts for an analytics database (null counts mean its event store is unreachable, which does not block deletion). Read this before any delete tool.',
+        'In the type’s own units: responses and screenshots for a feedback database, groups and reports for a crash database, events, installations, user IDs, funnels and cohorts for an analytics database (null counts mean its event store is unreachable, which does not block deletion), versions and the parameters of the draft and of the active version for a config database, with the history export to offer first. Read this before any delete tool.',
       inputSchema: { databaseId },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -401,7 +408,7 @@ export function registerTools(server: McpServer, client: InletClient): void {
       title: 'Change someone’s role',
       description: [
         'With projectId, changes their project role. Downgrading the last Admin is refused (FR-014).',
-        'With databaseId, assigns a role on that database only (feedback, crash or analytics), overriding their project role (FR-071). Refused for a project Admin, whose access cannot be narrowed (FR-071A).',
+        'With databaseId, assigns a role on that database only (feedback, crash, analytics or config), overriding their project role (FR-071). Refused for a project Admin, whose access cannot be narrowed (FR-071A).',
       ].join('\n'),
       inputSchema: {
         userId,
@@ -942,20 +949,18 @@ export function registerTools(server: McpServer, client: InletClient): void {
     {
       title: 'Send a test message to Slack',
       description:
-        'Posts a real message into the operator\u2019s Slack channel, using the saved settings, and reports what Slack said. The content is placeholder text rather than a real response. This is the only tool here that reaches a third party and the only one whose effect other people see, so it asks for the feedback database\u2019s name as confirmation.',
+        'Posts a real message into the operator\u2019s Slack channel, using the saved settings, and reports what Slack said. The content is placeholder text rather than a real response. This is the only tool here that reaches a third party and the only one whose effect other people see, so it asks for the database\u2019s name as confirmation.',
       inputSchema: {
         databaseId,
         confirm: z
           .string()
-          .describe('The feedback database\u2019s exact name, as get_feedback_database reports it.'),
+          .describe('The database\u2019s exact name, as its get tool reports it.'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     async ({ databaseId: id, confirm }) =>
       guard(async () => {
-        const database = (await client.request('GET', `/v1/feedback-databases/${id}`)) as {
-          name: string;
-        };
+        const database = (await client.request('GET', databasePath(id))) as { name: string };
         assertConfirmed(database.name, confirm);
         return json(
           await client.request('POST', `${databasePath(id)}/slack-notifications/test`),

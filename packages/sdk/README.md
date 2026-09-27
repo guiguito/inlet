@@ -1,16 +1,19 @@
 # inlet-sdk
 
 The client SDK for [Inlet](../../README.md), the self-hosted place your applications
-report to. Three modules:
+report to. Four modules:
 
 - **`inlet-sdk/feedback`** collects a form's answers from inside your own interface.
 - **`inlet-sdk/crash`** reports application failures.
 - **`inlet-sdk/analytics`** sends usage events: sessions, retention, funnels, crash-free
   sessions. See [UX analytics](#ux-analytics).
+- **`inlet-sdk/config`** reads remote config: flags and settings your Inlet resolves for
+  each device and user, applied at the next launch. See [Remote config](#remote-config).
 
 Zero runtime dependencies, ESM and CommonJS, Node 18 or later, evergreen browsers and
 React Native 0.74 or later. Feedback and crash have a Node, browser, Electron, React and
-React Native entry; analytics has a browser, Node, Electron and React Native entry.
+React Native entry; analytics and config have a browser, Node, Electron and React Native
+entry.
 
 The modules share one **identity** per application: a random session ID, rotated after
 30 minutes without activity or after 24 hours, and the user ID you set with `setUser`. It
@@ -20,14 +23,17 @@ is never derived from the device, and `identity: false` at `init` turns it off; 
 [Identity](#identity).
 
 If you have never seen Inlet: an Inlet **project** holds databases and owns two kinds of
-API key. A **publishable key** (`ipk_…`) can only send data in and is safe to ship in an
-application; a **secret key** reads what was collected and must never leave your servers.
-A **feedback database** (`fdb_…`) holds one form and the responses it collected. A **crash
-database** (`cdb_…`) receives failure reports and groups them into one row per distinct
-bug, so that a crash loop is one line and one Slack message.
+API key. A **publishable key** (`ipk_…`) can only send data in and read resolved config
+values, and is safe to ship in an application; a **secret key** reads what was collected and
+must never leave your servers. A **feedback database** (`fdb_…`) holds one form and the
+responses it collected. A **crash database** (`cdb_…`) receives failure reports and groups
+them into one row per distinct bug, so that a crash loop is one line and one Slack message.
+An **analytics database** (`adb_…`) counts the events your application names. A **config
+database** (`cfg_…`) holds parameters with defaults and the conditions that give some users
+other values; your application fetches the values resolved for it.
 
-Your application does not have to share an origin with your Inlet: both modules' browser
-entries send cross-origin, with no cookie and no reverse proxy. The server's side of all
+Your application does not have to share an origin with your Inlet: every module's browser
+entry works cross-origin, with no cookie and no reverse proxy. The server's side of all
 this is described in [docs/USING-INLET.md](../../docs/USING-INLET.md); the wire format in
 [docs/API.md](../../docs/API.md).
 
@@ -36,6 +42,8 @@ this is described in [docs/USING-INLET.md](../../docs/USING-INLET.md); the wire 
 ```
 npm install inlet-sdk
 ```
+
+The config module (`inlet-sdk/config`) arrived in 0.4.0.
 
 ---
 
@@ -968,6 +976,341 @@ returns the current session ID or `null`.
 
 ---
 
+# Remote config
+
+`inlet-sdk/config` reads the values a **config database** (`cfg_…`) publishes: feature flags,
+limits, texts and JSON settings, resolved on your Inlet for the context the application
+sends. Every value has an in-app default, so a read never throws and never waits, and new
+values apply at a safe moment — the next launch by default — so a screen never changes under
+a user's finger.
+
+Create the config database, a parameter and a first version in Inlet, then copy the
+database ID, the key and the in-app defaults from its **Integrate** tab
+([Your first config in ten minutes](../../docs/USING-INLET.md#your-first-config-in-ten-minutes)).
+It needs a deployment whose `/v1/health` lists `config`. Until it does, the application uses
+its cached values and in-app defaults, says so through `debug` and `onError`, and asks again
+ten minutes later or at the next launch.
+
+```ts
+import * as config from 'inlet-sdk/config/browser';
+
+const client = config.init({
+  baseUrl: 'https://inlet.example.com',
+  publishableKey: 'ipk_…',
+  databaseId: 'cfg_…',
+  app: { version: '1.4.2' },
+  defaults: { new_checkout: false, max_items: 20, headline: 'Welcome', paywall: { plans: ['monthly'] } },
+});
+await client.ready({ timeoutMs: 1500 }); // the first fetch's values, or false after 1.5 s
+if (client.get('new_checkout')) showNewCheckout(); // typed as boolean, from the default
+```
+
+## One entry per runtime
+
+| Entry | For | Keeps the answers and the installation ID |
+| --- | --- | --- |
+| `inlet-sdk/config/browser` | Web pages | `localStorage`, shared by the origin's tabs |
+| `inlet-sdk/config/node` | Backends (server mode, the default) and command-line tools or desktop applications without Electron (device mode) | Nothing in server mode; files under `persistenceDir` in device mode |
+| `inlet-sdk/config/electron` | The Electron main process (`installElectronMain`) | Files under `<userData>/inlet` |
+| `inlet-sdk/config/electron-renderer` | Electron windows (`createElectronRenderer`); no key, no request | Nothing: main pushes its state |
+| `inlet-sdk/config/react-native` | React Native 0.74 or later | The AsyncStorage-compatible store you give it, under 1 MB |
+| `inlet-sdk/config` | Any other runtime with `fetch` | Memory for the process, or the `store` you give it |
+
+Every entry offers `init`, `getClient`, and on the client `ready`, `get`, `getBoolean`,
+`getNumber`, `getString`, `getJson`, `getAll`, `getDetails`, `getExperiments`, `onUpdate`,
+`activate`, `refresh`, `setAttributes`, `setUserId`, `setInstallationIdEnabled`,
+`getInstallationId` and `close`. One config client serves the whole application, whichever
+entry initialised it: a second `init` returns the first and warns. The module-level `get`,
+`getBoolean`, `getNumber`, `getString` and `getJson` read through it, and before `init` warn
+once and return the fallback.
+
+**The browser entry is 7.9 KB minified and gzipped**, and the build fails past 8 KB. A page
+load fetches only when no tab of the origin has fetched within the refresh interval for the
+same app version and user, one tab at a time under a Web Lock where the browser has them; the
+other tabs read the answer from `localStorage`. Without Web Locks, tabs loaded at the same
+moment may each fetch once. It refreshes when the page becomes visible again. It fetches cross-origin,
+which Inlet allows for the fetch route.
+
+### Node: server mode and device mode
+
+**In server mode every distinct context costs a fetch.** A backend does not have one user, so
+the client fetches nothing by itself; `evaluate(context)` fetches the values one context
+receives, with the publishable key, and caches them per context for the refresh interval, at
+most 1,000 contexts (the least recently used go first):
+
+```ts
+import * as config from 'inlet-sdk/config/node';
+
+const client = config.init({ baseUrl, publishableKey: 'ipk_…', databaseId: 'cfg_…', app: { version: '2.3.0' }, defaults: { max_upload_mb: 10 } });
+const values = await client.evaluate({ userId: request.user.id, attributes: { plan: request.user.plan } });
+const limit = values.getNumber('max_upload_mb', 10);
+```
+
+The snapshot has the client's read methods. It reports the platform `server` unless the
+context names another, never derives a country from your server's address, and sends no
+installation ID unless the context carries one. `evaluate` never rejects: a failed fetch gives
+the last answer for that context, else the in-app defaults.
+
+**Device mode** (`mode: 'device'`, with `persistenceDir`) is for a command-line tool or a
+desktop application without Electron: it behaves as the browser entry does, a process start
+being the launch, and keeps the answers and the installation ID in files under the directory.
+Give the crash, feedback and analytics modules the same directory, so that they share one
+installation.
+
+## How values reach your app
+
+- **At the next launch, by default** (`activation: 'launch'`). A launch is a page load or a
+  process start. It activates the answer the previous launch fetched, but only if that answer
+  was fetched for the same app version and build (and the same user ID, when one is set at
+  `init`); after an update from 1.4.2 to 1.5.0 the application uses its in-app defaults until
+  its first answer for 1.5.0 arrives.
+- **The first fetch before any read applies at once.** If the application reads no value
+  before the launch's first answer arrives, that answer is activated on arrival. Awaiting
+  `ready()` is not a read, so `await client.ready()` before the first render is the way to
+  start on fresh values. `ready()` resolves false when its timeout (3 s by default) passes
+  first, when the fetch fails, or when the answer was staged because the application had
+  already read a value; it never rejects.
+- **Later answers are staged**, and applied by `activate()` (which returns the keys that
+  changed), by `refresh({ activate: true })`, or at the next launch. `activation: 'immediate'`
+  applies every answer on arrival instead.
+- **Live parameters apply at once.** A parameter marked live on the server — a kill switch —
+  changes as soon as it is fetched, removal included, while the rest of the answer stays staged.
+- **An unpublish applies at once**: the application returns to its in-app defaults at its
+  next fetch.
+- **A change of user applies at once.** `setUserId(id)` (or the crash module's `setUser`, or
+  the analytics module's `setUserId`: they set the same user ID) discards whatever was staged
+  and fetches within a second; the new user's answer is activated on arrival, and until it
+  arrives the previous values stay active. To render the user's own values right after
+  sign-in, `await client.refresh()`.
+- `setAttributes({ plan: 'pro', seats: 4 })` merges attributes into the context (`null`
+  removes one) and fetches within a second; the answer is staged or activated as above. At
+  most 20 attributes, keys of a letter then up to 39 letters, digits or underscores, values a
+  boolean, a finite number or a string of at most 256 characters; anything else is dropped and
+  said through `debug`.
+
+The client fetches at each launch, when the application returns to the foreground after the
+refresh interval, and every refresh interval while it is in the foreground. The interval is
+the larger of `refreshIntervalMinutes` (at least 5) and the database's (60 minutes by
+default), varied by up to 10% each time.
+
+`onUpdate` reports the keys staged and activated as it happens, which is what a component
+subscribes to. With React:
+
+```tsx
+import { useSyncExternalStore } from 'react';
+import { getClient } from 'inlet-sdk/config/browser';
+
+function useConfig<T>(read: () => T): T {
+  const client = getClient()!;
+  return useSyncExternalStore((onChange) => client.onUpdate(onChange), read);
+}
+
+const headline = useConfig(() => getClient()!.getString('headline', 'Welcome'));
+```
+
+`read` must return the same value until it changes, as `useSyncExternalStore` requires: the
+typed reads and `getJson` do; `getAll()` builds a new object each time, so read single keys.
+
+With Vue:
+
+```ts
+import { onUnmounted, ref } from 'vue';
+import { getClient } from 'inlet-sdk/config/browser';
+
+export function useConfigValue<T>(read: () => T) {
+  const value = ref(read());
+  const stop = getClient()!.onUpdate(() => (value.value = read()));
+  onUnmounted(stop);
+  return value;
+}
+```
+
+## Typed reads and details
+
+`get(key)` is typed by `defaults`: a `false` default reads as `boolean`, a JSON default as its
+JSON type. It returns the active remote value when it has the default's type, else the
+default. `getBoolean`, `getNumber`, `getString` and `getJson(key, fallback)` return the remote
+value when it has the type the method names, else the default when it has, else the fallback;
+`getJson` accepts any JSON value. A remote value of the wrong type is ignored and reported
+once per key and version as `onError('type-mismatch', …)`.
+
+`getDetails(key)` returns the value with its `source` (`remote`, `default` or `fallback`), the
+`version` it came from, `fetchedAt` and `stale` (no fetch has succeeded since the launch).
+`getAll()` returns every active remote value over the in-app defaults, and `getExperiments()`
+the experiment and variant of every split in the active answer.
+
+**Targeting is not access control.** Anyone holding the publishable key can claim any
+context and read what it receives, and every answer names every parameter key: never put a
+secret in a value, and decide what a user may do on your server.
+
+## The installation ID
+
+Unless you pass `installationId: false`, the module sends a random installation ID with every
+fetch, so that percentage rollouts and splits stay stable for a device. **It is a persistent
+identifier stored on the device** (`localStorage`, or `installation-id.json` under the
+persistence directory); you decide whether it needs consent where your users are, and the
+option exists for that decision:
+
+```ts
+const client = config.init({ …, installationId: false }); // nothing is stored for identity, none is sent
+// In your consent callback:
+client.setInstallationIdEnabled(true); // creates the ID if needed, stores it and fetches
+```
+
+`setInstallationIdEnabled(false)` stops sending it and deletes the stored ID, unless an
+analytics client of the application is enabled, in which case the ID stays until analytics'
+`forget`. Without the ID, a percentage rule or split bucketed by installation is false.
+`getInstallationId()` returns the ID sent, or null (also while an asynchronous `store` is
+still being read, since an ID created then would replace the stored one).
+
+It is the same ID the analytics module uses: with analytics enabled the config module sends
+analytics' ID, and an analytics module initialised later adopts the one config created. Crash
+reports and feedback submissions carry it only while analytics is enabled, never because the
+config module created it. **An application withdrawing consent through analytics'
+`setEnabled(false, { forget: true })` should also call `setInstallationIdEnabled(false)`**, or
+the config module creates a new ID at its next fetch. A config fetch is not activity: it
+neither starts nor extends a session.
+
+### Electron
+
+The main process owns the one client — the installation ID, the answers and the transport,
+persisted under `<userData>/inlet` (give the other modules the same directory) — and a launch
+is a process start. The app version and ID default to `app.getVersion()` and `app.getName()`,
+and the platform and OS version are the process's:
+
+```ts
+// main.ts
+import { installElectronMain } from 'inlet-sdk/config/electron';
+
+app.whenReady().then(async () => {
+  const config = await installElectronMain({ baseUrl, publishableKey: 'ipk_…', databaseId: 'cfg_…', defaults: DEFAULTS });
+  createWindow();
+});
+```
+
+```ts
+// preload.ts, with contextIsolation on
+import { contextBridge, ipcRenderer } from 'electron';
+
+// Only the config module's two channels: the page must not reach your other IPC handlers.
+contextBridge.exposeInMainWorld('inletConfig', {
+  send: (channel: string, message: unknown) => {
+    if (channel === 'inlet:config') ipcRenderer.send(channel, message);
+  },
+  on: (channel: string, listener: (payload: unknown) => void) => {
+    if (channel === 'inlet:config:state') ipcRenderer.on(channel, (_event, payload) => listener(payload));
+  },
+});
+```
+
+```ts
+// renderer.ts
+import { createElectronRenderer } from 'inlet-sdk/config/electron-renderer';
+
+const config = createElectronRenderer({ defaults: DEFAULTS });
+if (config.get('new_checkout')) showNewCheckout();
+```
+
+**A renderer holds no key and makes no request.** It reads what main last pushed on
+`inlet:config:state` — the active answer, at every activation and staging — and its in-app
+defaults until the first push, so give it the same `defaults` as main. It offers the read
+methods, `getExperiments`, `getInstallationId`, `onUpdate` and `ready()`, which resolves when
+main's does; `activate()` and `refresh()` act on main's client, return promises, and every
+window sees the result. **A renderer's first read counts as the application's**: main then
+stages the launch's first answer rather than activate it, exactly as a read in main would.
+Main applies a renderer's `setUserId` and `setAttributes`, bounded as the server bounds them,
+unless installed with `acceptRendererIdentity: false`; nothing else a renderer sends reaches
+the context. The renderer entry is browser-safe and bundles with Vite. A renderer has no
+`onError`: a remote value of the wrong type is said through its `debug`.
+
+### React Native
+
+```ts
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { AppState, Platform } from 'react-native';
+import * as config from 'inlet-sdk/config/react-native';
+
+const client = config.init({ baseUrl, publishableKey: 'ipk_…', databaseId: 'cfg_…', app: { version: '1.4.2' }, defaults: DEFAULTS, Platform, AppState, store: AsyncStorage });
+```
+
+The entry takes `Platform`, `AppState`, an AsyncStorage-compatible `store` (or MMKV behind the
+same three methods) and, where `crypto.getRandomValues` is missing, `random`, and imports
+nothing. **Give the analytics, crash and feedback modules the same store**: the installation ID
+lives under the one key every module reads, so the analytics module adopts the ID the config
+module created.
+
+- **A launch is a process start, or a return to the foreground after at least 30 minutes in
+  the background**: the staged answer is activated and the launch fetches. A shorter return
+  refreshes when the last fetch is older than the refresh interval, staging what it brings.
+- **What it stores stays under 1 MB** (`maxStoreBytes`), so that the modules together fit the
+  6 MB Android gives AsyncStorage: when the active and staged answers do not both fit, the
+  cached active answer is not stored — its values stay in memory for the launch — then the
+  staged one, said through `debug`.
+- Until AsyncStorage has been read, reads return the in-app defaults; the cached answer's
+  activation is then reported through `onUpdate`.
+- React Native 0.74 or later. Metro resolves the entry without package `exports`.
+
+## With UX Analytics
+
+**Experiments are recorded automatically.** When an analytics client of the application is
+enabled, every activation of an answer sets each of its experiments with analytics'
+`setExperiment` — so `paywall_copy` → `annual_first` rides on every later event — and clears
+each experiment the config module set earlier that the answer no longer carries. An analytics
+client enabled later receives the active answer's experiments at its enable. The module never
+touches an experiment your application set itself, on any key, and remembers across launches
+which ones it set. A live parameter valued by a split applies its value at once; its experiment
+is recorded at the answer's next full activation (the next launch, `activate()`, or an
+`immediate` answer). A launch that runs on its in-app defaults — no cached answer for this app
+version, build and user — is in no experiment, so the experiments the module set earlier are
+cleared until an answer is activated. `close()` leaves the last ones recorded, since the values
+it held are still what the application reads.
+
+**The limit of five experiments is shared** with your application's own `setExperiment` calls
+(UX Analytics AN-224): one past it is not recorded, and the config module says so through its
+`debug`. Nothing happens without an enabled analytics client, and the config module does not
+bundle the analytics module to do this. **The analytics module records them from 0.4.0**: where
+an application bundles an older copy of `inlet-sdk` for analytics beside this one, the config
+module works as usual and no experiment is recorded.
+
+## Errors
+
+After `init` nothing throws into your application. `init` itself throws for a secret key
+(`isk_…`), an empty app version and a database ID not prefixed `cfg_`. Every later failure is
+reported through `onError(reason, detail)`:
+
+| Reason | When | What the client does |
+| --- | --- | --- |
+| `network` | The server is unreachable or answered 5xx | Retries with backoff from 5 seconds, never past the next refresh |
+| `timeout` | A request took longer than `timeoutMs` (10 s) | As `network` |
+| `rate-limited` | `429` | No fetch for its `Retry-After` (60 s without one), plus up to 10% |
+| `refused` | `401` or `403`: a revoked key, or a database the key cannot read | Keeps the cached values, stops fetching until the next launch |
+| `refused` | Another `4xx`, such as `413` | Keeps the cached values, retries with backoff |
+| `not-found` | `404` | As `refused` |
+| `capability-missing` | `/v1/health` does not list `config` | Cached values and defaults; asks again after ten minutes |
+| `type-mismatch` | A remote value has the wrong type | The default or fallback is returned |
+
+Where `localStorage` or the disk is unavailable or full, the answers stay in memory for the
+launch, said through `debug`.
+
+## Config options
+
+| Option | Default | |
+| --- | --- | --- |
+| `baseUrl`, `publishableKey`, `databaseId`, `app` | required | `app` is `{ version, build?, id? }`; answers are bound to the version and build |
+| `defaults` | `{}` | The in-app defaults; they type `get` |
+| `attributes`, `userId` | none | The context's custom attributes and the shared user ID |
+| `installationId` | `true` | `false` sends none and stores none |
+| `activation` | `'launch'` | Or `'immediate'` |
+| `refreshIntervalMinutes` | 5 | A floor from 5 to 1,440; the database's interval applies when larger |
+| `timeoutMs` | 10,000 | Per request |
+| `locale` | the runtime's | BCP 47 |
+| `store` (core, React Native), `persistenceDir` and `mode` (Node), `persistenceDir` (Electron) | | Where the answers and the installation ID live |
+| `Platform`, `AppState`, `maxStoreBytes` (React Native) | 1 MB | The runtime's modules, and the byte budget of what the module stores |
+| `acceptRendererIdentity` (Electron) | `true` | `false` ignores a renderer's `setUserId` and `setAttributes` |
+| `fetch`, `debug`, `onError`, `random` | | As the other modules take them |
+
+---
+
 # React Native
 
 React Native 0.74 or later. The crash and feedback React Native entries take React Native's
@@ -1037,10 +1380,14 @@ The modules of one application share one identity, whatever entry initialised th
 | --- | --- | --- |
 | **Session ID** | A random, time-ordered UUID. A new one after 30 minutes without activity (the analytics module's `sessionTimeoutMinutes`), after 24 hours, and on every process start. A capture, a submission or a `track` is activity. | Memory; with analytics enabled in a browser, `localStorage`, shared by the origin's tabs |
 | **User ID** | What you pass to `setUser(id)` or `setUserId(id)` in any module; `null` clears it. | Memory |
-| **Installation ID** | A random UUID the analytics module creates at its first enable, kept until `forget`. Crash reports and submissions carry it **only while an analytics client is enabled**. | With analytics enabled: `localStorage`; `installation-id.json` under the persistence directory (`<userData>/inlet` in Electron); `inlet-sdk:installation-id` in the React Native store |
+| **Installation ID** | A random UUID the analytics module creates at its first enable, or the config module at its first fetch, whichever comes first; the other adopts it. Kept until analytics' `forget` or config's `setInstallationIdEnabled(false)`. Crash reports and submissions carry it **only while an analytics client is enabled**, never because the config module created it. | With analytics enabled, or the config module sending it: `localStorage`; `installation-id.json` under the persistence directory (`<userData>/inlet` in Electron); `inlet-sdk:installation-id` in the React Native store |
 
 Without an enabled analytics client nothing is written to the device for the identity, the
-unclean-exit sentinel included, and a page load begins a new session. With one, the identity
+unclean-exit sentinel included, and a page load begins a new session — except the
+installation ID the config module stores unless it is initialised with `installationId:
+false` (see [The installation ID](#the-installation-id)). A user ID set through the config
+module's `setUserId` is the same shared one, and a change made by any module is seen by the
+config module, which fetches the new user's values. With one, the identity
 is stored under keys every module reads (`inlet-sdk:installation-id` and its siblings in
 `localStorage` and in a React Native store; files of the same names on disk), so give every
 module the same persistence directory on Node and the same store on React Native. In

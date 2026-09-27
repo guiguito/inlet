@@ -27,8 +27,8 @@ export class Lru<K, V> {
   }
 
   /** Removes every entry whose key passes `test`. A scan: for invalidations, which are rare. */
-  deleteWhere(test: (key: K) => boolean): void {
-    for (const key of this.entries.keys()) if (test(key)) this.entries.delete(key);
+  deleteWhere(test: (key: K, value: V) => boolean): void {
+    for (const [key, value] of this.entries) if (test(key, value)) this.entries.delete(key);
   }
 
   clear(): void {

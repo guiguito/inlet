@@ -60,7 +60,10 @@ export class ReactNativeStore implements QueueStore {
   ) {
     let synchronous = false;
     try {
-      synchronous = !isPromise(storage.getItem(`${options.prefix}probe`));
+      const probe = storage.getItem(`${options.prefix}probe`);
+      synchronous = !isPromise(probe);
+      // An AsyncStorage that fails rejects the probe too; nothing awaits it.
+      if (!synchronous) (probe as Promise<unknown>).catch(() => {});
     } catch {
       synchronous = false;
     }

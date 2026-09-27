@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -27,6 +27,7 @@ export function ConfirmDialog({
   confirmText,
   onConfirm,
   pending = false,
+  pendingLabel = 'Deleting',
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -37,8 +38,15 @@ export function ConfirmDialog({
   confirmText?: string;
   onConfirm: () => void;
   pending?: boolean;
+  /** The button's text while `pending`; deletions keep the default. */
+  pendingLabel?: string;
 }) {
   const [typed, setTyped] = useState('');
+  // A caller that closes the dialog itself (after its action succeeds) leaves `open` false without
+  // `onOpenChange`: the typed name must not survive into the next confirmation (FD-022).
+  useEffect(() => {
+    if (!open) setTyped('');
+  }, [open]);
   const ready = confirmText === undefined || typed.trim() === confirmText;
 
   return (
@@ -78,7 +86,7 @@ export function ConfirmDialog({
             Cancel
           </Button>
           <Button variant="destructive" onClick={onConfirm} disabled={!ready || pending}>
-            {pending ? 'Deleting' : confirmLabel}
+            {pending ? pendingLabel : confirmLabel}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -105,6 +105,11 @@ export function ProjectPage({ user }: { user: CurrentUser }) {
                   <h2 className="text-base font-semibold">Analytics databases</h2>
                   <AnalyticsDatabasesSection projectId={projectId} />
                 </section>
+                {/* FD-001, FD-003, Remote Config 8.1: the fourth type, under its own heading. */}
+                <section className="space-y-3">
+                  <h2 className="text-base font-semibold">Config databases</h2>
+                  <ConfigDatabasesSection projectId={projectId} />
+                </section>
               </div>
             </TabsContent>
             <TabsContent value="keys">
@@ -298,6 +303,116 @@ function CrashDatabasesSection({ projectId }: { projectId: string }) {
                 required
                 maxLength={200}
                 placeholder="Desktop app"
+                onChange={(event) => setName(event.target.value)}
+              />
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setCreating(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={create.isPending || name.trim().length === 0}>
+                {create.isPending ? 'Creating' : 'Create'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+/** Remote Config 8.1: the project's config databases, listed beside the other types. */
+function ConfigDatabasesSection({ projectId }: { projectId: string }) {
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState('');
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const databases = useQuery({
+    queryKey: ['config-databases', projectId],
+    queryFn: () => api.listConfigDatabases(projectId),
+  });
+  const create = useMutation({
+    mutationFn: () => api.createConfigDatabase(projectId, name.trim()),
+    onSuccess: async (database) => {
+      await queryClient.invalidateQueries({ queryKey: ['config-databases', projectId] });
+      setName('');
+      setCreating(false);
+      await navigate(`/config-databases/${database.id}`);
+    },
+    onError: (error) => toast.error(error instanceof ApiError ? error.message : 'The config database could not be created.'),
+  });
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm text-muted-foreground">
+          A config database holds the values a product’s apps fetch at launch, and who gets which:
+          feature switches, limits and copy, changed without shipping a release.
+        </p>
+        <Button variant="outline" onClick={() => setCreating(true)}>
+          <PlusIcon />
+          New config database
+        </Button>
+      </div>
+
+      {databases.isLoading ? (
+        <Skeleton className="h-24" />
+      ) : databases.data && databases.data.length > 0 ? (
+        <Card>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Active version</TableHead>
+                <TableHead>Created</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {databases.data.map((database) => (
+                <TableRow key={database.id}>
+                  <TableCell>
+                    <Link to={`/config-databases/${database.id}`} className="font-medium hover:text-primary">
+                      {database.name}
+                    </Link>
+                    <p className="font-mono text-xs text-muted-foreground">{database.id}</p>
+                  </TableCell>
+                  <TableCell className="numeric text-muted-foreground">
+                    {database.activeVersion === null ? 'Nothing published' : `Version ${database.activeVersion}`}
+                  </TableCell>
+                  <TableCell className="numeric text-muted-foreground">{formatRelative(database.createdAt)}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Card>
+      ) : (
+        <p className="text-sm text-muted-foreground">No config databases yet.</p>
+      )}
+
+      <Dialog open={creating} onOpenChange={setCreating}>
+        <DialogContent>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              create.mutate();
+            }}
+          >
+            <DialogHeader>
+              <DialogTitle>New config database</DialogTitle>
+              <DialogDescription>
+                One per product, which may ship several apps. Your project’s publishable key already lets
+                them fetch from it.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="my-5 space-y-1.5">
+              <Label htmlFor="config-database-name">Name</Label>
+              <Input
+                id="config-database-name"
+                value={name}
+                autoFocus
+                required
+                maxLength={200}
+                placeholder="Mobile app"
                 onChange={(event) => setName(event.target.value)}
               />
             </div>
@@ -841,7 +956,7 @@ function CreateCredentialDialog({
               </Select>
               <p className="text-xs text-muted-foreground">
                 {type === 'publishable'
-                  ? 'Safe to embed in a browser or mobile app. Limited to the feedback flow.'
+                  ? 'Safe to embed in a browser or mobile app. Limited to the client flows: feedback, crash reports, analytics events and fetching a published config.'
                   : 'Full Admin authority over this project. Shown once.'}
               </p>
             </div>

@@ -11,6 +11,7 @@ import {
   SLACK_CONTENT_LEVELS,
   TYPEFACES,
   answersInputSchema,
+  configTemplateSchema,
   identityUuidSchema,
   formDefinitionSchema,
   hexColorSchema,
@@ -47,6 +48,7 @@ function register<T extends z.ZodType>(schema: T, id: string): T {
 
 register(formDefinitionSchema, 'FormDefinition');
 register(answersInputSchema, 'Answers');
+register(configTemplateSchema, 'ConfigTemplate');
 
 /**
  * The acknowledgement body for operations with nothing to return.
@@ -69,6 +71,12 @@ export const errorResponseSchema = z
             path: z.string().optional(),
             code: z.string(),
             message: z.string(),
+            // Remote Config `config_template_invalid` (RC-015, RC-016, RC-019): what the problem concerns.
+            parameter: z.string().optional(),
+            condition: z.string().optional(),
+            variant: z.string().optional(),
+            valuePath: z.string().optional().describe('The JSON Pointer inside a value that fails its schema (RC-015).'),
+            heaviest: z.array(z.object({ parameter: z.string(), bytes: z.int() })).optional().describe('The parameters that weigh the most in an answer (RC-016).'),
           }),
         )
         .optional()
@@ -263,11 +271,12 @@ export const createInvitationBodySchema = z.object({ role: z.enum(ROLES) });
 export const invitationSchema = z.object({
   id: z.string(),
   role: z.enum(ROLES),
-  scope: z.enum(['project', 'feedback_database', 'crash_database', 'analytics_database']),
+  scope: z.enum(['project', 'feedback_database', 'crash_database', 'analytics_database', 'config_database']),
   projectId: z.string().nullable(),
   feedbackDatabaseId: z.string().nullable(),
   crashDatabaseId: z.string().nullable(),
   analyticsDatabaseId: z.string().nullable(),
+  configDatabaseId: z.string().nullable(),
   scopeName: z.string().describe('The name of what the invitation grants access to.'),
   status: z.enum(['pending', 'redeemed', 'revoked', 'expired']),
   createdAt: z.date(),
@@ -284,7 +293,7 @@ export const invitationWithLinkSchema = invitationSchema.extend({
 
 export const invitationPreviewSchema = z.object({
   role: z.enum(ROLES),
-  scope: z.enum(['project', 'feedback_database', 'crash_database', 'analytics_database']),
+  scope: z.enum(['project', 'feedback_database', 'crash_database', 'analytics_database', 'config_database']),
   scopeName: z.string(),
   projectName: z.string(),
   expiresAt: z.date(),

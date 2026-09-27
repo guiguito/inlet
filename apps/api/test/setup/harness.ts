@@ -12,6 +12,7 @@ import { Storage } from '../../src/lib/storage.js';
 import { analyticsIngestTimings, resetAnalyticsIngestState } from '../../src/services/analytics-ingest.js';
 import { resetAnalyticsQueryState } from '../../src/services/analytics-query.js';
 import { bootstrapAdmin } from '../../src/services/bootstrap.js';
+import { resetConfigDeliveryState } from '../../src/services/config-delivery.js';
 import { ADMIN_EMAIL, ADMIN_PASSWORD, TEST_ENV } from './config.js';
 
 /**
@@ -31,6 +32,12 @@ export type Harness = {
 
 const TABLES = [
   'notification_deliveries',
+  'config_reach',
+  'config_activity',
+  'config_versions',
+  'config_drafts',
+  'config_database_memberships',
+  'config_databases',
   'analytics_database_removals',
   'analytics_pending_erasures',
   'analytics_dropped_counts',
@@ -122,6 +129,8 @@ export async function createHarness(
       resetAnalyticsIngestState();
       // The query layer's (slots, the erasure and deletion skip cache).
       resetAnalyticsQueryState();
+      // The config fetch path's (caches, compiled versions, answers, rate limits, reach counters).
+      resetConfigDeliveryState();
       await bootstrapAdmin(ctx);
       harness.cookie = await signIn(app, ADMIN_EMAIL, ADMIN_PASSWORD);
     },

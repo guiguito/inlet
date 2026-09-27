@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { browserSafe, reactNativeSafe } from '../build-checks.mjs';
+import { browserSafe, browserSize, reactNativeSafe } from '../build-checks.mjs';
 
 /**
  * AN-240, CR-109: the build's purity and load checks fire. `build.mjs` runs them on every
@@ -42,5 +42,17 @@ describe('the React Native load check (AN-240)', () => {
 
   it('passes an entry that reads them only when called', () => {
     expect(() => reactNativeSafe([entry('lazy.mjs', "export const later = () => globalThis.window;\n")])).not.toThrow();
+  });
+});
+
+describe('the size check (AN-240, RC-123)', () => {
+  it('keeps inlet-sdk/config/browser under 8 KB minified and gzipped', async () => {
+    const bytes = await browserSize('src/config/browser.ts', 8);
+    expect(bytes).toBeLessThanOrEqual(8 * 1024);
+  });
+
+  it('fails on an entry past its limit', async () => {
+    const big = entry('big.js', `export const noise = ${JSON.stringify(Array.from({ length: 4000 }, (_, index) => Math.sin(index).toString(36)))};\n`);
+    await expect(browserSize(big, 1)).rejects.toThrow(/past the 1 KB/);
   });
 });

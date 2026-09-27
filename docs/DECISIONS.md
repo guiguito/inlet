@@ -5235,3 +5235,1243 @@ the owner amends the budget (below).
 - **9.5**, only if the reference node also misses it: the Overview row "1 s" becomes "2 s", with the
   note "the Overview's figures are several statements over 60 days and every installation installed
   in them".
+
+## 34. Release 9: how it was built
+
+Section 32 is the design written with the PRD, before any code; this section records what
+building Remote Config decided and found, piece by piece (`docs/plans/remote-config-release-9.md`).
+Where it departs from 32 or from the PRD, it says so, and the report of the piece lists the
+amendment it proposes.
+
+### 34.1 The template contract and the evaluator (piece 1, September 27, 2026)
+
+**Where the code lives.** Five modules of `@inlet/shared`:
+
+- `config-core.ts` (subpath `@inlet/shared/config-core`): the bounds, the SDK's defaults and the
+  answer's type, importing nothing, for the SDK's config entry. Bundled and minified with every
+  constant it exports, it is 665 bytes gzipped (esbuild, `gzip -9`, measured at review). Its platform list is written out rather than
+  imported from `analytics-core.ts`, whose SHA-256 table no bundler can drop (an import brought the
+  bundle to 2.1 KB); a unit test keeps the two lists equal.
+- `config.ts`: the model, the Zod shape, the attribute and operator tables, normalisation, canonical
+  JSON, and the save and publish checks that need no JSON Schema validator. Browser-safe, re-exported
+  by the barrel, so the web editor shows problems as the draft is edited.
+- `config-evaluate.ts`: the lenient context, version comparison, buckets, the compiled template with
+  its explanations, and the ETag. Browser-safe and in the barrel, so a later local evaluation (PRD
+  section 14) can reuse it unchanged.
+- `config-template.ts`: equality, difference, change summary, warnings, defaults export, erasure.
+- `config-check.ts` (subpath `@inlet/shared/config-check`, **not** in the barrel): `ajv` and the two
+  entry points every route uses, `checkConfigSave` and `checkConfigPublish`. `ajv` 8.20.0 is a
+  direct dependency of `@inlet/shared`. A unit test fails if the barrel or a browser-safe module
+  imports it. Rejected: `ajv` in `@inlet/api` alone (the MCP server and the CLI checks would have to
+  reach into the API), and the whole check in the barrel (the web bundle would carry Ajv and its code generator).
+
+**The Zod schema is the shape; the rules are code.** The template schema leaves every value and
+schema `unknown`, so Zod never walks a value nested 50,000 levels deep into a stack overflow; the
+checks walk values with a depth bound and only then serialize the template to measure it. Problems
+are `ErrorDetail`s with a dotted `path` and, where they apply, `parameter`, `condition`, `variant`,
+`valuePath` (the JSON Pointer inside a value that failed its schema) and `heaviest` (RC-016), so the
+editor can show each beside what it concerns. Rejected: refinements on the Zod schema, which would
+report type problems of values without naming their parameter.
+
+**Condition IDs.** A template accepts `^cnd_[0-9a-z]{1,32}$`, a superset of what
+`newId('configCondition')` draws, so an agent may name a condition by hand (RC-020); the server
+draws new ones with `newConditionId`. Rejected: exactly `newId`'s twelve characters from its
+32-letter alphabet, which would refuse `cnd_beta1` for no benefit. Salts: 16 characters from
+`[A-Za-z0-9]`, drawn by `newConditionSalt` from `randomBytes`.
+
+**Weights are integers from 0 to 10,000, summing to 10,000**, at save and at publish. A variant of
+weight 0 has an empty range and receives no unit (B.3's ranges are cumulative, so it moves no
+boundary): a team ends a split by moving every unit to one variant and keeps the other variants'
+values, instead of deleting them. The sum of 10,000 leaves at least one variant positive; publishing
+refuses any other sum. Percentages are integers from 0 to 10,000 (0 is a rollout switched off).
+(Changed at review: the build first refused a weight under 1 at publish; the orchestrator decided 0
+is allowed, which RC-022's text already permits.)
+
+**Experiment keys.** RC-022's pattern admits `__proto__`, `constructor` and `prototype`, which a save
+refuses (`invalid_experiment_key`), with the helper and for the reason of UX Analytics section 9.1:
+an answer's `experiments` is an object, where `__proto__` would be dropped silently, and RC-129
+attaches the experiments to analytics events, which refuse those keys, so every event of an
+installation in the split would be lost. A variant key may be any of them: it is a value, never a key.
+
+**Operators.** The table of section 9.2 as data (`CONFIG_OPERATOR_FAMILIES`, `operatorsFor`).
+Decisions the table left open: on a custom attribute `equals` takes a string or a boolean and
+`notEquals` a string only, as the Boolean family lists `equals` alone; a list on a custom attribute
+holds strings, numbers or booleans, all of one type, and a built-in attribute's list holds strings;
+`notIn []` on a custom attribute holds for any value, and on a built-in for any string; `appBuild`'s
+number operators take a whole number and hold only when the build is 1 to 15 decimal digits. A rule
+value on `platform`, `country`, `locale`, `language` or `installationId` that cannot be normalised
+(`andriod`, `FRA`, a string that is not a UUID) is refused at save: it could never match. A
+percentage rule without a unit is saved with `installation`, so equality never depends on its absence.
+
+**Time.** `before X` holds while the clock is earlier than X; `after X` from X on, inclusive, so the
+two never both hold and a scheduled start begins exactly at its instant.
+
+**JSON Schema.** One `Ajv2020` instance, `strict: false` (an unknown keyword is an annotation, as
+2020-12 says, instead of Ajv's strict-mode error), `validateFormats: false` (`format` asserts
+nothing), no `loadSchema`. Before Ajv sees a schema, a walk that knows which keywords hold schemas,
+maps of schemas or data refuses: `pattern` and `patternProperties` wherever they are keywords (a
+property *named* `pattern` is allowed), a `$ref`, `$dynamicRef` or `$recursiveRef` not beginning with
+`#`, a `$schema` other than 2020-12, more than 16 KiB, more than 64 levels (not a PRD bound; it keeps
+the walks and Ajv's compile off a deep stack), and **`$id` anywhere**. The last is not in RC-015:
+Ajv registers every nested `$id` in a reference table shared by all schemas and never removes it,
+so each save of a schema with an `$id` would grow memory and two schemas with the same `$id` would
+refuse each other. `$anchor` and `$defs` name subschemas instead.
+
+**A local reference must land on a subschema** (`schema_ref_not_schema`, found at review). Ajv follows
+a JSON Pointer anywhere in the document, so `{"default": {"pattern": "^(a+)+$"}, "$ref": "#/default"}`
+had it compile and run a Creator's expression that the walk skipped as data (one second per publish
+for 28 characters, hours for 40), and `"$ref": "#/properties"` had it read a map of property names as
+keywords, one of them `patternProperties`. The walk now resolves each `#/…` pointer as Ajv does
+(percent-decoded, `~1` and `~0`) and refuses one that passes through `const`, `enum`, `default`,
+`examples` or the other data keywords, ends on a map of names or a list, or does not resolve. `#` and
+anchors are unchanged: Ajv registers anchors on subschemas only. Ajv compiles with
+`code: {optimize: false}`, its documented setting when compiling costs more than validating: every
+save compiles and a publish validates a few values; it compiles 2.6 times faster.
+
+**What a schema failure names.** `valuePath` is Ajv's `instancePath`, and for a missing property
+(`required`, `dependentRequired`) the property's own path: a value lacking `headline` fails at
+`/headline`, which is what section 12's criterion asks the error to name.
+
+**Ajv's cache.** Ajv 8 caches compiled schemas in a `Map` keyed by the schema *object* (its
+`_cache`, and its migration notes say so), so a schema parsed afresh from every save body would be
+compiled again and kept for ever. Each schema is removed from Ajv with `removeSchema` as soon as it is
+compiled, and the compiled function kept in a map of at most 1,000 entries keyed by the schema's
+canonical text, oldest out first. With `$id` refused, every root registers under Ajv's one empty
+base URI, which the next compile replaces. A unit test checks 2,000 distinct schemas and 2,000 fresh copies of one
+schema, and fails if Ajv's cache grows. Rejected: a fresh Ajv per compile (each compiles the 2020-12 meta-schemas
+again, milliseconds per schema, 500 per publish at the bounds), and relying on the object key (a leak).
+
+**Context leniency.** Every field optional, an unknown one ignored silently, a known one out of
+bounds absent and reported as `{path, code}` with the codes `invalid`, `placeholder_user_id` and
+`too_many_attributes`. A `null` is absence, silently, as analytics reads it. A string field must
+hold at least one character. **An invalid attribute drops only itself**, and valid attributes past
+the twentieth are dropped one by one, each reported; rejected: dropping the whole map, which would
+cost every attribute for one mistaken one.
+
+**Canonical JSON and equality.** `canonicalJson` sorts object keys recursively and keeps array order.
+`templatesEqual` compares parameters as a set keyed by key and, inside a parameter, its conditional
+values as a set (evaluation takes them in the conditions' order, never their listed order);
+conditions compare as an ordered list. So reordering parameters publishes nothing (RC-052) and
+reordering conditions is a change, reported by `diffTemplates` as reordered only. The ETag hashes
+the canonical values, experiments and the *sorted* live keys, so a parameter reorder never changes it.
+
+**The compiled template.** `compileTemplate` runs once per version: rules become closures, lists
+`Set`s, versions pre-parsed, each parameter's conditional values sorted by priority. `evaluate`
+returns the outcome vector as a string of one character per condition (`-` false, `t` a true match
+condition, a digit the variant a split assigned), the key the answer cache of piece 5 uses with the
+version; `resolve(vector)` builds values and experiments. `explain` runs the same functions with a
+record of reasons, so a preview of the active version gives exactly what a fetch gives. A draft
+compiles as it stands: a match condition without rules and a split whose weights do not sum to
+10,000 are false and reported, and a conditional value naming a missing condition or variant, or a
+second one for the same slot, is skipped and reported, using the same codes as the publish check.
+
+**SHA-256, measured.** The pure `sha256` of `text.ts` keeps the module browser-safe. Measured on
+this laptop (Apple Silicon, Node 22): 1.4 µs a bucket, against 0.43 µs for `node:crypto`. A template
+of 100 conditions each with a version rule and a percentage rule, 500 parameters: `evaluate` 169 µs a
+fetch on average, p95 204 µs; with `resolve` of 500 parameters, 190 µs. At 2,000 fetches a second
+that is a third of one core, and the p95 is 50 times under the 10 ms budget, with a template far
+heavier than a fleet's. Rejected for now: injecting `node:crypto` on the server, which would halve
+the figure but add a second code path whose buckets must be proven identical; the seam is one
+function if the load test of piece 11 asks for it.
+
+**Publishing at the bounds.** 500 parameters each with its own schema, 100 conditions of 10 rules,
+100 lists of 1,000 values, 5 splits of 5 variants, 0.9 MB serialized: `checkConfigPublish` takes 73 ms
+(the budget is 2 seconds). A template with 1,000-value lists in every rule of every condition cannot
+exist: it would pass 2 MiB, which the save refuses first. The heaviest compile 2 MiB can carry is
+about 128 distinct schemas of 16 KiB: 1.2 to 1.3 seconds cold (2.6 before `optimize: false`), measured
+by a unit test.
+
+**The schema phase of a publish runs in a worker thread, under two seconds** (decided at review by the
+orchestrator). Compiling is bounded, validating is not: a schema whose `anyOf` branches recurse
+(`{"anyOf": [{"items": {"$ref": "#"}}, {"items": {"$ref": "#"}}]}`) validates a value nested n levels in
+2ⁿ steps, 0.9 seconds at 20 levels, and values may nest 32; no regular expression is involved, so the
+pattern ban does not catch it, and on one API instance it would stop every fetch. `checkConfigPublish`
+is therefore async. It runs the checks of a save that need no Ajv on the main thread, then sends each
+json parameter with a schema to one persistent worker (`config-check-worker.ts`, found with
+`new URL(…, import.meta.url)` next to the compiled module, so the API's `tsx`, Vitest and `node` all
+load it from `@inlet/shared`'s `dist`). The worker checks each schema as a schema, then every default
+and conditional value against it, posting the index of each parameter before it starts. Past
+`SCHEMA_CHECK_TIMEOUT_MS` (2,000) for the whole template, the main thread terminates it and refuses
+with `schema_too_slow` naming that parameter at `parameters.<i>.schema` (the dotted form every
+problem's path uses); the next publish starts a new worker. Jobs are queued, so each has its whole
+limit; the worker is referenced only while a job runs, so it never keeps a process alive. A worker
+that cannot start falls back to validating on the main thread, never to skipping, with a Node
+warning `INLET_CONFIG_SCHEMA_WORKER`; one that fails after starting refuses with
+`schema_check_failed`. `checkConfigSave` stays synchronous on the main thread: it compiles, which is
+bounded. Measured: a worker starts in about 50 ms, a warm publish of one schema takes 0.7 ms, and the
+exponential schema is refused at 2,002 to 2,005 ms while a 50 ms timer on the main thread keeps firing.
+Rejected: a static cost analysis of schemas (which combinations of `anyOf`, `oneOf`, `not`, `if` and
+references explode is hard to state and easy to get wrong); refusing recursive references (acyclic ones
+explode too, `$defs` a0 to a40 each an `anyOf` of two references to the next); `vm` with a timeout (it
+interrupts only code compiled in its context, so Ajv would have to be loaded and every schema compiled
+there, and `vm` is no isolation); a worker per publish (50 ms each and no compiled cache across
+publishes). A heavy but legitimate template compiles in the worker inside the same two seconds
+(1.2 seconds at the bounds on this laptop), so a much slower machine could refuse one: the limit is
+the constant to raise if piece 11 measures that.
+
+**The defaults export.** One `export type ConfigDefaults` and one `export const configDefaults`, json
+parameters typed by an `InletJson` type declared in the same text (only when a json parameter
+exists), keys quoted with `JSON.stringify` when they are not identifiers, descriptions as doc comments
+with `*/` escaped. A key named `__proto__` inside a json value is written `["__proto__"]:`, because a
+literal `"__proto__":` sets the object's prototype instead of a key. A unit test compiles the text
+with the repository's TypeScript compiler, and another evaluates the object literal and finds every key.
+
+**A refused rule value is never serialized.** A rule value that nests (a list of lists 200,000 deep,
+which `JSON.parse` accepts) is refused, and the draft's 2 MiB measure is skipped, as for a value too
+deep, so the save answers its problems instead of overflowing the stack (found at review).
+
+### 34.2 Config databases (piece 2, September 27, 2026)
+
+**Every table of the release in one migration.** `0008_remote_config.sql` creates
+`config_databases`, `config_drafts`, `config_versions`, `config_activity`, `config_reach` and
+`config_database_memberships`, adds `invitations.config_database_id` and
+`notification_deliveries.config_activity_id` (cascade), and the delivery kinds
+`config_published`, `config_rolled_back` and `config_unpublished`, so pieces 3 to 6 add routes,
+not tables. `config_versions` and `config_reach` key on their unique columns (a composite primary
+key is the uniqueness PRD 9.3 asks for and the index their reads need: versions by database,
+reach by database and period); `config_activity` has an identity ID, as `analytics_incidents`
+and `erasures` do, since it is internal and only the delivery queue refers to it, and an index on
+`(database, created_at desc, id desc)` for the history newest first. The reach row has no ID:
+the worker upserts on its key. Rejected: a prefixed public ID for activity entries, which the
+PRD does not expose and which would have needed a prefix in piece 1's `ids.ts`; a daily-pass
+index on `period_start` alone, since a database's rows number in the low thousands.
+
+**"A user or a credential" is two columns, no foreign key, and a check.** As `erasures` records
+its actor: `updated_by_user_id`/`updated_by_credential_id` on the draft, `published_by_*` on a
+version, `actor_*` on activity, each pair under `CHECK (num_nonnulls(…) = 1)`. No foreign key,
+so a version's publisher survives a deleted account or a revoked key: a history that loses
+its authors cannot explain what a client received (RC-004). Rejected: `set null` foreign keys
+as `form_versions.published_by` has, which erase who published after a revocation and would
+break the check; one polymorphic `actor` text column, which a reader would have to parse by
+prefix.
+
+**The draft is created with its database, not lazily.** Creation inserts the database and its
+draft (`{parameters: [], conditions: []}`, revision 0, the creator as actor) in one
+transaction, under the project row's key-share lock, as analytics creation does, so a creation
+racing its project's deletion answers 404. Every later read and per-part change (piece 3) then
+finds a row to `SELECT … FOR UPDATE` and never has to insert under a race. Rejected: the lazy
+creation forms use, which would make every piece-3 write an upsert.
+
+**The refresh interval is stored as set and read clamped.** Like crash retention (29.6) and
+analytics storage (33.2): a read reports, and the fetch of piece 5 will use,
+`effectiveRefreshInterval`, the stored value at the operator's current bounds, without a
+rewrite. A change outside the bounds in force is `400 setting_out_of_bounds` (the PRD's code,
+not analytics' `storage_setting_out_of_bounds`), with `details[0].path` =
+`refreshIntervalMinutes` and a message naming the bounds; a read also returns
+`refreshIntervalBounds`, so the interface and an agent show them without guessing. The body's
+field names are `refreshIntervalMinutes` and `deriveCountry`; the column stays
+`country_derivation`, as analytics names it. A change applies to fetches answered afterwards
+and touches no version (RC-002). Hard limits: 1 minute to 10,080 (a week) for the three
+refresh variables, checked MIN ≤ DEFAULT ≤ MAX at startup; below a minute every installation
+becomes a steady load, and beyond a week a non-live kill switch waits days. Fetch limits: per
+key from 1,000 (to 100 million per 5 minutes, a billion per hour), per installation from 5 (a
+launch, a context change and a retry must fit), per address from 60, as analytics ingest has.
+They are named `INLET_LIMIT_CONFIG_PER_*`, as every rate limit is `INLET_LIMIT_<TYPE>_*` and every
+setting's bounds `INLET_<TYPE>_<SETTING>_*` (renamed at review from `INLET_CONFIG_FETCH_PER_*`).
+Their defaults are section 14's, and the refresh defaults come from `CONFIG_DEFAULTS` in piece
+1's contract, so the SDK and the server share one figure.
+
+**Roles.** Rename needs Creator, as for every type; the delivery settings, the deletion impact
+and deletion need a database or project Admin (7.3); a PATCH carrying both a name and a
+delivery setting needs Admin. `requireClientConfigDatabase` answers
+`config_database_inaccessible` for an unknown and a foreign database alike, for piece 5.
+
+**The deletion impact counts versions and two parameter figures.** `versions` (rollbacks
+included), `draftParameters` and `activeParameters` (null with nothing published), since the
+two differ as soon as the draft has unpublished changes and either alone would mislead.
+`exportPath` names `GET /v1/config-databases/{id}/export/history`, the history export of RC-064
+that piece 4 builds, and the interface links it; `notice` says it holds every version and not
+the reach counts, the memberships or the notification settings. Rejected: counting conditions
+too, which FD-008's "in the type's own units" and RC-003 do not ask for.
+
+**Deletion echoes the name where the other types echo it.** The HTTP `DELETE` takes no
+confirmation, as for feedback, crash and analytics databases; the interface's dialog and the
+MCP tool `delete_config_database` demand the exact name and answer `confirmation_mismatch`
+otherwise (FD-022). Notification settings and queued deliveries go through
+`deleteNotificationRows`, and `deleteProject`'s union names `config_databases`.
+
+**The Slack test message is a sample publish.** A `cfg_` test posts "<name>: version 1
+published by Inlet. This is a test; nothing was published." with "Open in Inlet" linking to
+History, never the feedback sample with its example answer. Piece 4 writes the real renderer
+(8.2) and may replace it. `contentLevel` is stored and never read, as for crash and analytics.
+
+**Found on the way: the MCP Slack test tool only worked for feedback databases.**
+`send_slack_test_message` read the name it confirms from `/v1/feedback-databases/{id}`
+whatever the prefix, so a crash or analytics database ID failed with
+`feedback_database_not_found`. It now reads `databasePath(id)`, which fixes all three types.
+
+**The page.** `apps/web/src/pages/config-database.tsx` has the analytics page's `TABS` shape,
+`{value, label, panels[]}` driven by `?tab=&panel=`, with the Settings group only (General,
+Delivery, Notifications, Access); pieces 7 and 8 add Parameters, History and Integrate as one
+entry each, before Settings, and the page then opens on the first. No placeholder tabs.
+Controls a role may not use are disabled (rename for a Viewer, the delivery settings for anyone
+below Admin) or hidden (deletion below Admin). The refresh interval input carries no `min` or
+`max` attributes, so the server's refusal, which names the bounds, is what a person sees.
+
+### 34.3 Draft editing (piece 3, September 27, 2026)
+
+**One write path, under the row lock.** Every change of the draft (whole replacement,
+import, the five per-part changes and Reshuffle) goes through `changeDraft` in
+`services/config-draft.ts`: one transaction that locks the draft row (`select … for
+update`), builds the whole candidate template from the locked one, runs `checkConfigSave` on
+it and writes the checked, normalised template with `revision + 1` and the actor. So two
+per-part changes serialise on the row and both survive (tested with ten concurrent writers
+from a session and a key), bounds and duplicates hold across the whole draft whatever part
+changed, and a refused change leaves the revision where it was. The whole replacement takes
+the same lock, only to read the stored salts. Rejected: JSONB path updates
+(`jsonb_set`) per part, which would skip the whole-draft checks; optimistic retries on the
+revision, which a lock makes unnecessary for writes this rare.
+
+**Bodies are `unknown` to Zod; the save checks judge them.** The template, a parameter, a
+condition and an import are declared `z.unknown()` in the route schemas (with a description
+naming the `ConfigTemplate` component), so every problem with a template, including its
+shape, answers `config_template_invalid` with the path the save check gives, never Fastify's
+`validation_failed`: an import of a file that is not a template is RC-062's code. The
+envelope keeps Zod (`expectedRevision`, `order`, the export's query). The shared error
+schema's `details` gained the optional `parameter`, `condition`, `variant`, `valuePath` and
+`heaviest` of a `ConfigProblem`; before, the response serializer stripped them.
+
+**Salts and IDs.** Before the save check sees a whole template, every condition gets an ID
+(a server one when absent) and a salt: the stored salt of the same ID, else a fresh one,
+whatever the body carries (RC-020). Import alone keeps a salt it carries (RC-062), and draws
+one when absent. `PUT …/conditions/{id}` keeps the stored salt, or draws one for a new
+condition, and appends a new one at the lowest priority.
+
+**Choices the brief left open.** A parameter body whose `key` differs from the path is
+refused (`key_mismatch`, and `id_mismatch` for a condition): a rename is a delete and a
+create, which the editor does in two calls; treating it as a rename would have to decide
+what a rename onto an existing key means. The parameters a condition's deletion affects
+are listed before deleting by the draft read's `conditionUsage` (per condition, the
+parameters holding a value under it), which also marks the unused conditions of RC-029, so
+no `dryRun` flag was added. `PUT /draft` takes an optional `expectedRevision`
+(`stale_draft_revision`), and stays last-write-wins without it. `POST /draft/validate` takes
+no body: validating an unsaved template is what the editor's browser-safe checks do.
+
+**The read's state is cached per revision.** `checkConfigPublish` validates every json value
+against its schema, bounded in time but not free, so the draft read never reruns it: the
+problems, the RC-017 warnings, `differsFromActive`, `changes` and `conditionUsage` are
+computed once per `(revision, active version)` and kept in a 1,000-entry `Lru` with one
+entry per database, the latest (the promise is kept, so concurrent reads of a new revision
+compute it once; a failure is not kept). A revision's template never changes and versions
+are immutable, so the key is exact: a publish, rollback or unpublish changes the active
+version number and needs no call; a change that would rewrite a draft or a version without
+a new revision or number (the erasure of piece 6) calls `forgetDraftStates(databaseId)`.
+Rejected: one entry per `(database, revision, active version)`, the first build, where an
+editing session's hundreds of revisions pushed every other database's state out and held
+a problem list each (up to tens of thousands of schema mismatches for a crafted draft).
+`changes` counts diff entries (parameters and conditions added, changed or removed) plus one
+for a reorder; `differsFromActive` is `templatesEqual` against the active version, and true
+for a non-empty draft when nothing is published.
+
+**Answers.** The read, the whole replacement and import answer the template and its state;
+a per-part change answers the state without the template, plus the `parameter` or
+`condition` as stored (the client learns the salt) or `affectedParameters`, so a change on a
+draft at its bounds does not send 2 MiB back. The actor is `{kind: "user" | "key", id,
+name}`, the name a user's display name or a key's label, null once gone.
+
+**Exports.** `GET /export?source&format` is built whole: `source` is `draft`, `active` or a
+number, and the version lookup reads `config_versions` already, so piece 4 has nothing to
+fill in; with nothing published `active` and any number answer `config_version_not_found`.
+`json` is the export (`format: 1`); `defaults` the JSON defaults; `ts` the TypeScript as
+`text/plain` (browsers show and save it; `application/typescript` is not registered), each
+with a `Content-Disposition` filename (`inlet-cfg_…-draft.json`, `…-v3-defaults.ts`). The
+test type-checks the TypeScript export with the repository's own `tsc --strict`; TypeScript 7
+has no JavaScript compiler API, so it runs the binary.
+
+**Body limits.** The routes that carry a template or a part of one accept 2 MiB plus 256 KiB
+of envelope, above the API's 1 MiB default; the save check still measures the template
+against its 2 MiB, as stored. The template export is indented, and compact when indenting
+would take it past that limit (an indented template of 1.3 MiB with long `in` lists is
+2.6 MiB), so every export imports as downloaded. Rejected: a limit wide enough for any
+indentation, which no small multiple of the template bound is (every level of a value
+nested 32 deep adds two spaces to each of its lines), for a body parsed before authentication; and always
+compact, which gives up a readable file for the common case.
+
+**Measured.** A per-part change on a draft of 500 json parameters with schemas and 100
+conditions, the publish check of the new revision included, answers in 12 to 17 ms (median
+of five, integration test on the development machine).
+
+**Review (piece 3 verification, September 27, 2026).** The tester found and fixed, each with a
+test that failed first: a parameter key of 101 to 128 characters could not be set or deleted
+per part (the router's `maxParamLength` of 100 answered 414 before the route; now
+`routerOptions.maxParamLength` is 256 in `app.ts`); the 2 MiB bound was measured on the body
+as sent rather than on the template as stored, so a draft accepted just under it was stored
+over it, and then every per-part change, the import of its own export and its publish were
+refused `template_too_large` (now `checkTemplateForSave` measures its normalised output, in
+`@inlet/shared`); an export of a template of 1.3 MiB or more was indented past the import's
+limit and answered 413 (now compact when it would be); and the state cache is kept per
+database, as above. Checked and kept: a `schema_too_slow` schema appears as a read's problem
+after the worker's two seconds, once per revision, while other requests are answered; a
+reorder that missed a condition created meanwhile is refused and loses nothing; two deletes of
+one condition answer 200 and 404; database roles override project roles both ways.
+
+### 34.9 The config SDK core, browser and Node (piece 9, September 27, 2026)
+
+Numbered after its piece, as 33.11a was; renumber when the pieces before it are committed. The
+seams are in `docs/plans/remote-config-release-9.md` under "From piece 9".
+
+**One client class, runtimes as adapters.** `ConfigClient` (`packages/sdk/src/config/client.ts`)
+holds activation, refresh, transport and storage; an adapter (`ConfigAdapter`) supplies a
+synchronous storage (and a promise when it must be read first), the context, the mode, whether
+tabs share the storage, Web Locks, the initial foreground state and a `lifecycle` hook that wires
+the runtime's events to `foreground()`, `background()` and `storageChanged()`. The browser and
+Node entries are thirty lines each, and the Electron and React Native entries of piece 10 are two
+more adapters. The read methods live in a base class, `ConfigReader`, which is also the Node
+snapshot, so a snapshot reads exactly as the client does.
+
+**The shared identity is joined, never created, by the config module.** The browser entry has
+8 KB compressed; the `Identity` class and the SHA-256 it needs (session IDs, derived session IDs)
+are 3 KB of it. The config module needs only the user ID, `analyticsEnabled` and the attached
+installation ID, fields every version has. So it reads the identity another module created, and
+when none exists it holds `globalThis[Symbol.for('inlet-sdk.identity')]` open with an accessor:
+the identity the next module creates (`holder[slot] = new Identity()`, what 0.2.x and this version
+both write) lands there, takes the user ID set so far, and is watched from then on. Rejected:
+creating a plain object in the slot, which this version's `sharedIdentity()` would upgrade in place
+but a 0.2.x crash module would call `sessionId()` on and throw; and importing `sharedIdentity()`,
+which puts the entry at 10.5 KB.
+
+**A change of user is watched through an accessor.** Every module sets `identity.userId`
+directly, the published 0.2.x crash module included, so no method can observe it. `watchUserId`
+(`src/identity-keys.ts`) turns the identity's `userId` into an accessor the first time something
+watches it; the watchers live under `Symbol.for('inlet-sdk.identity.user-watchers')` on the
+identity, so two copies of the package share them. Writing the same value is no change. Rejected:
+polling the field before each fetch (a change of user must fetch within a second, and discard the
+staged answer at once).
+
+**`identity-keys.ts`.** `IDENTITY_KEYS`, `IdentityStorage`, `MemoryIdentityStorage` and
+`watchUserId` moved out of `identity.ts`, which re-exports them, because `identity.ts` imports
+`crash-core`, whose SHA-256 table esbuild keeps as a side effect. The config module has its own
+twelve-line `uuidV4` for the same reason; it uses `crypto.getRandomValues` or an injected source,
+and `Math.random` only where neither exists. Size: **7.8 KB** minified and gzipped (7,997 bytes after the review's fixes; 7,760 before),
+limit 8 KB, measured by `browserSize()` in `build-checks.mjs`, which `test/build-checks.test.ts`
+now runs on the entry.
+
+**One storage key per database and deployment**, `config:<database ID>:<FNV-1a of the base URL
+in base 36>` (`inlet-sdk:config:cfg_…:1x2y3z` in `localStorage`, `config_cfg_…_1x2y3z.json` on
+disk), holding `{v: 1, fetchedAt, interval, active, staged}`: each answer with its version,
+values, experiments, live keys, ETag, fetch time, and the app version, build and user ID it was
+fetched for. `fetchedAt` is the last successful fetch of any tab of the origin, which is what
+RC-123's "no tab fetched within the interval" reads. One key rather than one per answer, so that a
+tab's `storage` event carries one consistent record. Where a write does not read back (a full or
+refused storage), `debug` says the answers stay in memory.
+
+**Activation.** At a launch the client activates the stored staged answer, else the active one,
+the first that was fetched for this app version and build (and user ID, when one is set at
+`init`); the staged one then becomes the stored active one. An answer arriving is activated whole
+when activation is `immediate`, after a change of user, when its version is null, or when it is
+the launch's first and nothing was read; otherwise the parameters live in the active answer or in
+the new one are copied into the active values (a removal deletes), and if that leaves nothing
+different the whole answer is activated, else it is staged. A read is any read method;
+`getInstallationId()` and `ready()` are not. An answer for a user who changed while it was in
+flight is dropped. A not-modified answer rebinds the held answer to the current user.
+
+**`ready()` settles once per launch** — true when the launch's first answer (or a not-modified
+answer, or another tab's answer within the interval) left nothing staged, false when that first
+answer was staged, the first fetch failed, `/v1/health` lacks `config`, or the timeout passed.
+A later success does not turn a false into a true for later callers. Server mode resolves false:
+it never fetches by itself.
+
+**Browser tabs.** The launch's and the timer's fetch run under
+`navigator.locks.request('inlet-sdk.config.fetch:<key>')` and, inside it, skip the request when
+the stored `fetchedAt` is within the interval and the stored answer is bound to this tab's app
+version, build and user, taking that answer instead and counting the next wait from its fetch.
+A timer skips only within 90% of the interval, its jitter's low end: at the full interval, a
+wait drawn under it would find the tab's own last fetch and skip it, doubling the interval; `refresh()` and a
+change of context always fetch. Every tab takes a stored answer whose ETag it does not hold, bound
+to its app and user, through the `storage` event, as a later answer. Without Web Locks tabs loaded
+together may each fetch; a tab loaded after one fetched does not.
+
+**Refresh and transport.** Timers are `setTimeout`, unref'd, cleared by `close()`. The interval is
+`max(floor, server)` or `max(floor, 60 min)` before the server answered (the server's is persisted,
+so a launch knows it), each wait varied by ±10%. A transport failure (network, timeout, 5xx, a
+failed health probe) retries after `min(interval, 10 s × 2^(n−1))` × 0.5 to 1 — so from 5 seconds,
+never past the next refresh. A `429` pauses the fetch route for `Retry-After` (60 s without one) ×
+1 to 1.1, and the retry is scheduled for the end of the pause. `401`/`403` report `refused`, `404`
+`not-found`, and stop refreshing until the next launch. Another 4xx reports `refused` without
+stopping. The health probe is the shared `capabilities()`; without `config` it is asked again
+after ten minutes (the analytics module's period) or at the next launch.
+
+**Node server mode.** `evaluate(context)` builds the body (platform `server` unless named,
+`deriveCountry: false`, the init app unless the context names one), keys the cache by the body's
+canonical JSON (sorted keys, `canonical()` in `client.ts`, which also compares answer values), keeps at most 1,000 entries in a `Map` used as an LRU, joins a fetch
+in flight for the same context, refreshes an expired entry with its ETag, and returns a
+`ConfigReader`. A failure returns the last answer for the context, else the defaults. The client's
+own reads stay on the defaults unless the integrator calls `refresh()`.
+
+**Bounds.** `setUserId` truncates past 128 characters, as the crash and analytics modules'
+setters do, rather than dropping, so that the three modules keep agreeing on the shared user ID
+(the server treats longer ones as absent). A user ID set elsewhere and longer than 128 is not
+sent. `setAttributes` drops what the server would treat as absent (key pattern, value type and
+length, the 21st attribute) and says so through `debug`.
+
+**Version.** `inlet-sdk` is 0.4.0 in `package.json` and every `SDK_VERSION`; `versionsAgree()`
+checks the config client too. Not published.
+
+**Review (piece 9 verification, September 27, 2026).** The tester found and fixed, each with a
+test that failed first: a browser tab's periodic refresh skipped about half its turns (the timer
+found its own fetch within the interval), now as above; a page of a new app version took an old
+version's tab's answer as "fetched within the interval" and ran on its defaults for up to an
+interval, now it fetches; values were compared by `JSON.stringify`, so a reordered object read as
+a change and an answer equal to the active values was staged, now by `canonical()`; a live value
+applied from a staged answer reported the older answer's version and fetch time in `getDetails`,
+now each such value records its own (`StoredAnswer.from`, key → `[version, fetchedAt]`); an
+answer dropped because the user changed while it was in flight left a `refresh()` that joined
+it resolving before the new user's values, so the new user's fetch now follows at once, inside
+the same flight; with an asynchronous `store`, `getInstallationId()` before the store was read
+created an ID that replaced the stored one, `setInstallationIdEnabled(false)` then deleted
+nothing, and the cached answer activated silently — now no ID is created before the read, the
+deletion waits for it, and the activation is reported through `onUpdate`; a `refreshIntervalMinutes`
+that is not a number (an unset environment variable) fetched every millisecond, now it is the
+floor; and a timer past 2^31 − 1 ms, which every runtime fires at once, is clamped, so a long
+`Retry-After` cannot spin. The identity join was proven against the published 0.2.0 crash and
+0.3.0 analytics bundles in both orders; it stands.
+
+### 34.10 The config SDK for Electron and React Native, and experiments (piece 10, September 27, 2026)
+
+Numbered after its piece, as 34.9 is. The seams are in `docs/plans/remote-config-release-9.md`
+under "From piece 10".
+
+**The adapters are subclasses, so the browser entry pays nothing for them.** Piece 9 left three
+hooks to add: `markRead`, `relaunch` and one on activation. Each would have cost the 8 KB browser
+entry bytes it does not use, so the shared client only turned `swap`, `emit`, `staged`, `answered`,
+`started`, `launched`, `settleReady` and `healthRetryAt` from private to protected (TypeScript
+only, no bytes), and the entries subclass it: `ElectronConfigClient` adds `markRead()`, `state()`
+and overrides `swap` and `emit` to push to windows; `ReactNativeConfigClient` adds `relaunch()`.
+Rejected: public hooks on `ConfigClient`, which the browser entry would carry; and a listener
+list for activations, a second mechanism for what an override does.
+
+**Electron: main pushes state, renderers send requests.** One channel each way:
+`inlet:config` (renderer to main: `hello`, `read`, `activate` and `refresh` with a request number,
+`setUserId`, `setAttributes`) and `inlet:config:state` (main to windows: `{ active, fresh, ready,
+installationId, update? }` at every activation and staging and in answer to `hello`; `{ reply,
+result }` to a request). The renderer is a `ConfigReader` over the last answer pushed, so its
+reads are the main client's, byte for byte; its `activate()` and `refresh()` return promises,
+resolved by main's reply (at once, with `[]` or `false`, when there is no bridge). Its first read
+becomes a `read` message through an accessor over the reader's `readAny` field, so the shared
+reader has no hook for it. Main answers a renderer's `setUserId` and `setAttributes` unless
+installed with `acceptRendererIdentity: false`, reading only a string or null for the one and a
+plain object (at most 40 entries, each bounded by `setAttributes`) for the other. Rejected:
+`ipcRenderer.invoke`/`ipcMain.handle`, which the preload bridge of the other modules does not
+expose, and a renderer that fetches on its own, which RC-125 forbids. The Electron main's context
+is now one function, `electronMainContext` (`src/electron-main.ts`), shared with the analytics
+entry.
+
+**React Native: a relaunch reruns the launch in memory.** A return to `active` after at least 30
+minutes in `background` calls `relaunch()`: the staged answer is activated (it is in memory, bound
+to this app and user since a change of user discards it), the launch's flags start again — nothing
+read, no answer, not fresh, a refused fetch tried again, the health probe asked again, a new
+`ready()` promise — and the launch fetches. `inactive` (iOS's transition) is neither. A shorter
+return is `foreground()`, which fetches only when the last success is older than the interval. The
+store is the analytics module's identity shape (`ReactNativeStore` with the `inlet-sdk:` prefix),
+so `inlet-sdk:installation-id` is one key for both modules. The 1 MB budget wraps the adapter's
+storage: a record past it (less 1 KB kept for the ID) is written without `active`, then without
+`staged`; the client keeps both in memory for the launch. Rejected: a byte count across every key
+of the store, which the module cannot see into.
+
+**RC-129 lives in the analytics client.** The config browser entry had 195 bytes left; setting,
+clearing, remembering and reporting experiments costs more than that. So the config client's
+`swap` only publishes `[experiments, debug]` on `globalThis[Symbol.for('inlet-sdk.config.experiments')]`
+and calls `syncConfigExperiments?.()` on the analytics client in its slot (49 bytes compressed;
+the entry was at 8,046 of 8,192, 8,045 after the review). The analytics client runs the same function at every enable,
+which is how "an analytics client enabled later" receives them, with no listener list. It clears
+the keys it recorded for config that the answer lacks, sets the others through the same checks as
+`setExperiment` (`putExperiment` now says whether it stored the value), skips a key the
+application set itself, reports a refusal through the config module's `debug`, and persists the
+keys config set in its own state (`analytics-state`, field `config`) beside the experiments
+themselves. An application's `setExperiment` on a key config set makes it the application's.
+A live-only application needs no special case: the patched answer carries the experiments of the
+answer fully activated last, so nothing new is recorded until the full activation. Rejected:
+the config module calling the public `setExperiment` (it returns nothing, so the limit's refusal
+could not be reported, and it would need the kept keys in the config record); keeping those keys
+in the config record, which can disagree with analytics' after `forget` and then clear an
+experiment the application set since.
+
+**Found at review.** A launch on the in-app defaults (no cached answer bound to this app version,
+build and user) now counts: `start` calls `swap(null)`, which publishes no experiments, and the
+analytics client clears the ones config set, since the application is in none until an answer is
+activated (the entry went from 8,046 to 8,045 bytes). `close()` still leaves the last ones
+recorded: the values the client held are what the application keeps reading. An experiment named
+in analytics' `init({ experiments })` is the application's, as one set with `setExperiment` is;
+before, a key config had set the launch before stayed config's and was cleared. Main no longer
+throws an unhandled rejection when a window closes during its `refresh()`: every send to a
+renderer goes through one guarded function, and the launch result is pushed through `onState`, so
+nothing is pushed after `uninstall()`. The React Native budget reads the record back as the client
+wrote it, so trimming it is no longer also reported as a failing store, which a store that
+refuses the write still is. The store's probe no longer leaves an unhandled rejection when
+AsyncStorage fails. The README's preload bridge forwards only the module's two channels, as the
+analytics one does.
+
+### 34.4 Publishing and history (piece 4, September 27, 2026)
+
+**One lock for the lifecycle.** Publish, rollback and unpublish run in one transaction that
+takes the draft row's lock (`select … for update` on `config_drafts`), the lock every draft
+change already takes, and read `config_databases.active_version_number` under it. So the
+revision a publish compares, the next version number (`max(number) + 1`) and the version
+limit (RC-004, 10,000, a constant: the PRD fixes it) come from the table under the lock,
+and the version, the active pointer, the activity row and its Slack delivery commit
+together (RC-082, section 11). Five concurrent publishes of one revision make one version
+(tested). Rejected: a lock on `config_databases` (a rename would wait on a publish's
+two-second schema check) and a sequence per database (numbers must not skip on a refused
+publish). The schema phase of `checkConfigPublish` holds the lock for up to two seconds;
+publishes are rare, and the draft edits it delays would otherwise race the publish.
+
+**Idempotency is "the revision that made the active version, or a draft equal to it".**
+RC-052 names two cases, a revision already published and a draft equal to the active
+version. Both answer `200`, `created: false`, the active version, and nothing created,
+recorded or announced; a new version answers `201`. The first is checked before the
+revision comparison, so a retry whose first attempt landed gets its version back even when
+someone changed the draft in between (the review found the plain `templatesEqual` check
+answering `stale_draft_revision` there, which tells the retrying client its publish failed
+when it did not). It matches only a version that was published, not rolled back to: a
+rollback records the draft's revision of the moment, which it did not publish. A revision
+whose version is no longer active, after a rollback or an unpublish, publishes again as a
+new version: taken literally, RC-052 would answer the old, inactive version, and an
+unpublish could not be undone by publishing the same draft (RC-056). A rollback to a
+version equal to the active one is idempotent the same way (RC-054). The idempotency checks
+run before the publish checks, so a retry answers at once.
+
+**What a version records.** The change summary is against the version active before (none
+after an unpublish, so a republish lists everything as added). A rollback records the
+draft's revision at that moment and the note "Rolled back to version N." followed by the
+actor's; the Slack sentence already says it, so the renderer drops that prefix. Warnings
+(RC-017) come back with a created version, never with an idempotent answer.
+
+**Immutability (RC-059)** is held by absence and a test: no function updates
+`config_versions`, and the integration suite fails if any source file outside one whose name
+contains `erasure` (piece 6's) contains `update(configVersions)` or `update config_versions`.
+Rejected: a trigger refusing updates, which piece 6's rewrite would have to disable.
+
+**Reads.** Activity and versions are newest first, 50 a page (up to 200), with the activity
+identity or the version number as `nextCursor`: activities are written one at a time under
+the lock, so the identity's order is theirs. A cursor that is not a positive PostgreSQL
+integer is `400` (the review found a ten-digit one past 2,147,483,647 answering `500`). Actors come back as `{kind, id, name}` (the
+draft's shape), the name read at request time. `GET /diff` defaults to `active` → `draft`
+(the publish review), resolves `active` with nothing published to the empty template, and
+returns `publishWarnings(to, from)` with `fromVersion` and `toVersion`.
+
+**The history export streams.** `GET /export/history` writes the database and the draft,
+then the activity in pages of 1,000, then the versions twenty rows a query and one at a
+time, through `Readable.from` of a generator, as the analytics event export does. It covers
+the versions and activity that existed when it started (their maxima are read first), so it
+is consistent without a transaction held open for a slow download.
+
+**Slack.** `buildConfigSlackMessage` (`services/config-slack-message.ts`) renders the three
+kinds from the activity and its version at send time; the worker's claim returns
+`config_activity_id` and `render()` dispatches the kinds as it does analytics'. Up to ten
+keys (added, changed, removed, in that order) then "and N more"; condition counts added,
+changed, removed, each left out at zero; no line at all when nothing changed. Everything
+user-written (the name, the actor, the note, the keys) is escaped; the heading is the
+operator's, as for the other types. A deleted account or key reads "a deleted account" or
+"a deleted key". Piece 2's sample test message now goes through the same builder. Escaping
+can grow a 500-character note fivefold, past the 3,000 characters Slack accepts in a block
+(found in review with a note and a name of ampersands), so the builder shortens the escaped
+note to fit, ending in "…"; everything else in the message is bounded well below it.
+
+**Copy to draft** is `copyVersionToDraft` in `services/config-draft.ts`, through piece 3's
+`changeDraft` (lock, save checks, `revision + 1`), and its route sits with the draft routes;
+the version's IDs and salts are kept.
+
+**For piece 5.** `configChanged(ctx, databaseId)` in `services/config-publish.ts` is called
+after the commit of every publish, rollback and unpublish that changed something; it is a
+no-op, for piece 5 to fill with the invalidation of its compiled version and answers
+(RC-033).
+
+### 34.7 The Parameters tab (piece 7, September 27, 2026)
+
+**Structure.** The group is `components/config/`: `parameters-tab.tsx` (header, view switch,
+dialogs), `parameters-list.tsx`, `parameter-editor.tsx`, `json-editor.tsx`,
+`conditions-list.tsx`, `condition-editor.tsx`, `publish-dialog.tsx`, `preview-panel.tsx` and
+`format.ts` (plain words and value text). Parameters is the first entry of `TABS`, so the page
+lands on it; the Parameters/Conditions switch is a two-option radio group rather than a second
+row of tabs, so the screen keeps at most four tabs once History and Integrate arrive
+(Foundations navigation rule). The view is in the URL (`?view=conditions`).
+
+**Saving.** Each editor is a dialog that keeps its own text state and saves on Save as one
+per-part change (RC-051); the answer (the draft's state plus the part as stored) patches the
+cached draft, so no change refetches a 2 MiB template. Rejected: the form builder's debounced
+autosave, which would send half-typed keys and unparsable JSON as refused saves, and a
+refetch of the draft after every change. A refused save (`config_template_invalid`) keeps the
+dialog open and puts each problem beside its field (paths rebased from `parameters.<i>` to the
+editor's part); a network failure keeps it open with a toast; the header says "Not saved".
+The shared `checkTemplateForSave` runs on the part being edited as it is typed (key syntax,
+types, sizes, rule values), plus duplicate key, name and experiment checks against the rest of
+the draft; the draft's publish problems (its GET `problems`, which include schema failures)
+show beside the parameter or condition. A condition's empty name is reported apart and checked
+with a stand-in, because a shape failure would hide every rule problem. A rename is a create
+of the new key and a delete of the old (the API has none).
+
+**The JSON editor** is a monospace `<textarea>` whose text is the state; it parses on every
+input, and a Format button indents. V8's "Unexpected token" message carries no position, so a
+small scanner (`errorOffset` in `format.ts`, run only after `JSON.parse` refused) finds the
+offset for "at line L, column C". Rejected: CodeMirror or Monaco, a dependency for one field.
+
+**Rules in words.** `describeRule` covers every attribute and operator pair of section 9.2
+(presence, equality, membership with lists shortened to three values, text, version, number,
+boolean, time, percentage with its unit); a condition joins its rules with "and" and a split
+adds its variants and unit. Values are always text. A custom attribute's rule has a value type
+(Text, Number, Boolean) that picks its operators and how a pasted list is typed, since a rule
+only matches a context value of its own type (RC-023).
+
+**Reordering** is native HTML drag and drop on the rows plus Move up and Move down buttons
+named after the condition; an `aria-live` region announces "X moved to position N of M", and
+focus returns to the moved row's button (React may re-insert the node). Rejected: a drag
+library.
+
+**Publish** reads the draft, then the difference (`GET /diff`) and the newest version (for
+"Publish version N"), and publishes the revision it read: a change made in between makes the
+publish refuse with `stale_draft_revision`, and the review reloads and says so. Publish in the
+header is disabled while the draft equals the active version; an idempotent answer is still
+reported ("Nothing was published").
+
+**Preview and reach** use piece 5's routes as built: the preview answer is piece 1's
+explanation; the first false rule is an index, read against the previewed template (the draft,
+or `GET /versions/{n}`). The Conditions view reads `summary.lastDay.conditions` from `GET
+/reach` and shows a share only when the route gives one: "fewer than 10 fetches" for a hidden
+count, "matched no fetch" for none, and "fetches, not devices".
+
+**Performance at the bounds**, measured in the end-to-end test with a draft of 500 JSON and
+string parameters (three conditional values each) and 100 conditions of two rules, on a laptop
+in Chromium: the page to the 500th row 125 ms, typing an 8-character search 76 ms, opening an
+editor 49 ms, the Conditions view 87 ms, a move saved and announced 77 ms. No virtualisation or
+pagination: the list is rendered whole, and the search renders at a deferred value.
+
+**Review (September 27, 2026).** Fixed in review, each with an end-to-end test in
+`e2e/ui/config-parameters.spec.ts`: closing an editor, the review or the preview gives the focus
+back to the button that opened it (Radix does so only for a `Dialog.Trigger`, and these dialogs
+have none); a Viewer's selects are disabled themselves, since a Radix select opens on pointer
+down even inside a disabled `<fieldset>`; a time rule keeps its seconds, so saving a condition
+untouched no longer moves its instant; a pasted list drops repeated values as it drops blank
+lines; a value's problem is matched by its condition and variant, not its position, so it stays
+beside its value when another is removed; the value fields' ids come from `useId`, not from the
+condition's name, which may be in a script `\W` strips; a per-part refusal other than the save
+checks (an order missing a condition another editor added, a condition already deleted) rereads
+the draft, so the next try can succeed, and a failed reread keeps the draft and any open editor on
+screen; Save after a rename whose deletion failed finishes it, instead of refusing the new key as
+taken; and a dragged row carries data, which Firefox needs to start a drag.
+
+### 34.8 The History and Integrate tabs (piece 8, September 27, 2026)
+
+**Structure.** `components/config/history-tab.tsx` (`HistoryTab`, with the View, Compare and
+rollback dialogs) and `integrate-tab.tsx` (`IntegrateTab`), each one entry of `TABS` between
+Parameters and Settings, with no panels; the snippets are `lib/config-snippets.ts`, patterned on
+`lib/analytics-snippets.ts`, the one place to check against `packages/sdk/README.md` "# Remote
+config". Client methods added to `lib/api.ts`: `listConfigActivity`, `rollbackConfig`,
+`unpublishConfig`, `copyConfigVersionToDraft`, `exportConfig`, `configExportPath`, and an
+optional cursor on `listConfigVersions`; `ConfigVersion` gained `changeSummary` and `ConfigReach`
+`summary.last24Hours`, as the routes already answered.
+
+**One difference view.** The publish review's rendering (piece 7) is now `ConfigDiffView` in
+`publish-dialog.tsx`, used by the publish review, Compare and the rollback review, so the three
+read alike. Rejected: exporting its `ParameterText` and `ConditionText` and rebuilding the lists
+in History, two copies of the same markup. Condition names for conditional values come from the
+templates of both sides (the export route), because a difference only carries the conditions
+that changed.
+
+**Activity and versions together.** The activity is paginated 50 at a time; each page reads the
+versions it names in one request (`versions?cursor=max+1&limit=max-min+1`, versions being
+numbered), so a version's summary and Active badge sit on its activity entry without loading
+every version. Rejected: listing every version up front (up to 10,000, RC-004).
+
+**Compare** goes from the version (before) to what is chosen (after): the active version by
+default, or the draft when the version is the active one. **The rollback review** is `GET
+/diff?from=active&to={n}`, whose warnings are RC-017's for the rollback, and it says before
+publishing that the draft is not changed (RC-054). **Unpublish** uses the shared confirmation
+dialog, which keeps the button disabled until the typed name matches (FD-022), and the API
+refuses a wrong name too.
+
+**Reach** is shown as text only: each version's share of the last 24 hours' fetches with its
+count, and on Integrate the fetches and the active version's share, each saying "fetches, not
+devices". No chart: the hourly series is in the reach route and the MCP tool. Version counts are
+exact; "fewer than 10" (RC-070) applies to conditions and variants, which the Conditions view shows.
+
+**Snippets.** One per entry of the SDK: browser, React Native, Electron main and renderer, Node
+server and device, and the core entry. Where the SDK would store an installation ID (browser,
+React Native, Electron main, Node device, core), the snippet starts with `installationId: false`
+and calls `setInstallationIdEnabled(true)` in the consent callback; Node server mode sends none
+unless a context carries one, and a renderer holds no identity. Every snippet imports
+`configDefaults` from `./inlet-config-defaults`, the file "Defaults for your code" gives (the
+export route's `format=ts`).
+
+**Export in History.** "Export the history" (RC-064) at the top, and per version the template
+(JSON), the defaults (TypeScript) and the defaults (JSON), as download links to the export
+route. The Settings deletion panel keeps its own history export offer (piece 2).
+
+**Found at review.** The snippets are compiled, not only read: `packages/sdk/test/config-snippets.test.ts`
+writes each one, with the defaults file `exportDefaultsTypeScript` gives for a sample template,
+into a scratch project that resolves `inlet-sdk` through its `exports` to the built declarations,
+and type-checks it, so a snippet naming an entry, option or method the SDK lacks fails the SDK's
+tests (rejected: checking them against the README by eye, which is how drift starts). The shared
+`ConfirmDialog` said "Deleting" while any action was pending, Copy to draft and Unpublish
+included: it takes a `pendingLabel` now ("Copying…", "Unpublishing…"), whose default keeps every
+deletion's text. It also kept the typed name after its caller closed it on success, so a second
+Unpublish in the same visit opened with the name already typed and the button enabled; the
+field is now emptied whenever the dialog closes, for every caller (FD-022).
+
+### 34.5 The fetch path, preview and reach (piece 5, September 27, 2026)
+
+**One module holds every piece of the fetch path's state** (`services/config-delivery.ts`),
+with one `resetConfigDeliveryState()` the harness calls. The route (`routes/config-fetch.ts`)
+reads the bearer token, then `answerFetch` does, in order: the credential from memory, the
+database from memory (`config_database_inaccessible` for none or another project's), the
+address ceiling and the per-key windows, the body's size and JSON, `parseContext`, the
+per-installation window, the compiled active version, the country when needed, `evaluate`
+into the outcome vector, the answer for `(database, version, vector)` from the cache (built on
+a miss), the ETag comparison, the counts in memory, and the pre-serialised (and
+pre-compressed) buffer sent as it is. A cache hit serialises nothing and touches no table.
+
+**Caches, keys and bounds.**
+- *Credentials*: an `Lru` of 10,000 entries keyed by the publishable key, or by the SHA-256 of a
+  secret key so no secret sits in memory; the value is the promise of `findCredential`, so
+  concurrent misses share one query and an unknown or revoked key is kept as its rejection for
+  ten seconds (a database failure is not kept). Rotation and revocation call
+  `forgetCredential(id)`, which also drops entries still loading.
+- *Databases*: an `Lru` of 10,000 by ID, the absence of one included, ten seconds; each holds the
+  project, the active version, the refresh interval at the current bounds, the country switch
+  and the not-modified body. `forgetConfigDatabase(id)` (settings change, deletion, piece 4's
+  `configChanged` after a publish, rollback or unpublish, and piece 6's erasure through it)
+  drops the database, its compiled versions and its answers at once, so a publish is seen by
+  the next fetch on this instance. Rejected: a generation counter per database. Every loader
+  (credential, database, compiled version) stores its promise before it reads, and a forget
+  deletes it, so a load that read the row before a change committed is never stored after the
+  forget; only fetches already waiting on it receive the old row, as they began first. A fetch
+  in flight may still store an *answer* built from what it read before the change, after the
+  forget: harmless, because the answer's key holds everything its body depends on that can
+  change under the same key (the version number, the refresh interval, the vector), and a
+  version's values change only with its number (the erasure rewrites rules, never values).
+  Four tests stall a load, commit and forget, release it and fetch again, one per cache
+  (checked at review, each failing when its cache stores after the load).
+- *Compiled versions*: an `Lru` of 200 promises keyed `(database, version)`; a miss reads the
+  version row once. Each carries whether any rule names `country`, so a version without one
+  never looks up an address.
+- *Answers*: `AnswerCache`, a `Map` in recency order bounded at 64 MiB counting bodies,
+  compressed forms and keys, keyed `(database, version, refresh interval, vector)`. The interval
+  is in the key because it is in the body: a change made by another process (or committed while
+  a fetch was building an answer) reaches the database entry within ten seconds, and without it
+  in the key the cached answers kept the old interval until they aged out (found at review). The body is serialised with
+  `warnings: []` last, so an answer with warnings is the cached body with its tail replaced,
+  sent uncompressed and never cached; each cached answer carries its reach keys (the true
+  conditions and assigned variants), so counting costs O(true conditions). Brotli quality 4 or
+  gzip level 1, once per answer and encoding, Brotli preferred. Misses are bounded at 50 a
+  second per database, and compressing a new encoding of a cached answer spends the same
+  budget; past it, the answer is built for its request, sent uncompressed and not cached. The
+  64 MiB, the 50 and the 200 are constants with `ponytail:` notes, not operator limits: piece 2
+  did not declare them and no operator has asked.
+
+**The body is parsed by the route, not by Fastify.** The fetch route's content-type parser keeps
+the body as a string (Fastify's own limit at 64 KiB only stops a flood); the service refuses
+past 16 KiB with `payload_too_large` and then `JSON.parse`s it, after the credential and the
+database are known, so those refusals are counted in the database's reach by reason. An empty
+body is the empty context; a leading byte order mark is ignored, as the other JSON routes' parser
+ignores it. `application/json` and `text/plain` bodies are read (Fastify's defaults); any other
+content type is `415 unsupported_media_type`. A body of `null` is the empty context; an array or
+a string is one too, reported as a warning on the path `""`.
+
+**Logging.** The route's `logLevel` is `warn` (or the deployment's level when stricter), so
+Fastify writes neither "incoming request" nor "request completed" for it; a route-level
+`onError` hook writes one `warn` line, `config fetch refused`, with the route pattern, status
+and code for every refusal, Fastify's own (`FST_ERR_CTP_…`) included. A failure (an error that is
+not an `ApiError`) is logged by the route as `config fetch failed` with the route pattern, the
+error's class and its PostgreSQL code, never its message, and answered `internal_error`: a
+drizzle error's message carries the query's parameters, which on this path are the publishable
+key and the database ID (found at review). Nothing on any line carries the address, the port,
+the ID, the key or the context. A `GET` or `HEAD` on the path matches no route and is logged,
+as every unmatched request is, as `(no route)`.
+
+**Rate limits** reuse `BucketedCounters`: per credential sixty one-minute buckets read as five
+and sixty, per `(database, installation)` five; a refusal is not counted, so a client in a
+429 loop does not extend its own wait. The address ceiling is its own `createAddressCeiling`
+("the config fetch"), off without a trusted proxy. All three honour `INLET_DISABLE_RATE_LIMITS`.
+The route sets `config: { rateLimit: false }`.
+
+**Credential last use** is recorded per fetch in a `Map` and written by the config worker every
+minute, one guarded `UPDATE` per credential (never earlier than the stored time, nor than a
+rotation, which clears it: a use of the old value is not the new value's); the other routes
+keep `touchCredential`.
+
+**Reach.** Counts accumulate per `(database, hour)` and `(database, day)` in memory and the
+config worker (`services/config-worker.ts`, started and stopped in `server.ts`) upserts them
+every ten seconds, additively, in one transaction, dropping the counts of a database deleted
+meanwhile; a failed write puts them back, and since nothing of it landed, nothing counts twice.
+A second shutdown signal is ignored, so the pool is ended once and the last flush runs. The daily pass (and one at start) deletes rows older than 30 days. A
+restart loses at most ten seconds; a shutdown flushes. Subjects: the version number, the error
+code of a refusal, the condition ID, and `{conditionId}:{variantKey}` for a variant (the
+variant key alone is ambiguous across splits, and an experiment key can be edited).
+
+**Small counts.** A count per condition or variant from 1 to 9 is `{"count": null, "fewerThan":
+10}` and its share `null`; other counts are `{"count": n}`, 0 included. Rejected: a bare `null`
+(indistinguishable from "no data"), a string `"<10"` (a type the chart code would have to
+special-case), and rounding to the nearest ten (still reveals the order of magnitude of a
+single person's use).
+
+**No hidden count can be worked out by subtraction** (found at review). Two figures of the
+answer are sums of others it also shows: a split's count per day is the sum of its variants',
+and the last day's count of a condition is the sum of its two daily counts. Shown exactly, each
+gave a hidden term away: a split of 35 fetches with 30 in control shows the other variant's 5;
+a beta list of one person with 20 fetches yesterday and 25 over the last day shows today's 5. So
+a sum is exact only when every term is: a split's count is withheld on a day one of its
+variants' is from 1 to 9, and the last day's count is withheld when either day's is hidden or
+withheld (unless the sum is itself below 10, then "fewer than 10"). A withheld count is
+`{"count": null, "withheld": true}`, always 10 or more, with no share. The terms stay as they are:
+the variants of the split and the two days of the series. Rejected: hiding every variant of the
+split instead (it would hide counts of 10 or more that are not sums, and a lone split's count
+would still bound them), showing a withheld count as "fewer than 10" (false), and dropping
+today from the last day (a condition created today would read as matching none until tomorrow).
+Not covered, as no counting rule can: a Creator who writes complementary conditions on purpose
+(`userId exists` and `userId notIn [alice]`) can subtract their counts; the conditions are
+theirs to write, and the draft and activity show who wrote them.
+
+**The windows of the summaries**: History's 24 hours are the 24 hourly periods ending with the
+current one; the Conditions view's "last day" is today and yesterday (UTC), because conditions
+are counted per day and a share needs numerator and denominator over the same span.
+
+**Preview** compiles the draft on each request (it is rare and the draft changes) and uses the
+fetch path's compiled version for `active` and a number, so a preview of the active version is
+the fetch's own evaluation. `active` with nothing published answers the empty answer a fetch
+gives rather than `config_version_not_found`, so that "preview equals fetch" holds there too.
+`source` defaults to `draft`.
+
+**Measured** on an Apple M5 laptop, the built server (`NODE_ENV=production`, rate limits on) and
+PostgreSQL 18 local, with a template of 41 parameters and 12 conditions (a 1,000-user list,
+version ranges, platforms, two percentages, two splits, a country rule, a custom attribute),
+fetches with random installation IDs and `Accept-Encoding: br, gzip`, 40,000 per run after a
+warm-up, the load generator on the same machine (so its own CPU is in the figures):
+
+| Concurrency | Fetches a second | p50 | p95 | p99 |
+| --- | --- | --- | --- | --- |
+| 4 | 7,818 | 0.26 ms | 1.46 ms | 3.62 ms |
+| 16 | 7,008 | 1.45 ms | 5.97 ms | 10.37 ms |
+| 64 | 6,474 | 7.57 ms | 23.30 ms | 46.50 ms |
+
+Latencies are the client's, round trip included, so the server's are lower. At 2,000 a second
+(PRD 9.4) there is headroom of more than three times with a p95 well under 10 ms; at
+concurrency 64 the p95 is queueing in one Node process, not work per fetch. The formal load
+test at the reference workload, with its own committed script, is piece 11's; this quick
+measurement's script was not committed.
+
+**Measured again at review**, server-side this time (Fastify's `reply.elapsedTime` per fetch,
+from a hook the load server added), on the same laptop shared with other test runs (load
+average 8 to 9), with a heavier template: 150 parameters and 100 conditions (30 percentages,
+30 lists of 200 user IDs, 20 version ranges, 10 platform and locale lists, 9 plan lists and a
+50/50 split), 50,000 installation IDs, each sending the last ETag it received (about 42% of
+fetches answered "not modified"), `Accept-Encoding: br, gzip`:
+
+| Load | Fetches a second | Server p50 | Server p95 | Server p99 |
+| --- | --- | --- | --- | --- |
+| 2,000 a second, open loop, three runs of 30 s | 2,000 | 0.18 ms | 0.39 to 0.46 ms | 0.55 to 1.1 ms |
+| Concurrency 16, 20 s | 4,152 | 0.18 ms | 0.44 ms | 0.74 ms |
+
+The answer cache grew by the miss budget (50 answers a second) and its buffers held 27 MB for
+27.5 MB counted. **Found at review: the bound counted less than it held.** zlib's synchronous
+output is a view on a 16 KiB chunk and a small `Buffer.from` a slice of the shared 8 KiB pool,
+so a cached answer of a few hundred bytes kept 16 to 40 KiB alive (a test measured 81,920 bytes
+held for 1,274 counted), and the 64 MiB could have been a gigabyte or more of small answers.
+Every cached buffer is now an exact-size copy (`Buffer.allocUnsafeSlow`), so the bound is the
+memory. No profile was needed: the p95 is a twentieth of the budget.
+
+### 34.6 Erasure in config databases (piece 6, September 27, 2026)
+
+RC-100 inside the project's erasure (FD-033): `config` joins `ERASURE_DATABASE_TYPES`, after
+crash, feedback and analytics, and a config database's Admin (or the project's) sees it in the
+preview. The rewrite is `eraseFromConfigDatabase` in `services/config-erasure.ts`, the one file
+that updates `config_versions` (RC-059; piece 4's test allows only a file named for the erasure).
+
+**Counts** are `draftRules` and `versionRules`, the rules naming the ID in the draft and summed
+across the versions, what `eraseIdFromTemplate` (piece 1) counts. Rules, not versions: that is
+what RC-100 asks the preview to report. The same function counts (no writer) and rewrites
+(inside the erasure's transaction, with its principal), so the preview and the erasure cannot
+disagree. The record stores them under the database ID, never the ID.
+
+**Finding the templates**: a `jsonb_path_exists` filter (`$.conditions[*].rules[*] ? (@.attribute
+== $attribute && @.value == $id)`, lax mode, so it matches an `equals` value and an element of an
+`in` list alike) selects the versions to read, and they are read one at a time. A database may
+hold 10,000 versions of up to 2 MiB; reading them all to count would hold gigabytes. The filter
+only narrows; the operators are `eraseIdFromTemplate`'s. Installation IDs are compared in the
+normalised form rules store (RC-026), the erasure's ID normalised the same way.
+
+**Locking**: the rewrite takes the draft row's lock first, the one every draft change and
+publish takes, so no publish copies a draft that is half rewritten, and no version appears
+between the rewrite of the draft and of the versions. A draft that changed gets `revision + 1`
+and the eraser as its last editor; one that did not keep its revision (RC-100 "increment" read
+as "when it changed", so an erasure that finds nothing is not a stale-making edit). The
+rewritten draft is not passed through `checkConfigSave`: removing an ID from a list, or turning
+`equals` into `in []`, cannot make a saved template invalid, and an emptied list is valid (tested
+by validating the rewritten draft).
+
+**After commit**, for each config database rewritten, `configChanged` (piece 4's hook, which
+forgets piece 5's compiled versions and cached answers) and `forgetDraftStates` (piece 3's, since
+the key it caches under, revision and active number, does not move when a version is rewritten).
+The next fetch recompiles the active version; the acceptance test fetches for the erased user
+right after the erasure and no longer gets the beta value.
+
+**The ID erased is the one given.** A user ID's erasure resolves, in analytics databases, the
+installations it takes with it (AN-183), and crash reports and submissions follow those. Config
+rules are not rewritten for those installation IDs: RC-100 speaks of the rules that "name the
+erased ID", and a team that wrote a user's installation ID into a rule erases it by that ID.
+Rejected: extending to resolved installations, which would make the config half depend on the
+event store, which RC-100 and FD-033 say it must not.
+
+**Interface**: the erase panel labels a config database "Config", says "N rules in the draft and M
+rules across the versions name the ID" in the preview and "the ID removed from …" in the result,
+and, when the preview lists one, a sentence saying a config database holds no ID from a fetch
+(RC-044) and what the rewrite does. The MCP tools' descriptions say the same.
+
+**Found at review.** *A failure logged the ID*: a database error's message carries its query's
+parameters, and the config filter's are the attribute and the erased ID (so were the crash and
+feedback deletes' since Release 8); the error handler logged it whole. Both erasure routes now
+log a failure by its kind and code only and answer `internal_error` (`withoutTheId` in
+`routes/erasures.ts`, the fetch route's pattern, RC-044), which covers every type and the MCP
+tools, which reach the routes. *The fetch in flight during the commit* cannot keep the
+pre-erasure rules: the compiled-version cache stores its promise before the read and
+`forgetConfigDatabase` deletes it, so a load that read the old row is never re-inserted (the
+test stalls that read past the commit and counts the next fetch's load); an answer built from
+it is cached under its outcome vector, and an erasure changes rule values only, so a vector's
+answer is the same before and after. A publish or a rollback changes the version number, so
+the same stall cannot serve it either (tested). *On a second instance* the compiled version is
+keyed by number and does not expire, so it would keep the pre-erasure rules until a restart or
+an eviction; Inlet runs one instance (`docs/DEPLOYMENT.md`), whose growth path now names the
+erasure. Also tested: the ID bound as a jsonpath variable (an ID of quotes, backslashes, `$`,
+`)` and jsonpath syntax; probes that would match everything if spliced), a custom attribute or
+a parameter value equal to the ID left alone, a rewrite that fails leaving nothing written or
+forgotten, a publish holding the draft lock while the erasure waits (its new version is
+rewritten too), 300 of 400 versions rewritten well within a second, and a Creator, a Viewer and
+another project's config database refused.
+
+### 34.11b Measured: the fetch load test and Docker (piece 11b, September 27, 2026)
+
+PRD 9.4 sets a target of 2,000 fetches a second on one API instance of the reference deployment,
+with a server-side p95 under 10 ms. Section 12 asks for that load test, recorded here. **The target
+is met on this laptop**, with the product changed once, below. The harness is
+`scripts/config-load.mjs` with its server-side probe `scripts/config-load-probe.mjs` (README,
+"Load-testing Remote Config"), so an owner can rerun every figure on the reference deployment.
+
+**Method.**
+- **Machine.** Apple M5, 10 cores, 24 GB, macOS. The client and the server ran on the same host,
+  so the client's CPU competes with the server's. The laptop was shared the whole time with other
+  agents' test suites and an `ffmpeg` process (load average 6 to 25). Every client-side tail below
+  is mostly that contention.
+- **Server.** `apps/api/dist/server.js` built from the working tree, `NODE_ENV=production`, log level
+  `info`, rate limits on at their defaults, local PostgreSQL 18 with its own database. The
+  analytics event store was off. `INLET_TRUSTED_PROXIES=127.0.0.1`, so the load client acts as
+  the reverse proxy: each installation's `X-Forwarded-For` feeds the bundled IP-to-country
+  database and the per-address ceiling, as behind a real proxy.
+- **Server-side time** comes from a preload (`--import scripts/config-load-probe.mjs`), not from a
+  product change. It runs from Node's `http.server.request.start` diagnostics channel (headers
+  parsed) to `http.server.response.finish` (answer written), so it includes Fastify's routing and
+  hooks, a little more than `reply.elapsedTime`. It does not include time a request waited in the
+  kernel's socket queue while the event loop was busy. The client-side figure does. Every second,
+  the probe also samples RSS, heap, CPU, event-loop delay, and the answer cache's entries, bytes,
+  hits and misses (it wraps `AnswerCache.prototype.get` in the module instance the server loads).
+- **Template** (`setup`): 100 parameters (40 flags, 25 strings, 25 numbers and 10 JSON values,
+  four of them 2 to 5 KiB), each with 0 to 3 conditional values, 63 KiB in all. It has 40
+  conditions in priority order:
+  - a 1,000-value user-ID list;
+  - version rules (below 5.0.0, at least 5.4.0, exactly 5.2.1, at least 5.3.0 as a split's
+    population);
+  - OS-version rules;
+  - platform, country (the 27 EU members and five regional lists), language and locale lists;
+  - percentage rollouts at 1, 5, 10, 25 and 50% by installation, and at 20% by user;
+  - two three-variant splits (`paywall_copy` for mobile, `onboarding` from 5.3.0);
+  - custom attributes (`plan`, `beta`, `sessions`, a `cohort` prefix);
+  - `time` windows and an `appId` suffix.
+- **Mix** (`run`):
+  - The fleet: 30,000 installations. 55% are signed in, with user IDs from 100,000, so about
+    0.55% are on the 1,000-ID list.
+  - Platforms: iOS 40%, Android 45%, web 10%, desktop 5%.
+  - Six app versions (45% on the latest) and eleven locales.
+  - Each installation has one random public IPv4 address.
+  - The warm-up (15 s at 2,000 a second) sweeps the fleet once, so each installation holds the
+    ETag of its answer.
+  - The measured run is 60 s at 2,000 a second, open loop, over 64 keep-alive sockets. Latency
+    counts from each fetch's scheduled send time, so a late answer is not hidden. 90% of fetches
+    come from a random member, sending its last ETag. 10% come from a new installation, with
+    none. All send `Accept-Encoding: br, gzip`.
+  - At 30 s one publish changes the default of `feature_18`, a flag with a value under the 10%
+    rollout. It goes through the API as a Creator does: `GET /draft`, `PUT /draft` with
+    `expectedRevision`, `POST /publish`.
+
+**The fix: B.4's digest, natively** (`apps/api/src/services/config-delivery.ts`,
+`packages/shared/src/config-evaluate.ts`). The first profiled run
+(`--cpu-prof`, 10 s at 2,000 a second, 10,000 installations) found the API process at **98% of
+one core**. Every fetch queued: client p50 399 ms, p95 627 ms. `configEtag` took 67% of the
+non-idle samples, the shared pure-JavaScript SHA-256 46% of them and `canonicalJson` the rest.
+The cause is how few fetches hit the cache. With this template almost every installation has a
+vector of its own (about 31,000 distinct answers among 35,000 full answers a run). The miss
+budget caches 50 new answers a second. So nearly every fetch builds its answer: resolve,
+canonical JSON, a SHA-256 over about 17 KiB, and serialisation. The ETag comparison comes after
+that. `configEtag` now takes an optional digest: the shared one stays the default for the
+browser-safe package, and the server passes `node:crypto`'s. The bytes hashed are unchanged,
+so every ETag is unchanged: a client's cached ETag still matches across the upgrade, and a unit
+test pins the two digests together. An ETag over a 17 KiB answer went from 379 µs to 108 µs.
+The same profiled run afterwards was at 54% of a core. In the new profile, `canonicalJson` is
+22% of samples, the bucket hashing's JavaScript SHA-256 3%, and Fastify's `onSend` cookie hook
+5%. This settles piece 1's "Left out" item: `node:crypto` is worth it for the ETag, not yet for
+buckets.
+
+**Results, the built server on this laptop** (five 60-second runs; runs 1 to 3 in one process, 4
+and 5 in a second one started with `--expose-gc`; milliseconds):
+
+| Run (load average) | Achieved | Answers | Not modified | Server p50 / p95 / p99 | Client p50 / p95 / p99 | CPU, one core = 100% (mean / max) | RSS MB (mean / max) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 (10.2) | 2,000/s | 119,993, all 200 | 70.5% | 0.18 / **0.57** / 1.09 | 2.2 / 51 / 434 | 57 / 86 | 287 / 371 |
+| 2 (11.2) | 2,000/s | 119,998, all 200 | 70.7% | 0.18 / **0.53** / 1.01 | 2.1 / 32 / 104 | 55 / 88 | 299 / 373 |
+| 3 (10.9) | 2,000/s | 119,999, all 200 | 70.5% | 0.20 / **0.66** / 1.43 | 2.4 / 132 / 243 | 64 / 103 | 529 / 692 |
+| 4 (6.3) | 2,000/s | 119,997, all 200 | 70.7% | 0.16 / **0.53** / 1.38 | 1.9 / 397 / 931 | 49 / 115 | 300 / 449 |
+| 5 (25.1) | 2,000/s | 119,998, all 200 | 68.8% | 0.18 / **0.70** / 2.27 | 2.8 / 3,509 / 4,012 | 64 / 110 | 472 / 700 |
+
+- **No refusal**: no 429 and no error in any run. The fleet shared one publishable key (900,000 in
+  five minutes allowed, about 150,000 used a run). No installation came near 30 in five minutes,
+  and no address near 6,000 a minute.
+- **The target**: the server-side p95 was 0.53 to 0.70 ms, a fourteenth to a nineteenth of 10 ms.
+  The worst single second's server p95 was 1.2 to 67 ms: 67 ms in run 4 and 22 ms in run 5, whose
+  machine was at a load average of 25. The client's tails follow the event-loop stalls of a shared machine: the
+  probe's event-loop p99 reached 65 to 317 ms in seconds when the process was at 50 to 60% CPU,
+  so it was waiting to be scheduled, not busy. In the calm seconds the client's p95 was 2.5 to
+  4 ms.
+- **Answers**: a full answer is about 17.5 KB on the wire. 3 to 4% of full answers were Brotli.
+  Only cached answers are compressed, and a fetch past the miss budget is sent uncompressed, as
+  the PRD says. 70% were "not modified": 10% of fetches are new installations, and about a tenth
+  of the fleet was not reached by the warm-up. The reference workload (hourly refreshes, rare
+  publishes) would have a higher share, so less work.
+- **The answer cache** held 1,500 to 1,550 answers (29 MB) at the end of each run and reached its
+  64 MiB bound (67.1 MB counted) in runs 2, 3 and 5, before each publish emptied it. Its hit ratio
+  was 4 to 5%. PRD 9.4's "a fleet falls into few vectors" does not hold for a template with seven
+  independent percentages and splits. The target holds anyway because building an answer is
+  cheap. The cache pays off for templates with few vectors.
+- **One publish during the run**: 21 to 43 ms end to end. The cache dropped to 100 entries, then
+  refilled at 50 a second. The server p95 over the next 10 seconds was 0.33 to 0.58 ms (1.13 ms in
+  run 5). The only visible change is one second at 76% CPU.
+- **Memory**:
+  - The heap after a full collection at the end of a run was 92 MB after run 4 and 128 MB after
+    run 5, in the same process.
+  - The growth is the per-installation counters, about 42,000 new installations a run, bounded
+    at 100,000 keys, plus the probe's own samples.
+  - RSS peaked at 692 and 700 MB in the third and second back-to-back runs of a process. V8 keeps
+    the space it grew into.
+  - The answer cache, the compiled versions (200) and the counters are each bounded, so memory
+    is bounded per database, as 9.4 asks. A heap snapshot was not taken.
+
+**What it means for the reference workload.**
+- 9.4's reference is five million fetches a day: 60 a second on average and a few hundred at
+  peak. At about 0.3 ms of CPU a fetch (55 to 64% of a core at 2,000 a second), a peak of 300 a
+  second costs under a tenth of one core.
+- The 2,000 a second target leaves about 1.6 times headroom on this core before one Node thread
+  saturates.
+- *Extrapolation, not measured:* a typical server vCPU is slower single-threaded than an M5
+  performance core, perhaps 1.5 to 2 times. On one, 2,000 a second would take 80 to 100% of the
+  thread. The p95 would still be far under 10 ms as long as the thread keeps up, but the margin
+  is thin.
+- If the reference deployment's run shows that, the next two steps are known:
+  - `canonicalJson` through one native `JSON.stringify` of a key-sorted copy: 1.6 times faster on
+    a 42 KB answer, about 22% to 14% of samples.
+  - An ETag cache by vector, small entries apart from the bodies, so that a "not modified" fetch
+    skips resolve, canonical JSON and digest altogether.
+  - Neither is built: the target holds without them.
+
+**Docker** (throwaway project `inlet-p11b`, default profile, no `analytics`; the env file held the
+secret, the first Admin and `INLET_TRUSTED_PROXIES=uniquelocal`):
+- `docker compose up -d --build` built and started the stack in 30 s, with cached layers. On
+  the fresh volume, the baseline migration was applied at start ("database schema is up to date";
+  the six `config_*` tables present). `/v1/health` lists `feedback, crash, feedback-cross-origin,
+  mcp, identity, config`. The log warns once that the event store is not ready, as expected
+  without the profile.
+- Through `http://localhost:3000` (a small script), all of the following held:
+  - A config database was created. A fetch before publishing answers `version: null` and no
+    values.
+  - A two-parameter template with country rules was published as version 1. A fetch answered
+    Brotli (`content-encoding: br`) with version 1.
+  - `X-Forwarded-For: 90.84.0.1` got the French value, `8.8.8.8` the US one, `81.2.69.142` (GB)
+    the default. A context carrying `country: FR` got the French value, and `deriveCountry: false`
+    with a French address got the default.
+  - The answer's ETag sent back got `{"notModified":true,"refreshIntervalSeconds":3600}`.
+  - The publishable key reading the draft was refused with `403`.
+- **The country behind the compose setup**: the container sees the host's requests from the compose
+  network's gateway (172.19.0.1). So without `INLET_TRUSTED_PROXIES` no country is derived: the
+  bundled database has none for a private address, and nothing is refused either. With the
+  reverse proxy trusted (`uniquelocal` covers the compose network), the bundled DB-IP database
+  answers the forwarded address, as above. DEPLOYMENT.md already says to set the trusted proxies
+  behind a proxy.
+- **Load against the container**: 30 s at 2,000 a second after the warm-up, with the probe mounted
+  and `NODE_OPTIONS` set by an override file. Docker Desktop's VM had 10 CPUs and 8 GB, and the
+  client ran on the macOS host through Docker's port forwarding.
+
+  | Achieved | Server p50 / p95 / p99 | Client p50 / p95 / p99 | CPU (mean / max) | RSS MB (mean / max) |
+  | --- | --- | --- | --- | --- |
+  | 2,000/s, 59,998 answers, all 200 | 0.24 / **0.60** / 1.63 | 2.3 / 132 / 375 | 75 / 119 | 342 / 373 |
+
+  One publish at 15 s took 32 ms, and the server p95 over the next 10 seconds was 0.59 ms. The
+  CPU runs about a quarter higher than on the host: the Linux VM and the port forwarding.
+- **Image**: 649 MB (129.18 MB of content) against 647 MB (128.94 MB) for Release 8's image from
+  piece 12c, so about 2 MB more for Release 9.
+- `docker compose down -v` removed the project and its volumes. The image `inlet-p11b-inlet` is
+  kept.
+
+**Not measured.**
+- A separate client machine: the client's CPU and the shared laptop's contention are in every
+  client-side figure.
+- The reference deployment's hardware and a server vCPU (extrapolated above).
+- More than one API instance: 9.4's growth path is documented, not built.
+- A fleet of one million installations. At 2,000 a second over 30,000, each fetched every 15
+  seconds instead of every hour, which is harder on the cache and the counters, not easier.
+- Clients behind a shared NAT address, which would meet the 6,000-a-minute address ceiling at 100
+  a second.
+- A heap snapshot of what the long-lived process holds.
+
+### 34.11a The acceptance audit (piece 11a, September 27, 2026)
+
+Every criterion of PRD section 12, split into its 83 claims, every route of 7.2 against the matrix
+of 7.3, every error code of 7.4, every tool of 8.3 and the instructions, the screens of 8.1, the
+Foundations rows of the plan's coverage map and section 11, each with the test that asserts it:
+`docs/plans/remote-config-release-9-acceptance.md`. 71 claims pass against the running product,
+9 against the SDK's fake server only (the client's own timers, errors and storage), 2 against the
+running API with fake Electron and React Native modules; the load test is 34.11b's. None fails.
+
+**Evidence through the real interface, where the piece tests had a fake or a part.** Four files,
+tagged [11a] in the matrix. `apps/api/test/integration/config-acceptance.test.ts`: criterion 1 in
+full (the key, a feedback and a crash database exist before the config database), the route list,
+the route-pattern log, a probe of 43 route variants by ten principals (430 calls, no mismatch; a
+wrong expectation makes it fail), all 15 codes of 7.4 and nothing else, and one `/v1/mcp` session
+calling all 28 tools of 8.3 and the shared ones with a `cfg_` ID. `e2e/api/config-acceptance-sdk.spec.ts`:
+the built SDK in child Node processes against the running server (an app update, an unpublish, a
+live change, a revocation and a change of user), `inlet-sdk@0.2.0` installed from npm and loaded
+beside the 0.4.0 config module (its crash reports and a feedback submission stored without an
+installation ID while every fetch carried one), and Electron, React Native and RC-129 with fake
+platform modules (the stored analytics event carries the split's experiment beside the
+application's own). `e2e/api/config-acceptance.spec.ts`: an MCP agent session over Streamable HTTP,
+and journeys 5.2, 5.3, 5.6 (200 installations fetched from two projects' databases: the same values
+and buckets), 5.7 and 5.8. `e2e/ui/config-acceptance.spec.ts`: three Chromium tabs of one origin
+under the real Web Locks making one fetch, each role walked, the erasure from the interface checked
+in the API and PostgreSQL, journeys 5.1 (the Integrate tab's Node snippet copied through the
+clipboard and run against the server), 5.3, 5.4 and 5.5, and the 8.1 elements no test asserted.
+
+**Found and fixed.** *The deletion's warning* (the impact's `notice`, the Settings card, the
+`delete_config_database` description and `docs/USING-INLET.md`) said applications fall back to
+their in-app defaults; a deleted database's fetches are refused, and a refusal keeps the cached
+values (RC-122, PRD 13). Each now says so and names unpublishing as the way to the defaults.
+*The MCP instructions* said a split's control units get the default; they fall through to the next
+true condition holding a value first (B.1), as the tools already said. *`docs/API.md`* said the
+fetch answers `revoked_api_key`. *A new test* read the fake Slack's messages by position, and the
+worker's paced deliveries from the previous test broke it on repeats; it reads its own database's
+only. *A failing API test run exited 0*: `embedded-postgres`, imported by every suite's setup
+through `scripts/local-services.mjs`, registers an `async-exit-hook` that calls `process.exit(0)`
+from `beforeExit`, erasing the exit code Vitest sets for failures, so `npm test` and CI passed a red
+API suite. The module now keeps the code from `beforeExit` and restores it on `exit` (a listener
+added after the hook's runs before its deferred exit); rejected: dropping the hook's `beforeExit`
+with `async-exit-hook`'s `unhookEvent`, which reaches into a transitive dependency and would leave a
+started cluster running when the loop drains. *A second Move pressed before the first was answered*
+was computed from the order still on screen and resent it; the Conditions view now moves from the
+order last sent, and sends each move after the one before it is answered.
+
+**Found, not changed.** `revoked_api_key` is unreachable on every route: revocation nulls the
+key's value (FR-085's rotation does too), so the lookup finds nothing and answers
+`invalid_api_key`. That is the right behaviour (a revoked secret must not stay matchable); PRD 7.1
+is to follow. Listing credentials is a project Admin's, so a Creator's Integrate tab shows
+placeholder keys (journey 5.1): an owner decision, proposed in the acceptance file with the other
+two amendments (7.1, and RC-070's "exported" for a reach no export carries). The known flake of
+`e2e/api/config-publish.spec.ts` did not recur in the full suite or eleven repeats; nothing in it
+depends on time, order or another test, and the hypothesis left is two slots rebuilding `dist` in
+place at once.
+
+**Rejected**: typing the new tests (no test in the repository is; `npm run typecheck` covers
+`src`), and upgrading the nine fake-server claims to the real server, which cannot be made to
+answer a `429` with `Retry-After: 120` or a health probe without `config` on demand.
+

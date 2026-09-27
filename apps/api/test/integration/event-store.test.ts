@@ -22,7 +22,7 @@ import { TEST_CLICKHOUSE_DATABASE, TEST_ENV } from '../setup/config.js';
  * either shows up here.
  */
 
-const BASE_CAPABILITIES = ['feedback', 'crash', 'feedback-cross-origin', 'mcp', 'identity'];
+const BASE_CAPABILITIES = ['feedback', 'crash', 'feedback-cross-origin', 'mcp', 'identity', 'config'];
 const UNREACHABLE = 'http://inlet:inlet@127.0.0.1:1';
 
 function expectApiError(fn: () => unknown, code: string): ApiError {

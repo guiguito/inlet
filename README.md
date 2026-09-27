@@ -4,11 +4,12 @@
 
 # Inlet
 
-**The self-hosted feedback collector, crash reporter and product analytics.**
+**The self-hosted feedback collector, crash reporter, product analytics and remote config.**
 
 Put a feedback form in any app in an afternoon, then read what comes back. Collect the
 crashes too, grouped so a crash loop is one line, and count how the app is used: who installs
-it, who comes back, where they stop. Your database, your object store, your rules.
+it, who comes back, where they stop. Change what it does without shipping a release. Your
+database, your object store, your rules.
 
 [Quick start](#quick-start) ·
 [Using it](docs/USING-INLET.md) ·
@@ -19,7 +20,7 @@ it, who comes back, where they stop. Your database, your object store, your rule
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-C2410C.svg)](LICENSE)
 ![Node 22+](https://img.shields.io/badge/node-%3E%3D22-informational)
-![Tests](https://img.shields.io/badge/tests-1443%20unit%20%2B%20integration%2C%20119%20end--to--end-brightgreen)
+![Tests](https://img.shields.io/badge/tests-1841%20unit%20%2B%20integration%2C%20189%20end--to--end-brightgreen)
 
 </div>
 
@@ -56,6 +57,17 @@ sampled. It is not Amplitude: nothing is captured that your code did not name �
 addresses, no session replay — and the events live in a ClickHouse that ships in the same compose
 file, off until you enable it.
 
+And it holds your apps' **remote config**: the switches, limits and copy an app reads, changed
+from Inlet without a release. A config database holds **parameters**, each with a default, and
+**conditions** (a version range, a platform, a country, a list of user IDs, 10% of
+installations) that decide who gets another value. You edit a draft, review what it changes and
+publish it as a numbered version; your app fetches the values resolved for it through the SDK
+and applies them at its next launch, or at once for a parameter marked live, such as a kill
+switch. The rules stay on your server, and the app never waits: it reads its own defaults
+until the first answer arrives. Targeting is not access control, though: anyone with your
+publishable key can ask for any user's values, so a parameter never holds a secret. It needs
+nothing beyond PostgreSQL.
+
 ## Why you might want it
 
 - **Self-hosted, and honestly so.** One container, your database, your bucket. No
@@ -81,18 +93,26 @@ file, off until you enable it.
   and an Admin erases an installation or a user ID across every database of a project in one
   step. Storage is bounded by settings you control, with a screen that says what your volume
   needs.
-- **One SDK, three modules.** `inlet-sdk/feedback` collects a form's answers from inside your
+- **Remote config with a review before every change.** Numbered, immutable versions, a
+  difference to read before publishing, a preview of what any user or device would receive,
+  rollback to any earlier version, percentage rollouts that keep the same installations as
+  they grow, and splits whose variants your analytics records. Answered from memory: one instance serves a
+  large fleet, and a fetch stores nothing about the device that made it.
+- **One SDK, four modules.** `inlet-sdk/feedback` collects a form's answers from inside your
   own interface — a framework-free controller that drives the pages and draws nothing, so
   the form looks like your product. `inlet-sdk/crash` reports failures, with messages
   redacted before they leave and client-side dedupe so a crash loop sends once.
   `inlet-sdk/analytics` sends the events you name and the standard lifecycle events (install,
-  update, start), sharing one installation, session and user ID with the other two. Each has
-  Node, browser, Electron and React Native entries (and React helpers for feedback and crash);
-  all have zero runtime dependencies and a queue that survives restarts.
-- **It talks to AI agents.** An MCP server with 95 tools, at a URL or as a local process,
+  update, start), sharing one installation, session and user ID with the others.
+  `inlet-sdk/config` reads remote config with typed reads that never throw, in 8 KB for the
+  browser. Each has Node, browser, Electron and React Native entries (and React helpers for
+  feedback and crash); all have zero runtime dependencies, and the three that send data have a
+  queue that survives restarts.
+- **It talks to AI agents.** An MCP server with 123 tools, at a URL or as a local process,
   so Claude can summarise your week's feedback, triage a crash group and resolve it in
-  the release that fixes it, or read a funnel split by version, list who dropped and open
-  their profiles.
+  the release that fixes it, read a funnel split by version, list who dropped and open
+  their profiles, or turn a feature off for the platform a crash is on, preview it and
+  publish it.
 - **Every choice is written down.** [DECISIONS.md](docs/DECISIONS.md) records what was
   built, why, and what was rejected — including the bugs the tests found.
 
@@ -137,6 +157,9 @@ analytics database says which step enables it. See
 [Analytics](docs/DEPLOYMENT.md#analytics) for the host it needs and its backups, then
 [Analytics databases](docs/USING-INLET.md#analytics-databases) to create a database and send your first
 events.
+
+Remote config needs nothing more: create a config database and follow
+[Your first config in ten minutes](docs/USING-INLET.md#your-first-config-in-ten-minutes).
 
 Before pointing real people at it, read the
 [security checklist](docs/DEPLOYMENT.md#security-checklist) — it is nine lines and it
@@ -279,30 +302,60 @@ Each step prints its figures and writes them as JSON under `LOAD_OUT` (`.dev/ana
 `passes` imports the built API (`npm run build:server` first) and runs from a checkout; every other
 step needs only Node. The script's header lists every setting.
 
+### Load-testing Remote Config
+
+`scripts/config-load.mjs` measures the fetch target of the Remote Config PRD (9.4: 2,000 fetches a
+second on one API instance, with a server-side p95 under 10 ms). It publishes a realistic template
+(100 parameters, 40 conditions), then sends fetches at a fixed rate, whatever the answers take, from
+a fleet of installations that send back their last ETag. Halfway through, it publishes one change.
+The last runs and what they found are in [DECISIONS.md](docs/DECISIONS.md) §34.11b.
+
+1. Start Inlet with the default rate limits. To get the server-side figures, preload the probe,
+   which records each fetch's time, memory, CPU and the answer cache. Nothing in the product
+   changes. The probe listens on `LOAD_PROBE_LISTEN`, `127.0.0.1:9464` by default:
+   `NODE_OPTIONS="--import ./scripts/config-load-probe.mjs" node apps/api/dist/server.js`
+   (add `--expose-gc` to also get the heap after a full collection). For the country and
+   per-address paths, trust the load client as a proxy with `INLET_TRUSTED_PROXIES=127.0.0.1`.
+   The script sends each installation's own public address in `X-Forwarded-For`.
+2. Set `LOAD_API`, `LOAD_ADMIN_EMAIL` and `LOAD_ADMIN_PASSWORD`, then:
+
+```bash
+node scripts/config-load.mjs setup   # a project, a publishable key, a config database, the template published
+node scripts/config-load.mjs run     # 15 s of warm-up, then 60 s at 2,000 a second, one publish at 30 s
+```
+
+`run` prints the rate it achieved, the answers by status, the client's and the server's
+percentiles (overall, before the publish and for the 10 seconds after it), the process's memory and
+CPU, the answer cache, and one row a second. It writes them as JSON under `LOAD_OUT`
+(`.dev/config-load`). `LOAD_RATE`, `LOAD_SECONDS`, `LOAD_INSTALLATIONS` and the other settings
+are listed in the script's header. Against Docker Compose, mount the probe into the `inlet`
+service, set `NODE_OPTIONS` and `LOAD_PROBE_LISTEN=0.0.0.0:9464`, and publish that port to the
+host's loopback. Run the client on another machine to keep its CPU out of the figures.
+
 ## Repository layout
 
 | Path | What lives there |
 | --- | --- |
-| `packages/shared` | Form definitions, answer validation, the crash envelope and its fingerprint, the analytics event envelope and query definitions, limits, error codes. Shared by the API, the web app and the SDK so the contract cannot drift. |
-| `packages/sdk` | `inlet-sdk`, the client SDK. `feedback`, `crash` and `analytics`, each with Node, browser, Electron and React Native entries. |
+| `packages/shared` | Form definitions, answer validation, the crash envelope and its fingerprint, the analytics event envelope and query definitions, the config template and its evaluator, limits, error codes. Shared by the API, the web app and the SDK so the contract cannot drift. |
+| `packages/sdk` | `inlet-sdk`, the client SDK. `feedback`, `crash`, `analytics` and `config`, each with Node, browser, Electron and React Native entries. |
 | `apps/api` | Fastify server, Drizzle schema and migrations, the ClickHouse migrations (`apps/api/clickhouse`), services, routes, tests. |
 | `apps/web` | React management interface, form builder, hosted form page, reference renderer. |
 | `apps/mcp` | `inlet-mcp`, a thin layer over the HTTP API. Runs as a stdio process, and the API serves the same tools at `/v1/mcp`. |
 | `e2e` | Playwright suites: the HTTP contract, the SDK in Node and in a real browser, and the interface in a browser. |
 | `docs` | PRD, API guide, MCP guide, deployment guide, technical decisions, generated OpenAPI. |
-| `scripts` | Local PostgreSQL, RustFS and ClickHouse, the end-to-end server, the analytics storage measurement (`analytics-seed.mjs`) and load test (`analytics-load.mjs`). |
+| `scripts` | Local PostgreSQL, RustFS and ClickHouse, the end-to-end server, the analytics storage measurement (`analytics-seed.mjs`) and load test (`analytics-load.mjs`), the config fetch load test (`config-load.mjs`). |
 | `deploy` | Configuration files the bundled services mount, such as ClickHouse's settings and users. |
 
 ## Documentation
 
 | | |
 | --- | --- |
-| [USING-INLET.md](docs/USING-INLET.md) | For the person collecting feedback, triaging crashes and reading analytics. |
+| [USING-INLET.md](docs/USING-INLET.md) | For the person collecting feedback, triaging crashes, reading analytics and changing remote config. |
 | [DEPLOYMENT.md](docs/DEPLOYMENT.md) | Configuration, reverse proxies, managed PostgreSQL and S3, the optional analytics event store, backups, upgrades. |
 | [API.md](docs/API.md) | The integration guide, with the retry contract in full. |
 | [MCP.md](docs/MCP.md) | Every MCP tool and what it may do. |
-| [packages/sdk](packages/sdk/README.md) | `inlet-sdk` for integrators: collecting feedback, capturing crashes, sending analytics events with consent, what is sent and what never is. |
-| [PRD.md](docs/PRD.md) | The product requirements, split into [Foundations](docs/prd/foundations.md), [Feedback Collection](docs/prd/feedback-collection.md), [Crash Reports](docs/prd/crash-reports.md) and [UX Analytics](docs/prd/ux-analytics.md); cited by ID throughout the source. |
+| [packages/sdk](packages/sdk/README.md) | `inlet-sdk` for integrators: collecting feedback, capturing crashes, sending analytics events with consent, reading remote config, what is sent and what never is. |
+| [PRD.md](docs/PRD.md) | The product requirements, split into [Foundations](docs/prd/foundations.md), [Feedback Collection](docs/prd/feedback-collection.md), [Crash Reports](docs/prd/crash-reports.md), [UX Analytics](docs/prd/ux-analytics.md) and [Remote Config](docs/prd/remote-config.md); cited by ID throughout the source. |
 | [DECISIONS.md](docs/DECISIONS.md) | Every technical choice, its reasoning, and the rejected alternatives. |
 
 ## Built with

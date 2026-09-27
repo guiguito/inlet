@@ -44,8 +44,12 @@ import { analyticsProfileRoutes } from './routes/analytics-profiles.js';
 import { analyticsFunnelRoutes } from './routes/analytics-funnels.js';
 import { analyticsCohortRoutes } from './routes/analytics-cohorts.js';
 import { analyticsExportRoutes } from './routes/analytics-export.js';
+import { configRoutes } from './routes/config.js';
+import { configDraftRoutes } from './routes/config-draft.js';
+import { configPublishRoutes } from './routes/config-publish.js';
+import { configFetchRoutes } from './routes/config-fetch.js';
 import { erasureRoutes } from './routes/erasures.js';
-import { requireAnalyticsDatabase, requireCrashDatabase } from './services/access.js';
+import { requireAnalyticsDatabase, requireConfigDatabase, requireCrashDatabase } from './services/access.js';
 import { mcpRoutes } from './routes/mcp.js';
 import { projectRoutes } from './routes/projects.js';
 import { attachmentRoutes, submissionRoutes } from './routes/submissions.js';
@@ -65,6 +69,9 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
     // A hop count is valid at runtime but missing from Fastify's option type.
     trustProxy: ctx.env.trustProxy as boolean | string | string[],
     bodyLimit: 1024 * 1024,
+    // Remote Config RC-010: a parameter key of up to 128 characters is a path segment of the
+    // draft routes; the router's default of 100 would answer 414 before the route is reached.
+    routerOptions: { maxParamLength: 256 },
   });
 
   app.setValidatorCompiler(validatorCompiler);
@@ -115,7 +122,8 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
         // 'analytics' once the event store has been ready since start (FD-015, UX Analytics
         // 9.4), and still through a later outage: failing or shrinking the probe then would
         // restart the container, or make an SDK think the deployment lost the capability.
-        const capabilities = ['feedback', 'crash', CROSS_ORIGIN_FEEDBACK, 'mcp', 'identity'];
+        // 'config' unconditionally: Remote Config needs no optional service (RC-049, FD-009).
+        const capabilities = ['feedback', 'crash', CROSS_ORIGIN_FEEDBACK, 'mcp', 'identity', 'config'];
         if (ctx.eventStore?.readySinceStart) capabilities.push('analytics');
         return { status: 'ok', capabilities };
       });
@@ -166,6 +174,21 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
           return { name: database.name };
         }),
         { prefix: '/analytics-databases' },
+      );
+      // Remote Config, Release 9: config databases (RC-001 to RC-004).
+      await v1.register(configRoutes(ctx));
+      await v1.register(configDraftRoutes(ctx));
+      await v1.register(configPublishRoutes(ctx));
+      // The fetch, preview and reach (RC-040 to RC-049, RC-060, RC-070 to RC-072).
+      await v1.register(configFetchRoutes(ctx));
+      // And a fourth time for config databases (RC-080). Their messages carry no content, so
+      // `contentLevel` is stored like any database's and never read for them.
+      await v1.register(
+        slackNotificationRoutes(ctx, async (principal, databaseId) => {
+          const { database } = await requireConfigDatabase(ctx.db, principal, databaseId, 'creator');
+          return { name: database.name };
+        }),
+        { prefix: '/config-databases' },
       );
     },
     { prefix: '/v1' },
@@ -218,7 +241,7 @@ async function registerDocs(app: FastifyInstance, ctx: AppContext): Promise<void
  * Everything else in Inlet stays same-origin, which is what section 13 of DECISIONS.md
  * describes and why there is no CORS plugin here. This is the one exception, and FD-015
  * enumerates it in this one place: the health probe, crash ingest, the four feedback
- * collection routes, and analytics ingest for `POST` only (`CROSS_ORIGIN_BY_METHOD`). The
+ * collection routes, and analytics ingest and the config fetch for `POST` only (`CROSS_ORIGIN_BY_METHOD`). The
  * browser adapters of `inlet-sdk` run on the integrator's own origin by definition, and send
  * an `authorization` header, which forces a preflight. Without this the preflight 404s and
  * the browser never sends anything at all.
@@ -263,6 +286,8 @@ const CROSS_ORIGIN_COLLECTION = new RegExp(
 const CROSS_ORIGIN_BY_METHOD: { path: RegExp; method: string }[] = [
   // UX Analytics AN-010, section 7.1: the batch route, and nothing else under /analytics-databases.
   { path: /^\/v1\/analytics-databases\/[^/]+\/batch$/, method: 'POST' },
+  // Remote Config RC-049, section 7.1: the fetch, and nothing else under /config-databases.
+  { path: /^\/v1\/config-databases\/[^/]+\/fetch$/, method: 'POST' },
 ];
 
 /** The methods a preflight may be told, or null when the request is not cross-origin at all. */

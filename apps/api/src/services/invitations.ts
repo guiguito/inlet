@@ -14,6 +14,8 @@ import {
   crashDatabases,
   analyticsDatabaseMemberships,
   analyticsDatabases,
+  configDatabaseMemberships,
+  configDatabases,
 } from '../db/schema.js';
 import { apiError, errors } from '../lib/errors.js';
 import { hashPassword, randomToken, sha256 } from '../lib/crypto.js';
@@ -37,13 +39,16 @@ export type InvitationScope =
   /** FD-007: the third scope, Release 6. */
   | { kind: 'crashDatabase'; crashDatabaseId: string }
   /** FD-007: the fourth scope, Release 8. */
-  | { kind: 'analyticsDatabase'; analyticsDatabaseId: string };
+  | { kind: 'analyticsDatabase'; analyticsDatabaseId: string }
+  /** Foundations 10.6: the fifth scope, Release 9. */
+  | { kind: 'configDatabase'; configDatabaseId: string };
 
-export type InvitationScopeName = 'project' | 'feedback_database' | 'crash_database' | 'analytics_database';
+export type InvitationScopeName = 'project' | 'feedback_database' | 'crash_database' | 'analytics_database' | 'config_database';
 
 function scopeOfRow(row: InvitationRow): InvitationScopeName {
   if (row.projectId) return 'project';
   if (row.analyticsDatabaseId) return 'analytics_database';
+  if (row.configDatabaseId) return 'config_database';
   return row.crashDatabaseId ? 'crash_database' : 'feedback_database';
 }
 
@@ -55,6 +60,7 @@ export type InvitationView = {
   feedbackDatabaseId: string | null;
   crashDatabaseId: string | null;
   analyticsDatabaseId: string | null;
+  configDatabaseId: string | null;
   /** What the invitation grants access to, for a listing that reads without a join. */
   scopeName: string;
   status: 'pending' | 'redeemed' | 'revoked' | 'expired';
@@ -100,6 +106,11 @@ async function assertAssignable(db: Db, scope: InvitationScope, role: Role): Pro
     if (!rows[0]) throw apiError('analytics_database_not_found', 'That analytics database does not exist.');
     return;
   }
+  if (scope.kind === 'configDatabase') {
+    const rows = await db.select({ id: configDatabases.id }).from(configDatabases).where(eq(configDatabases.id, scope.configDatabaseId)).limit(1);
+    if (!rows[0]) throw apiError('config_database_not_found', 'That config database does not exist.');
+    return;
+  }
   const rows = await db
     .select({ projectId: feedbackDatabases.projectId })
     .from(feedbackDatabases)
@@ -133,7 +144,9 @@ export async function createInvitation(
           ? { crashDatabaseId: scope.crashDatabaseId }
           : scope.kind === 'analyticsDatabase'
             ? { analyticsDatabaseId: scope.analyticsDatabaseId }
-            : { feedbackDatabaseId: scope.feedbackDatabaseId }),
+            : scope.kind === 'configDatabase'
+              ? { configDatabaseId: scope.configDatabaseId }
+              : { feedbackDatabaseId: scope.feedbackDatabaseId }),
     })
     .returning();
 
@@ -212,6 +225,7 @@ export type RedeemResult = {
   feedbackDatabaseId: string | null;
   crashDatabaseId: string | null;
   analyticsDatabaseId: string | null;
+  configDatabaseId: string | null;
 };
 
 /**
@@ -287,7 +301,7 @@ async function grantRole(
   tx: Db,
   row: InvitationRow,
   userId: string,
-): Promise<{ projectId: string; feedbackDatabaseId: string | null; crashDatabaseId: string | null; analyticsDatabaseId: string | null }> {
+): Promise<Omit<RedeemResult, 'userId' | 'created' | 'role'>> {
   if (row.projectId) {
     await tx
       .insert(projectMemberships)
@@ -296,7 +310,7 @@ async function grantRole(
         target: [projectMemberships.projectId, projectMemberships.userId],
         set: { role: row.role, updatedAt: new Date() },
       });
-    return { projectId: row.projectId, feedbackDatabaseId: null, crashDatabaseId: null, analyticsDatabaseId: null };
+    return { projectId: row.projectId, feedbackDatabaseId: null, crashDatabaseId: null, analyticsDatabaseId: null, configDatabaseId: null };
   }
 
   if (row.crashDatabaseId) {
@@ -310,7 +324,7 @@ async function grantRole(
         target: [crashDatabaseMemberships.crashDatabaseId, crashDatabaseMemberships.userId],
         set: { role: row.role, updatedAt: new Date() },
       });
-    return { projectId, feedbackDatabaseId: null, crashDatabaseId: row.crashDatabaseId, analyticsDatabaseId: null };
+    return { projectId, feedbackDatabaseId: null, crashDatabaseId: row.crashDatabaseId, analyticsDatabaseId: null, configDatabaseId: null };
   }
 
   if (row.analyticsDatabaseId) {
@@ -324,7 +338,21 @@ async function grantRole(
         target: [analyticsDatabaseMemberships.analyticsDatabaseId, analyticsDatabaseMemberships.userId],
         set: { role: row.role, updatedAt: new Date() },
       });
-    return { projectId, feedbackDatabaseId: null, crashDatabaseId: null, analyticsDatabaseId: row.analyticsDatabaseId };
+    return { projectId, feedbackDatabaseId: null, crashDatabaseId: null, analyticsDatabaseId: row.analyticsDatabaseId, configDatabaseId: null };
+  }
+
+  if (row.configDatabaseId) {
+    const configRows = await tx.select({ projectId: configDatabases.projectId }).from(configDatabases).where(eq(configDatabases.id, row.configDatabaseId)).limit(1);
+    const projectId = configRows[0]?.projectId;
+    if (!projectId) throw apiError('config_database_not_found', 'That config database no longer exists.');
+    await tx
+      .insert(configDatabaseMemberships)
+      .values({ configDatabaseId: row.configDatabaseId, userId, role: row.role })
+      .onConflictDoUpdate({
+        target: [configDatabaseMemberships.configDatabaseId, configDatabaseMemberships.userId],
+        set: { role: row.role, updatedAt: new Date() },
+      });
+    return { projectId, feedbackDatabaseId: null, crashDatabaseId: null, analyticsDatabaseId: null, configDatabaseId: row.configDatabaseId };
   }
 
   if (!row.feedbackDatabaseId) {
@@ -350,7 +378,7 @@ async function grantRole(
       set: { role: row.role, updatedAt: new Date() },
     });
 
-  return { projectId, feedbackDatabaseId: row.feedbackDatabaseId, crashDatabaseId: null, analyticsDatabaseId: null };
+  return { projectId, feedbackDatabaseId: row.feedbackDatabaseId, crashDatabaseId: null, analyticsDatabaseId: null, configDatabaseId: null };
 }
 
 async function requireRedeemable(db: Db, token: string): Promise<InvitationRow> {
@@ -388,10 +416,12 @@ function scopeCondition(scope: InvitationScope) {
       isNull(invitations.feedbackDatabaseId),
       isNull(invitations.crashDatabaseId),
       isNull(invitations.analyticsDatabaseId),
+      isNull(invitations.configDatabaseId),
     );
   }
   if (scope.kind === 'crashDatabase') return eq(invitations.crashDatabaseId, scope.crashDatabaseId);
   if (scope.kind === 'analyticsDatabase') return eq(invitations.analyticsDatabaseId, scope.analyticsDatabaseId);
+  if (scope.kind === 'configDatabase') return eq(invitations.configDatabaseId, scope.configDatabaseId);
   return eq(invitations.feedbackDatabaseId, scope.feedbackDatabaseId);
 }
 
@@ -429,6 +459,16 @@ async function scopeNames(
     return { scopeName: analyticsRows[0]?.database ?? 'an analytics database', projectName: analyticsRows[0]?.project ?? 'a project' };
   }
 
+  if (row.configDatabaseId) {
+    const configRows = await db
+      .select({ database: configDatabases.name, project: projects.name })
+      .from(configDatabases)
+      .innerJoin(projects, eq(projects.id, configDatabases.projectId))
+      .where(eq(configDatabases.id, row.configDatabaseId))
+      .limit(1);
+    return { scopeName: configRows[0]?.database ?? 'a config database', projectName: configRows[0]?.project ?? 'a project' };
+  }
+
   const rows = await db
     .select({ database: feedbackDatabases.name, project: projects.name })
     .from(feedbackDatabases)
@@ -459,6 +499,7 @@ async function toView(db: Db, row: InvitationRow): Promise<InvitationView> {
     feedbackDatabaseId: row.feedbackDatabaseId,
     crashDatabaseId: row.crashDatabaseId,
     analyticsDatabaseId: row.analyticsDatabaseId,
+    configDatabaseId: row.configDatabaseId,
     scopeName: named.scopeName,
     status: invitationStatus(row),
     createdAt: row.createdAt,

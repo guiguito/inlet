@@ -10,3 +10,6 @@ export * from './template-validation.js';
 export * from './notifications.js';
 export * from './crash.js';
 export * from './analytics.js';
+export * from './config.js';
+export * from './config-evaluate.js';
+export * from './config-template.js';

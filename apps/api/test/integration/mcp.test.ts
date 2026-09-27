@@ -96,6 +96,10 @@ describe('the MCP endpoint', () => {
     const names = payload.tools.map((tool) => tool.name);
     expect(names).toContain('list_feedback_databases');
     expect(names).toContain('list_crash_groups');
+    // Remote Config 8.3: the database tools of piece 2, and preview and reach (piece 5).
+    for (const name of ['list_config_databases', 'get_config_database', 'create_config_database', 'update_config_database', 'delete_config_database', 'preview_config', 'get_config_reach']) {
+      expect(names).toContain(name);
+    }
     // FR-121: the matrix is an upper bound, and these are outside it.
     expect(names).not.toContain('create_project');
     expect(names).not.toContain('create_credential');
@@ -138,6 +142,37 @@ describe('the MCP endpoint', () => {
     });
     // FD-022 holds through the new transport as well.
     expect(toolText(response.json())).toContain('confirmation_mismatch');
+  });
+
+  it('creates, reads, updates and deletes a config database through the tools (RC-090, RC-091, FD-022)', async () => {
+    await rpc(h.app, ctx.secretKey, INITIALIZE);
+    let id = 0;
+    const call = async (name: string, args: Record<string, unknown>) =>
+      toolText((await rpc(h.app, ctx.secretKey, { jsonrpc: '2.0', id: (id += 1) + 100, method: 'tools/call', params: { name, arguments: args } })).json());
+
+    const created = JSON.parse(await call('create_config_database', { projectId: ctx.projectId, name: 'Mobile app' })) as { id: string };
+    expect(created.id).toMatch(/^cfg_/);
+    expect(await call('list_config_databases', { projectId: ctx.projectId })).toContain(created.id);
+    expect(JSON.parse(await call('get_config_database', { configDatabaseId: created.id }))).toMatchObject({
+      name: 'Mobile app',
+      refreshIntervalMinutes: 60,
+      refreshIntervalBounds: { min: 5, max: 1440 },
+      deriveCountry: true,
+      activeVersion: null,
+    });
+    expect(await call('update_config_database', { configDatabaseId: created.id, refreshIntervalMinutes: 2 })).toContain('setting_out_of_bounds');
+    expect(JSON.parse(await call('update_config_database', { configDatabaseId: created.id, refreshIntervalMinutes: 30, deriveCountry: false }))).toMatchObject({
+      refreshIntervalMinutes: 30,
+      deriveCountry: false,
+    });
+    // The shared tools reach it by its prefix.
+    expect(JSON.parse(await call('get_deletion_impact', { databaseId: created.id }))).toMatchObject({ versions: 0, draftParameters: 0, exportPath: `/v1/config-databases/${created.id}/export/history` });
+    expect(await call('get_slack_notifications', { databaseId: created.id })).toContain(created.id);
+
+    expect(await call('delete_config_database', { configDatabaseId: created.id, confirm: 'mobile app' })).toContain('confirmation_mismatch');
+    expect(await call('get_config_database', { configDatabaseId: created.id })).toContain('Mobile app');
+    expect(await call('delete_config_database', { configDatabaseId: created.id, confirm: 'Mobile app' })).toContain('"deleted": true');
+    expect(await call('get_config_database', { configDatabaseId: created.id })).toContain('config_database_not_found');
   });
 
   it('refuses a publishable key, a missing key and a session cookie', async () => {

@@ -137,6 +137,7 @@ export async function deleteProject(
       select id from feedback_databases where project_id = ${projectId}
       union all select id from crash_databases where project_id = ${projectId}
       union all select id from analytics_databases where project_id = ${projectId}
+      union all select id from config_databases where project_id = ${projectId}
     `);
     // UX Analytics AN-004, FD-005: the project's analytics databases leave rows in the event
     // store and the key-scoped tables, which the removal worker deletes from these records.
@@ -287,7 +288,7 @@ export async function deleteFeedbackDatabase(
 
 /**
  * Slack settings and queued deliveries are keyed on a database ID of any type
- * (`fdb_`, `cdb_` or `adb_`) and so carry no foreign key since Release 6; they are removed here,
+ * (`fdb_`, `cdb_`, `adb_` or `cfg_`) and so carry no foreign key since Release 6; they are removed here,
  * in the deleting transaction, instead of by cascade. `databaseIds` is a subquery
  * yielding the IDs about to disappear.
  */

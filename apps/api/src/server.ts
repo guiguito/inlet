@@ -13,6 +13,7 @@ import { startPurgeWorker } from './services/purge.js';
 import { startNotificationWorker } from './services/notifications.js';
 import { startCrashRetentionWorker } from './services/crashes.js';
 import { startAnalyticsWorker } from './services/analytics-worker.js';
+import { startConfigWorker } from './services/config-worker.js';
 
 /** Process entry point for the bundled deployment. */
 const env = loadEnv();
@@ -75,8 +76,15 @@ const stopNotificationWorker = startNotificationWorker(ctx);
 const stopCrashRetentionWorker = startCrashRetentionWorker(ctx);
 // UX Analytics 11: counters (AN-006) now; later pieces add their passes to this worker.
 const stopAnalyticsWorker = startAnalyticsWorker(ctx);
+// Remote Config: reach counts (RC-071), the fetch's credential last-used times (RC-047), reach retention (RC-004).
+const stopConfigWorker = startConfigWorker(ctx);
 
+let shuttingDown = false;
 const shutdown = async (signal: string): Promise<void> => {
+  // A second signal (an impatient Ctrl-C, an orchestrator's repeat) must not end the pool twice:
+  // that rejection would kill the process before the workers' last flush.
+  if (shuttingDown) return;
+  shuttingDown = true;
   log.info({ signal }, 'shutting down');
   stopPurgeWorker();
   stopCrashRetentionWorker();
@@ -87,6 +95,7 @@ const shutdown = async (signal: string): Promise<void> => {
   await app.close();
   // After the app, so the last batches' counters are in memory when it writes them.
   await stopAnalyticsWorker();
+  await stopConfigWorker();
   storage.destroy();
   await eventStore?.close();
   await pool.end();

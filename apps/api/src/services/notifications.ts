@@ -1,8 +1,9 @@
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import {
   NOTIFICATION_LIMITS,
   escapeSlackText,
   isAllowedWebhookOrigin,
+  type ConfigChangeSummary,
   type SlackContentLevel,
 } from '@inlet/shared';
 import type { AppContext } from '../context.js';
@@ -10,17 +11,23 @@ import type { Db } from '../db/index.js';
 import {
   analyticsDatabases,
   analyticsIncidents,
+  configActivity,
+  configDatabases,
+  configVersions,
   formVersions,
   notificationDeliveries,
   crashGroups,
+  projectCredentials,
   slackNotifications,
   submissions,
+  users,
   type SlackNotificationRow,
 } from '../db/schema.js';
 import { apiError, errors } from '../lib/errors.js';
 import { submissionUrl } from './export.js';
 import { buildCrashSlackMessage, buildSlackMessage, type SlackMessage } from './slack-message.js';
 import { buildAnalyticsSlackMessage, type IncidentFigures } from './analytics-slack-message.js';
+import { buildConfigSlackMessage } from './config-slack-message.js';
 
 /**
  * Slack notifications (FR-155 to FR-172).
@@ -341,7 +348,7 @@ export async function runNotificationBatch(
         limit ${BATCH_SIZE}
         for update skip locked
      )
-    returning id, kind, submission_id, crash_group_id, analytics_incident_id, analytics_resolution, feedback_database_id, attempts
+    returning id, kind, submission_id, crash_group_id, analytics_incident_id, analytics_resolution, config_activity_id, feedback_database_id, attempts
   `);
 
   const rows = (claimed as unknown as { rows: DeliveryClaim[] }).rows ?? [];
@@ -358,11 +365,19 @@ export async function runNotificationBatch(
 
 type DeliveryClaim = {
   id: number;
-  kind: 'submission_received' | 'crash_group_opened' | 'crash_group_regressed' | 'analytics_data_health';
+  kind:
+    | 'submission_received'
+    | 'crash_group_opened'
+    | 'crash_group_regressed'
+    | 'analytics_data_health'
+    | 'config_published'
+    | 'config_rolled_back'
+    | 'config_unpublished';
   submission_id: string | null;
   crash_group_id: string | null;
   analytics_incident_id: number | null;
   analytics_resolution: boolean;
+  config_activity_id: number | null;
   feedback_database_id: string;
   attempts: number;
 };
@@ -451,6 +466,7 @@ async function render(
     return renderCrash(ctx, claim, claim.kind);
   }
   if (claim.kind === 'analytics_data_health') return renderAnalytics(ctx, claim);
+  if (claim.kind === 'config_published' || claim.kind === 'config_rolled_back' || claim.kind === 'config_unpublished') return renderConfig(ctx, claim);
   if (!claim.submission_id) return 'nothing';
   const rows = await ctx.db
     .select({
@@ -579,6 +595,57 @@ async function renderAnalytics(ctx: AppContext, claim: DeliveryClaim): Promise<'
   };
 }
 
+/** RC-081, PRD 8.2: the History tab of a config database, the URL shape its page reads. */
+export function configHistoryUrl(ctx: AppContext, databaseId: string): string {
+  return `${ctx.env.INLET_PUBLIC_URL.replace(/\/$/, '')}/config-databases/${databaseId}?tab=history`;
+}
+
+/**
+ * RC-080 to RC-082: rendered at send time from the activity (FD-006) and the version it
+ * made active: the database's name, the actor's current name, the note, the changed keys
+ * and condition counts, never a value, rule or list. A deleted database took its activity
+ * and deliveries with it; notifications switched off send nothing.
+ */
+async function renderConfig(ctx: AppContext, claim: DeliveryClaim): Promise<'nothing' | { url: string; message: SlackMessage }> {
+  if (claim.config_activity_id === null) return 'nothing';
+  const rows = await ctx.db
+    .select({
+      activity: configActivity,
+      settings: slackNotifications,
+      databaseName: configDatabases.name,
+      summary: configVersions.changeSummary,
+      rolledBackFrom: configVersions.rolledBackFrom,
+      userName: users.displayName,
+      keyName: projectCredentials.label,
+    })
+    .from(configActivity)
+    .innerJoin(configDatabases, eq(configDatabases.id, configActivity.configDatabaseId))
+    .innerJoin(slackNotifications, eq(slackNotifications.feedbackDatabaseId, configActivity.configDatabaseId))
+    .leftJoin(configVersions, and(eq(configVersions.configDatabaseId, configActivity.configDatabaseId), eq(configVersions.number, configActivity.versionNumber)))
+    .leftJoin(users, eq(users.id, configActivity.actorUserId))
+    .leftJoin(projectCredentials, eq(projectCredentials.id, configActivity.actorCredentialId))
+    .where(eq(configActivity.id, claim.config_activity_id))
+    .limit(1);
+  const found = rows[0];
+  if (!found) return 'nothing';
+  if (!found.settings.enabled || !found.settings.webhookUrl) return 'nothing';
+  const { activity } = found;
+  return {
+    url: found.settings.webhookUrl,
+    message: buildConfigSlackMessage({
+      kind: activity.kind,
+      databaseName: found.databaseName,
+      historyUrl: configHistoryUrl(ctx, activity.configDatabaseId),
+      version: activity.versionNumber,
+      rolledBackFrom: found.rolledBackFrom,
+      actor: (activity.actorUserId ? found.userName : found.keyName) ?? (activity.actorUserId ? 'a deleted account' : 'a deleted key'),
+      note: activity.note,
+      summary: (found.summary as unknown as ConfigChangeSummary | null) ?? null,
+      settings: found.settings,
+    }),
+  };
+}
+
 /** How the submission arrived, for the metadata line. Never respondent-authored. */
 function arrivalPath(clientContext: unknown): string | null {
   if (clientContext === null || typeof clientContext !== 'object') return null;
@@ -653,8 +720,11 @@ export async function sendTestMessage(
   }
 
   // Foundations §23: an analytics database announces data-health incidents only, so its test
-  // is one of those, with example figures, rather than the feedback sample.
-  const message = databaseId.startsWith('adb_')
+  // is one of those, with example figures, rather than the feedback sample; a config
+  // database's is a sample publish.
+  const message = databaseId.startsWith('cfg_')
+    ? configTestMessage(ctx, databaseId, databaseName, settings)
+    : databaseId.startsWith('adb_')
     ? buildAnalyticsSlackMessage({
         databaseName,
         storageUrl: analyticsStorageUrl(ctx, databaseId),
@@ -687,6 +757,26 @@ export async function sendTestMessage(
   throw apiError('slack_delivery_failed', `Slack did not accept the message (${result.reason}).`, [
     { path: 'webhookUrl', code: result.reason, message: slackAdvice(result.reason) },
   ]);
+}
+
+/**
+ * Foundations §23, Remote Config 8.2: a config database announces publishes, rollbacks and
+ * unpublishes, so its test is a sample publish rendered by the real builder, with an example
+ * version and no value, rule or list (RC-081).
+ */
+function configTestMessage(ctx: AppContext, databaseId: string, databaseName: string, settings: SlackNotificationRow): SlackMessage {
+  return buildConfigSlackMessage({
+    kind: 'publish',
+    databaseName,
+    historyUrl: configHistoryUrl(ctx, databaseId),
+    version: 1,
+    rolledBackFrom: null,
+    actor: 'Inlet',
+    note: 'This is a test; nothing was published.',
+    summary: null,
+    // The heading is not escaped (it is the operator's), so the database name in the default one is.
+    settings: { ...settings, messageTitle: settings.messageTitle?.trim() || `Test message from Inlet · ${escapeSlackText(databaseName)}` },
+  });
 }
 
 /** FR-168: the feedback sample, placeholder text and never a real submission. */
