@@ -31,8 +31,9 @@ Everything is under `/v1`. Requests and responses are JSON unless stated otherwi
 Three ways in, for three different callers.
 
 **A publishable client key** (`ipk_…`) is safe to embed in a browser or mobile app. It
-authorizes only the four calls of the feedback flow: read the published form, open a
-submission intent, upload screenshots under that intent, and finalize it. It cannot
+sends data in and reads resolved config values, nothing else: the four calls of the feedback
+flow (read the published form, open a submission intent, upload screenshots under that
+intent, and finalize it), crash reports, analytics ingest and the config fetch. It cannot
 read a single collected response.
 
 **A secret server key** (`isk_…`) carries project Admin authority inside its own
@@ -59,9 +60,10 @@ under `/v1/projects/{projectId}/credentials`, which requires a signed-in Admin.
 Rotation replaces the value in place and the previous value stops working immediately.
 Revocation destroys the value and refuses every later request.
 
-Every request combines a credential with a feedback database ID that belongs to that
-credential's project. A key pointed at another project's database gets
-`feedback_database_inaccessible`.
+Every request combines a credential with a database ID that belongs to that credential's
+project. A key pointed at another project's database gets `feedback_database_inaccessible`
+(or `crash_database_inaccessible`, `analytics_database_inaccessible`,
+`config_database_inaccessible` for the other types).
 
 ## The client feedback flow
 
@@ -2324,9 +2326,9 @@ A config database delivers remote configuration to a product's apps: named, type
 parameters, and the conditions that give some of them other values for some users, devices
 or versions (Remote Config PRD). Its draft is edited and published as numbered versions, and
 applications fetch the values the active version resolves for them; it needs PostgreSQL
-only, no optional service. Release 9 is being built in pieces: the databases themselves,
-their delivery settings, deletion, the shared surface, the draft, publishing, the history,
-the fetch, preview and reach are available.
+only, no optional service. [USING-INLET.md](USING-INLET.md#config-databases) explains the
+model in plain words and walks through a first config; the SDK module that fetches for you
+is `inlet-sdk/config` ([packages/sdk](../packages/sdk/README.md#remote-config)).
 
 ```
 POST /v1/projects/prj_5waxfxyby3st/config-databases
@@ -3021,8 +3023,8 @@ The codes you are most likely to handle:
 
 | Code | Status | Meaning |
 | --- | --- | --- |
-| `invalid_api_key`, `revoked_api_key` | 401 | The key is unknown or has been revoked. |
-| `insufficient_scope` | 403 | A publishable key was used outside what it may do: the feedback flow, crash reports and analytics ingest. |
+| `invalid_api_key` | 401 | The key is unknown, or has been rotated or revoked: revoking erases a key's value, so a revoked key is answered as unknown. (`revoked_api_key` is declared but not answered.) |
+| `insufficient_scope` | 403 | A publishable key was used outside what it may do: the feedback flow, crash reports, analytics ingest and the config fetch. |
 | `feedback_database_inaccessible` | 403 | Valid key, but the database belongs to another project. |
 | `form_not_published` | 409 | Nothing to render, and no new intents. |
 | `form_version_mismatch` | 409 | The `formVersion` you sent is not the pinned one. |
@@ -3059,6 +3061,8 @@ The codes you are most likely to handle:
 | `storage_setting_out_of_bounds` | 400 | A storage setting outside the deployment's bounds, which the message names. |
 | `batch_too_large`, `too_many_events` | 413, 400 | An analytics batch over 256 KiB, or of more than 100 events. |
 | `malformed_json` | 400 | The body is not JSON, or an analytics batch is not `{sentAt, events}`. |
+| `config_database_not_found`, `config_database_inaccessible` | 404, 403 | No such config database, or the fetch named one of another project. The other config codes are in [Config errors](#config-errors). |
+| `stale_draft_revision` | 409 | A form or config publish against a draft revision that is no longer the latest: read the draft again. |
 
 ## Limits
 
@@ -3082,6 +3086,9 @@ The codes you are most likely to handle:
 | Answers shown in a Slack message | 10, then a count of the rest |
 | Slack send timeout | 5 seconds |
 | Slack delivery attempts | 5, with exponential backoff |
+| Config template | 500 parameters, 100 conditions, 10 rules a condition, 5 splits of at most 5 variants, 2 MiB as stored |
+| Config fetch body | 16 KiB |
+| Config versions per database | 10,000 |
 
 These are product limits, not deployment settings: they are part of the contract.
 
@@ -3089,8 +3096,8 @@ Security rate limits also apply, and no user of the platform can configure them:
 submission-intent creation, uploads and finalization are all throttled. The public hosted
 form routes carry their own limits, applied per requesting address and per slug. A
 throttled request returns `429 rate_limit_exceeded`. The deployment operator may move the
-limits of the collection routes, the crash retention bounds and the analytics limits and
-storage settings, within hard limits (see
+limits of the collection routes, the crash retention bounds, the analytics limits and
+storage settings, and the config refresh interval's bounds and fetch limits, within hard limits (see
 "Operator limits" in [DEPLOYMENT.md](DEPLOYMENT.md)).
 
 ## MCP over HTTP
@@ -3123,7 +3130,7 @@ cross-origin request are all refused.
 | Delete a submission | No | Yes | Admin |
 | Edit a submission | No | No | Not supported |
 | Read and edit the form draft | No | Yes | Creator or Admin |
-| Publish, roll back, unpublish | No | Yes | Creator or Admin |
+| Publish, roll back, unpublish a form | No | Yes | Creator or Admin |
 | Create a feedback database | No | Yes | Creator or Admin |
 | Rename or delete a feedback database | No | Yes | Admin |
 | Create a project | No | No | Any signed-in user |
@@ -3173,5 +3180,9 @@ cross-origin request are all refused.
 | Read a config database's deletion impact, delete it | No | Yes | Database or project Admin |
 | Fetch a config database's resolved values | Yes | Yes | Not applicable |
 | Preview a context against a config's draft or a version | No | Yes | Viewer or above |
+| Read a config's draft, versions, activity and differences; export a template, defaults or the history | No | Yes | Viewer or above |
+| Edit a config's draft, import a template, copy a version into the draft | No | Yes | Creator or Admin |
+| Publish, roll back, unpublish a config | No | Yes | Creator or Admin |
+| Edit a config version | No | No | Not supported |
 | Read a config database's reach | No | Yes | Viewer or above |
 | Connect an MCP client to `/v1/mcp` | No | Yes | No |

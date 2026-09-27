@@ -2,7 +2,9 @@
 
 `inlet-mcp` lets an AI agent operate one Inlet project: read and export feedback, build
 and publish forms, share a form as a link, set up Slack notifications, and manage who has
-access.
+access; triage crash groups ([Crash Reports tools](#crash-reports-tools)); read analytics
+([UX Analytics tools](#ux-analytics-tools)); and edit, preview, publish and roll back remote
+config ([Remote Config tools](#remote-config-tools)). 123 tools in all.
 
 It authenticates with a **secret server key**, so it acts with project Admin authority
 inside exactly one project and cannot reach outside it. Per-user MCP is not part of
@@ -398,6 +400,10 @@ draft revision last read. The tools below cover section 8.3 of the Remote Config
 | `copy_config_version_to_draft` | Replace the draft with a version's template (after a rollback, so the draft stops holding the change rolled back). |
 | `publish_config` | Publish the draft as the next version, with the `revision` you last read and a `note`; Slack announces it. `stale_draft_revision` if the draft moved since; `config_template_invalid` with every problem. A retried publish of the same revision is harmless: it answers the active version with `created: false` and announces nothing. |
 | `rollback_config` | Publish a new version equal to an older one, noted "Rolled back to version N." plus your note. The draft is not changed. |
+
+`delete_config_parameter`, `delete_config_condition` and `copy_config_version_to_draft` are
+marked destructive to the client, since they remove from the draft or replace it, but ask
+for no confirmation: nothing reaches an application until a publish.
 
 Every draft change returns the new `revision`, which publishing will need; a change the
 save checks refuse fails with `config_template_invalid` and each problem's path. The draft

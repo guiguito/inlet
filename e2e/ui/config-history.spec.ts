@@ -348,6 +348,14 @@ test('a Creator rolls back, copies and unpublishes', async ({ request, browser }
   await page.getByRole('dialog').getByLabel(/to confirm/).fill('Mobile app');
   await page.getByRole('dialog').getByRole('button', { name: 'Unpublish' }).click();
   await expect(page.getByTestId('history-state')).toHaveText('Nothing is published. Apps use their in-app defaults.');
+
+  // Listing the project's keys is a project Admin's (FR-085): the snippets keep a placeholder
+  // key, and one line says who has the real one.
+  await page.getByRole('tab', { name: 'Integrate' }).click();
+  await expect(page.getByTestId('integrate-keys-admin-only')).toHaveText(
+    'Publishable keys are managed by a project Admin. Ask one for the key to put in your app.',
+  );
+  await expect(page.getByTestId('config-snippet-Browser')).toContainText("publishableKey: 'ipk_your_publishable_client_key'");
   await context.close();
 });
 

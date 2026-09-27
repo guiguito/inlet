@@ -52,6 +52,11 @@ export function IntegrateTab({ database }: { database: ConfigDatabase }) {
                 <Link to={`/projects/${database.projectId}`}>Create one in API keys</Link>
               </Button>
             </div>
+          ) : credentials.error instanceof ApiError && (credentials.error.status === 403 || credentials.error.status === 404) ? (
+            // Listing credentials is a project Admin's (Foundations FR-085); the snippets keep a placeholder key.
+            <p className="text-sm text-muted-foreground" data-testid="integrate-keys-admin-only">
+              Publishable keys are managed by a project Admin. Ask one for the key to put in your app.
+            </p>
           ) : null}
           <p className="text-[13px] font-medium">Targeting is not access control. Anyone with your publishable key can ask for the values of any user.</p>
         </CardContent>

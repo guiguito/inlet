@@ -3,7 +3,8 @@
 Inlet is one container plus PostgreSQL and an S3-compatible object store. There is no
 build step to run on the server, no queue broker, and no separate worker process.
 Analytics, which is optional, adds one more service: ClickHouse, the event store
-(see [Analytics](#analytics)).
+(see [Analytics](#analytics)). Remote config needs nothing beyond PostgreSQL; its fetch
+route is answered from the API's memory (see [The config fetch](#the-config-fetch)).
 
 - [What you need](#what-you-need)
 - [The fastest path: Docker Compose](#the-fastest-path-docker-compose)
@@ -745,7 +746,7 @@ different.
 
 | | Holds | Lose it and |
 | --- | --- | --- |
-| PostgreSQL | Accounts, projects, forms and every version, responses, API key hashes, settings | Everything is gone |
+| PostgreSQL | Accounts, projects, forms and every version, responses, crash reports, config drafts, versions and reach counts, API key hashes, settings | Everything is gone |
 | Object storage | Screenshot files and hosted form logos | Responses survive with broken screenshot links |
 | ClickHouse, with analytics | Analytics events and the installation records derived from them | Charts, funnels and cohorts start again from empty; everything else is untouched. See [Analytics → Backups](#backups) |
 | `INLET_SESSION_SECRET` | Nothing, but it signs sessions | Everyone is signed out |
@@ -775,7 +776,8 @@ GET /v1/health
 ```
 
 Returns 200 when the process is up and can reach PostgreSQL. Use it as your container
-health check and your load balancer probe. Its `capabilities` list includes `analytics`
+health check and your load balancer probe. Its `capabilities` list always includes `config`,
+which the SDK's config module checks before its first fetch, and includes `analytics`
 once the analytics event store has answered and been migrated since Inlet started, and
 keeps it through a later ClickHouse outage, which never fails the probe.
 
@@ -792,10 +794,12 @@ taken, `query_limit_exceeded` when a query passes its time or memory limit — a
 with their code and message and no stack, so a ClickHouse outage does not fill the log with
 errors. Alert on `error`; watch the `warn` rate for a store that stays down.
 
-Three workers run inside the API process and log what they do: one purges screenshot
-objects after a deletion, one delivers Slack notifications with backoff, and one runs
+Workers run inside the API process and log what they do: one purges screenshot
+objects after a deletion, one delivers Slack notifications with backoff, one runs
 the crash-report retention pass at start and then hourly, evicting reports past a crash
-database's age limit or cap in bounded steps. All three are idempotent and safe across
+database's age limit or cap in bounded steps, one runs the analytics passes, and one writes
+the config fetch counts to PostgreSQL every ten seconds (and, every minute, when each key last
+fetched) and deletes counts older than 30 days daily. All are idempotent and safe across
 restarts. A shutdown waits for the Slack work in flight before closing the database pool.
 
 Crash ingest is rate limited per key and per crash fingerprint in memory on the API

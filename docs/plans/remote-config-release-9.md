@@ -1,6 +1,6 @@
 # Release 9 (Remote Config): implementation plan and handoff
 
-**Status as of 27 September 2026: in progress on branch `guiguito/remote_config`.** This file
+**Status as of 27 September 2026: built and verified on branch `guiguito/remote_config`; not merged, and `inlet-sdk` 0.4.0 not published (both owner actions).** Every piece was built by a developer agent and verified by a separate review; the acceptance matrix is `docs/plans/remote-config-release-9-acceptance.md`. The PRD amendments the pieces propose below were applied to Notion and the mirrors, parity checked, in the same session; the "Left out" entries that name later pieces were done by those pieces. This file
 is the working record of the build: the order of the pieces, the decisions every piece
 follows, the seams each piece leaves for the next, and what was left out. Update it in the
 same change as the code it describes.
@@ -70,7 +70,7 @@ pieces land; a piece that departs from one says so in its report and in that sec
 | 8 | History and Integrate tabs | History, Compare, Roll back, Copy to draft, Unpublish; Integrate; reach shares in both and in Conditions | verified |
 | 9 | `inlet-sdk/config` core, browser and Node | RC-110 to RC-124, RC-127, RC-128 for these entries; the installation ID created by the config module; size and purity checks | verified |
 | 10 | `inlet-sdk/config` Electron and React Native, and RC-129 | RC-125, RC-126, RC-127, RC-129; Metro | verified |
-| 11 | Full verification | Every acceptance criterion of PRD section 12 against the running product; the load test of section 9.4; Docker; the documentation and PRD status | 11b built (the load test and Docker, DECISIONS 34.11b); 11a verified (the acceptance audit, `docs/plans/remote-config-release-9-acceptance.md`, DECISIONS 34.11a) |
+| 11 | Full verification | Every acceptance criterion of PRD section 12 against the running product; the load test of section 9.4; Docker; the documentation and PRD status | verified: the acceptance audit (11a, DECISIONS 34.11a), the load test and Docker (11b, DECISIONS 34.11b), the documentation pass (11c) |
 
 Pieces 2 to 6 build the server in order; 9 and 10 build the SDK against the fetch contract of
 PRD section 9.2 and run beside them; 7 and 8 follow the routes they show.

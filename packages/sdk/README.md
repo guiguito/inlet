@@ -12,8 +12,8 @@ report to. Four modules:
 
 Zero runtime dependencies, ESM and CommonJS, Node 18 or later, evergreen browsers and
 React Native 0.74 or later. Feedback and crash have a Node, browser, Electron, React and
-React Native entry; analytics has a browser, Node, Electron and React Native entry; config
-has a browser and a Node entry.
+React Native entry; analytics and config have a browser, Node, Electron and React Native
+entry.
 
 The modules share one **identity** per application: a random session ID, rotated after
 30 minutes without activity or after 24 hours, and the user ID you set with `setUser`. It
@@ -23,14 +23,17 @@ is never derived from the device, and `identity: false` at `init` turns it off; 
 [Identity](#identity).
 
 If you have never seen Inlet: an Inlet **project** holds databases and owns two kinds of
-API key. A **publishable key** (`ipk_…`) can only send data in and is safe to ship in an
-application; a **secret key** reads what was collected and must never leave your servers.
-A **feedback database** (`fdb_…`) holds one form and the responses it collected. A **crash
-database** (`cdb_…`) receives failure reports and groups them into one row per distinct
-bug, so that a crash loop is one line and one Slack message.
+API key. A **publishable key** (`ipk_…`) can only send data in and read resolved config
+values, and is safe to ship in an application; a **secret key** reads what was collected and
+must never leave your servers. A **feedback database** (`fdb_…`) holds one form and the
+responses it collected. A **crash database** (`cdb_…`) receives failure reports and groups
+them into one row per distinct bug, so that a crash loop is one line and one Slack message.
+An **analytics database** (`adb_…`) counts the events your application names. A **config
+database** (`cfg_…`) holds parameters with defaults and the conditions that give some users
+other values; your application fetches the values resolved for it.
 
-Your application does not have to share an origin with your Inlet: both modules' browser
-entries send cross-origin, with no cookie and no reverse proxy. The server's side of all
+Your application does not have to share an origin with your Inlet: every module's browser
+entry works cross-origin, with no cookie and no reverse proxy. The server's side of all
 this is described in [docs/USING-INLET.md](../../docs/USING-INLET.md); the wire format in
 [docs/API.md](../../docs/API.md).
 
@@ -38,6 +41,16 @@ this is described in [docs/USING-INLET.md](../../docs/USING-INLET.md); the wire 
 
 ```
 npm install inlet-sdk
+```
+
+The config module ships in 0.4.0, which is not on npm yet: until it is, `npm install
+inlet-sdk` gives 0.3.0, without `inlet-sdk/config`. Pack it from a checkout of the Inlet
+repository, which builds it, and install the file it makes:
+
+```
+npm install
+npm pack ./packages/sdk                      # builds, then writes inlet-sdk-0.4.0.tgz
+npm install /path/to/inlet-sdk-0.4.0.tgz     # in your application
 ```
 
 ---
@@ -979,6 +992,9 @@ sends. Every value has an in-app default, so a read never throws and never waits
 values apply at a safe moment — the next launch by default — so a screen never changes under
 a user's finger.
 
+Create the config database, a parameter and a first version in Inlet, then copy the
+database ID, the key and the in-app defaults from its **Integrate** tab
+([Your first config in ten minutes](../../docs/USING-INLET.md#your-first-config-in-ten-minutes)).
 It needs a deployment whose `/v1/health` lists `config`. Until it does, the application uses
 its cached values and in-app defaults, says so through `debug` and `onError`, and asks again
 ten minutes later or at the next launch.

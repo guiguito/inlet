@@ -956,7 +956,7 @@ function CreateCredentialDialog({
               </Select>
               <p className="text-xs text-muted-foreground">
                 {type === 'publishable'
-                  ? 'Safe to embed in a browser or mobile app. Limited to the feedback flow.'
+                  ? 'Safe to embed in a browser or mobile app. Limited to the client flows: feedback, crash reports, analytics events and fetching a published config.'
                   : 'Full Admin authority over this project. Shown once.'}
               </p>
             </div>
