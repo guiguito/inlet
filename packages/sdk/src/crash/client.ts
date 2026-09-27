@@ -328,6 +328,26 @@ export class CrashClient {
   }
 
   /**
+   * AN-150: a crashing report dropped by the bounds check still ends its session, because
+   * only the integrator's synchronous hook decides that a report is not a crash. The hook
+   * runs on it for that decision alone; the report stays unsent, and `onDrop` has already
+   * said why.
+   */
+  private flagUnsent(envelope: CrashEnvelope, previousRun: boolean): void {
+    if (!this.flagging(previousRun) || !this.isCrash(envelope)) return;
+    let kept: CrashEnvelope | null = envelope;
+    if (this.options.beforeSendSync) {
+      try {
+        kept = this.options.beforeSendSync(envelope);
+      } catch (error) {
+        this.debug('beforeSendSync threw on a report dropped for its size; its session is not flagged.', error);
+        kept = null;
+      }
+    }
+    if (kept && this.isCrash(kept)) this.flag(kept, previousRun);
+  }
+
+  /**
    * CR-119, AN-150: a crash module is enabled and, in a browser, at least one of the page's
    * scripts lies within its app roots — a page served wholly from a CDN the roots miss would
    * never flag a session, and must read as unmeasured rather than crash-free.
@@ -459,6 +479,7 @@ export class CrashClient {
     if (problem) {
       this.debug(`Crash report dropped: ${problem}.`);
       this.onDrop('bounds', problem);
+      this.flagUnsent(envelope, previousRun);
       return null;
     }
     let final: CrashEnvelope | null = this.runBeforeSendSync(envelope);
@@ -516,6 +537,7 @@ export class CrashClient {
     if (problem) {
       this.debug(`Crash report dropped: ${problem}.`);
       this.onDrop('bounds', problem);
+      this.flagUnsent(envelope, previousRun);
       return null;
     }
     // CR-107: only the synchronous hook can run here. `beforeSend` is asynchronous by

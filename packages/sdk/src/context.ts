@@ -115,7 +115,8 @@ export function serverRuntime(global: { Bun?: { version?: string }; Deno?: { ver
  */
 export function nodeContext(input: {
   mode: 'server' | 'device';
-  runtime: ServerRuntime;
+  /** A server runtime, or `electron` from the Electron main process (AN-238). */
+  runtime: { name: string; version?: string };
   /** `process.platform`. */
   platform?: string;
   /** `os.release()`, or undefined where a permission refused it. */
@@ -130,4 +131,44 @@ export function nodeContext(input: {
   const os = input.os ?? { name, ...(input.release ? { version: input.release } : {}) };
   const locale = input.locale ? normalizeLocale(input.locale) : undefined;
   return { platform, os, runtime, ...(locale ? { locale } : {}) };
+}
+
+/** The parts of React Native's `Platform` the adapters read (CR-120, AN-239). */
+export type ReactNativePlatform = {
+  OS: string;
+  /** A string on iOS (the OS version); an API level number on Android. */
+  Version: string | number;
+  constants?: { Release?: string; reactNativeVersion?: { major: number; minor: number; patch: number } };
+};
+
+/** CR-120, AN-239: `iOS` or `Android` with the platform version, which on Android is not `Platform.Version`. */
+export function reactNativeOs(platform: ReactNativePlatform): { name: string; version?: string } {
+  if (platform.OS === 'ios') return { name: 'iOS', version: String(platform.Version) };
+  if (platform.OS === 'android') {
+    // `Platform.Version` is the API level on Android (34); the release is what a person reads (14).
+    const release = platform.constants?.Release;
+    return { name: 'Android', ...(release ? { version: release } : {}) };
+  }
+  return { name: platform.OS };
+}
+
+export function reactNativeVersion(platform: ReactNativePlatform): string | undefined {
+  const version = platform.constants?.reactNativeVersion;
+  return version ? `${version.major}.${version.minor}.${version.patch}` : undefined;
+}
+
+/**
+ * AN-239: platform `ios` or `android`, the operating system version a person reads, the
+ * runtime `react-native` with its version, and the locale (from `Intl`, which the adapter
+ * reads and passes in), normalised to BCP 47.
+ */
+export function reactNativeContext(platform: ReactNativePlatform, locale: string | undefined): EventContext {
+  const version = reactNativeVersion(platform);
+  const tag = locale ? normalizeLocale(locale) : undefined;
+  return {
+    platform: platform.OS === 'ios' ? 'ios' : platform.OS === 'android' ? 'android' : 'other',
+    os: reactNativeOs(platform),
+    runtime: { name: 'react-native', ...(version ? { version } : {}) },
+    ...(tag ? { locale: tag } : {}),
+  };
 }

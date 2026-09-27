@@ -103,6 +103,13 @@ export class IndexedDbEventQueue {
   }
 
   async load<T extends { event: { eventId: string } }>(): Promise<T[]> {
+    // Opening creates the database, so where the browser can list them a queue that was never
+    // written reads as empty without one: `forget` on a device where analytics never ran
+    // writes nothing (AN-225). The first `put` creates it.
+    if (!this.db && typeof indexedDB.databases === 'function') {
+      const existing = await indexedDB.databases().catch(() => null);
+      if (existing && !existing.some((database) => database.name === this.name)) return [];
+    }
     const db = await this.open();
     return new Promise((resolve, reject) => {
       const request = db.transaction('events', 'readonly').objectStore('events').getAll();

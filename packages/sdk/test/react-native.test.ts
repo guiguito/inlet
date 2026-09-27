@@ -280,6 +280,14 @@ describe('the shared generator without crypto (AN-239)', () => {
     expect(seen.size).toBe(1_000_000);
   }, 60_000);
 
+  it('makes a million installation IDs without a collision, as the analytics module generates them', async () => {
+    withoutCrypto();
+    const { uuidV4 } = await import('@inlet/shared/analytics-core');
+    const seen = new Set<string>();
+    for (let index = 0; index < 1_000_000; index += 1) seen.add(uuidV4());
+    expect(seen.size).toBe(1_000_000);
+  }, 60_000);
+
   it('hashes like node:crypto', async () => {
     const { createHash } = await import('node:crypto');
     for (const input of ['', 'abc', 'x'.repeat(55), 'x'.repeat(56), 'x'.repeat(64), 'héllo 🌍'.repeat(40)]) {

@@ -54,7 +54,7 @@ export const IDENTITY_KEYS = {
 
 /**
  * Synchronous storage over what an adapter can reach synchronously: `localStorage`, a file,
- * or memory written through to an asynchronous store (React Native, piece 11b). `null`
+ * or memory written through to an asynchronous store (React Native). `null`
  * deletes the key.
  */
 export type IdentityStorage = {
@@ -120,6 +120,12 @@ export class Identity {
   analyticsApp: { version: string; build?: string } | null = null;
   /** CR-119: the IDs the sentinel recorded for the previous run, set by the adapter that read it. */
   previousRun: PreviousRunIdentity | null = null;
+  /**
+   * AN-151: on React Native the crash module's own store, where its fatal path writes crash
+   * flags — synchronously when that store is — and where the analytics module reads them.
+   * Null elsewhere: the flags live in `storage` with the rest of the identity.
+   */
+  private flagStorage: IdentityStorage | null = null;
 
   /** The first injected source of random values wins; React Native adapters supply one (AN-239). */
   useRandom(source: RandomSource | undefined): void {
@@ -262,6 +268,20 @@ export class Identity {
     this.deferred = [];
   }
 
+  /**
+   * AN-151: the React Native crash adapter hands over its store once it can be read. Flags a
+   * previous run left there go to an analytics client already enabled; one enabled later
+   * finds them when it attaches.
+   */
+  useFlagStorage(storage: IdentityStorage): void {
+    this.flagStorage = storage;
+    if (this.analyticsEnabled && this.onCrashFlag) for (const flag of this.pendingFlags()) this.onCrashFlag(flag);
+  }
+
+  private flags(): IdentityStorage | null {
+    return this.flagStorage ?? this.storage;
+  }
+
   /** `forget` (AN-225): pending crash flags go, deferred ones included. */
   dropFlags(): void {
     this.deferred = [];
@@ -270,7 +290,7 @@ export class Identity {
 
   pendingFlags(): CrashFlag[] {
     try {
-      const raw = this.storage?.read(IDENTITY_KEYS.crashFlags);
+      const raw = this.flags()?.read(IDENTITY_KEYS.crashFlags);
       const parsed = raw ? (JSON.parse(raw) as CrashFlag[]) : [];
       return Array.isArray(parsed) ? parsed.filter((flag) => typeof flag?.sessionId === 'string' && typeof flag.at === 'number') : [];
     } catch {
@@ -286,7 +306,7 @@ export class Identity {
 
   private writeFlags(flags: CrashFlag[]): void {
     try {
-      this.storage?.write(IDENTITY_KEYS.crashFlags, flags.length > 0 ? JSON.stringify(flags) : null);
+      this.flags()?.write(IDENTITY_KEYS.crashFlags, flags.length > 0 ? JSON.stringify(flags) : null);
     } catch {
       // Refused storage: the analytics client is told anyway and sends it this run.
     }

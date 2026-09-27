@@ -13,8 +13,9 @@ export * from './index.js';
  *
  * The identity in `localStorage`, the queue in IndexedDB — one record per event, shared by
  * the origin's tabs — and the session shared by those tabs, rotated under a Web Lock. When
- * either store is unavailable (a private window, blocked storage) it keeps memory, marks its
- * events `ephemeral` and says so through `debug`. The context is platform `web`, the OS and
+ * `localStorage` is unavailable (a private window, blocked storage) it keeps the identity in
+ * memory and marks its events `ephemeral`; when IndexedDB is, it keeps the queue in memory
+ * for the page. It says either through `debug`. The context is platform `web`, the OS and
  * the browser with their major versions from the user-agent string, and the language; the
  * string itself is never sent. It flushes with `keepalive` when the page is hidden.
  *
@@ -43,16 +44,17 @@ export function init(
     storage = undefined;
   }
   const queue = deps.queue ?? (typeof indexedDB !== 'undefined' ? new IndexedDbEventQueue() : undefined);
-  if (!storage || !queue) {
-    debug(`${!storage ? 'localStorage' : 'IndexedDB'} is unavailable here (a private window, or blocked storage). Analytics keeps its ${!storage ? 'identity' : 'queue'} in memory for this page, and its events are marked ephemeral.`);
-  }
+  // AN-236: `ephemeral` means the identity could not persist. A queue kept in memory loses
+  // only what this page had not sent, so it is said through `debug` and marks nothing.
+  if (!storage) debug('localStorage is unavailable here (a private window, or blocked storage). Analytics keeps its identity in memory for this page, and its events are marked ephemeral.');
+  if (!queue) debug('IndexedDB is unavailable here (a private window, or blocked storage). Analytics keeps its queue in memory for this page.');
 
   const locks = (nav as { locks?: LockManagerLike } | undefined)?.locks ?? null;
   const adapter: AnalyticsAdapter = {
     ...(storage ? { storage } : {}),
     ...(queue ? { queue } : {}),
     context: browserContext(userAgent, nav?.language),
-    ephemeral: !storage || !queue,
+    ephemeral: !storage,
     sharedSession: storage !== undefined,
     locks,
     defaultMode: 'device',

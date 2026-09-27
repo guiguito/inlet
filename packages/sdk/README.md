@@ -10,7 +10,7 @@ report to. Three modules:
 
 Zero runtime dependencies, ESM and CommonJS, Node 18 or later, evergreen browsers and
 React Native 0.74 or later. Feedback and crash have a Node, browser, Electron, React and
-React Native entry; analytics has a browser and a Node entry so far.
+React Native entry; analytics has a browser, Node, Electron and React Native entry.
 
 The modules share one **identity** per application: a random session ID, rotated after
 30 minutes without activity or after 24 hours, and the user ID you set with `setUser`. It
@@ -612,6 +612,11 @@ optional service; see the server's deployment guide). Until it does, events wait
 queue and the SDK asks again every ten minutes, so collection starts by itself once your
 operator turns analytics on.
 
+**One identity for every module.** The crash, feedback and analytics modules of one
+application share one installation, session and user ID only if they share storage: give
+them **the same persistence directory on Node, and the same store on React Native**. In a
+browser and in Electron they share it without you doing anything. See [Identity](#identity).
+
 ## Consent first
 
 **An installation ID stored on a device generally requires consent in the European Union.
@@ -652,19 +657,137 @@ installation ID from crash reports and feedback submissions still waiting to be 
 next `setEnabled(true)` begins a new installation. (Deleting what the server already holds
 is an erasure, which an Admin runs from the project's settings.)
 
-## The entries
+## One entry per runtime
 
-| Entry | For | Keeps |
+| Entry | For | Keeps the identity and the queue |
 | --- | --- | --- |
-| `inlet-sdk/analytics/browser` | Web pages | The identity in `localStorage`, the queue in IndexedDB |
+| `inlet-sdk/analytics/browser` | Web pages | Identity in `localStorage`, queue in IndexedDB |
+| `inlet-sdk/analytics/electron` | The Electron main process (`installElectronMain`) | Files under `<userData>/inlet` |
+| `inlet-sdk/analytics/electron-renderer` | Electron windows (`createElectronRenderer`) | Nothing: it forwards to main |
+| `inlet-sdk/analytics/react-native` | React Native 0.74 or later | The store you inject, under 1 MB |
 | `inlet-sdk/analytics/node` | Backends (server mode, the default) and command-line tools (device mode) | Memory in server mode; files under `persistenceDir` in device mode |
 | `inlet-sdk/analytics` | Any other runtime with `fetch` | Memory, or the `store` you give it |
 
-Electron and React Native entries arrive in a later version. Each entry exposes the same
-functions: `init`, `track`, `screen`, `setUserId`, `setAttribution`, `setExperiment`,
-`setEnabled`, `reset`, `getInstallationId`, `getSessionId`, `flush` and `close`. One
-analytics client and one identity serve the whole application, whichever entry
-initialised them; a `track` before `init` warns once in the console.
+Every entry but the renderer exposes the same functions: `init`, `track`, `screen`,
+`setUserId`, `setAttribution`, `setExperiment`, `setEnabled`, `reset`, `getInstallationId`,
+`getSessionId`, `flush` and `close`. One analytics client and one identity serve the whole
+application, whichever entry initialised them; a `track` before `init` warns once in the
+console.
+
+## Electron
+
+The identity, the queue and the network live in the main process, so the publishable key
+never reaches a window. Main, during `app.whenReady()`:
+
+```ts
+import { installElectronMain } from 'inlet-sdk/analytics/electron';
+
+const analytics = await installElectronMain({
+  baseUrl: 'https://inlet.example.com',
+  publishableKey: 'ipk_…',
+  analyticsDatabaseId: 'adb_…',
+  enabled: false, // consent first, as above
+});
+// app.version defaults to app.getVersion(), app.id to app.getName(),
+// the identity and the queue to <userData>/inlet.
+
+analytics.setEnabled(true); // in your consent callback, here or in a window
+analytics.track('export_finished', { params: { format: 'pdf' } });
+```
+
+Events report the platform `macos`, `windows` or `linux` with the version the operating
+system reports through `process.getSystemVersion()` — macOS 15.1, not the kernel's 24.1.0 —
+and the runtime `electron` with its version. The returned client is the one analytics
+client; `analytics.uninstall()` takes its IPC listener off again (for hot reload and tests),
+and `close()` stops it.
+
+Preload, with context isolation on. Expose only the two analytics channels:
+
+```ts
+import { contextBridge, ipcRenderer } from 'electron';
+contextBridge.exposeInMainWorld('inletAnalytics', {
+  send: (channel: string, message: unknown) => {
+    if (channel === 'inlet:analytics') ipcRenderer.send(channel, message);
+  },
+  on: (channel: string, listener: (payload: unknown) => void) => {
+    if (channel === 'inlet:analytics:ids') ipcRenderer.on(channel, (_event, payload) => listener(payload));
+  },
+});
+```
+
+Renderer:
+
+```ts
+import { createElectronRenderer } from 'inlet-sdk/analytics/electron-renderer';
+
+const analytics = createElectronRenderer(); // uses window.inletAnalytics
+analytics.screen('Settings');
+analytics.track('theme_changed', { params: { theme: 'dark' } });
+analytics.setUserId('u_123'); // after sign-in: crash reports and submissions carry it too
+```
+
+**What a window can do**: `track`, `screen`, `setUserId`, `setAttribution`, `setExperiment`,
+`setEnabled` (with `forget`), `reset`, and `getInstallationId` and `getSessionId`, which
+return what main last pushed (null until its first push, which answers as soon as the window
+is created). **What it cannot do**: hold a key, make a request, or set anything main owns.
+Main reads only an event's name, category, params and timestamp, bounds them, and adds the
+installation and session IDs, the context and the app version itself, so a window running
+remote content cannot forge them; the standard events (`app_started`, `session_crashed` and
+the others) are the SDK's own and a window's attempt to send one is ignored. Sign-in and
+consent usually happen in a window, so main applies a window's `setUserId`, `setAttribution`,
+`setExperiment`, `setEnabled` and `reset` — the user ID being the one crash reports carry —
+unless you install it with `acceptRendererIdentity: false`.
+
+`inlet-sdk/analytics/electron-renderer` has no Node imports, so a renderer bundler takes it;
+`inlet-sdk/analytics/browser` in a window is the wrong entry and says so through `debug`.
+
+## React Native
+
+React Native 0.74 or later. The entry takes React Native's modules and your store as
+parameters and imports nothing, so it adds no native dependency you did not choose and
+touches no browser global when loaded.
+
+```ts
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { AppState, Platform } from 'react-native';
+import * as analytics from 'inlet-sdk/analytics/react-native';
+
+analytics.init({
+  baseUrl: 'https://inlet.example.com',
+  publishableKey: 'ipk_…',
+  analyticsDatabaseId: 'adb_…',
+  app: { version: '1.4.0' }, // required: React Native cannot read it without a native module
+  Platform,
+  AppState,
+  store: AsyncStorage, // the same store you give the crash and feedback modules
+  enabled: false,
+});
+
+// In your consent callback:
+analytics.setEnabled(true);
+```
+
+- **The store**: AsyncStorage, or a synchronous store such as MMKV behind the same three
+  methods (see [React Native](#react-native-1) below for the MMKV adapter). The identity is
+  kept in memory, read from the store before the first event — calls made before that wait
+  for it — and written through; the queue is one event per key.
+- **The byte budget**: what the module stores stays under `maxStoreBytes`, 1 MB by default.
+  Past it your oldest events go first and the standard events last. With the crash module's
+  2 MB and the feedback module's 1 MB that stays inside the 6 MB Android gives AsyncStorage
+  by default, with room for a config module.
+- **What an event says**: platform `ios` or `android`, the system version a person reads
+  (`Platform.Version` on iOS, `Platform.constants.Release` on Android), the runtime
+  `react-native` with its version, and the locale from `Intl`.
+- **Sessions**: every process start begins one; the application coming back to the
+  foreground after `sessionTimeoutMinutes` begins another. Moving to the background flushes.
+- **IDs without `crypto`**: from `random` if you pass it, else `crypto.getRandomValues` where a
+  polyfill provides it, else the SDK's own generator.
+- **Crash-free sessions are best effort without a synchronous store.** The crash module
+  writes its crash flag to its own store on the fatal path, and this module sends it as
+  `session_crashed` at the next start. The write survives a crash that kills the JavaScript
+  thread only when that store is synchronous. With AsyncStorage a crash that takes the
+  process down at once may never be counted, and your crash-free rate reads high. **Give the
+  crash module MMKV (or another synchronous store)** if you rely on that figure.
 
 ## Server mode and device mode
 
@@ -687,28 +810,32 @@ A server-mode `track` may also pass `installationId` (forwarded by your app from
 `getInstallationId()`), `sessionId`, and `context` (`platform`, `os`, `runtime`, `locale`,
 `country`).
 
-**Device mode** (`mode: 'device'`, the browser's and the bare entry's default) is an
-application on a person's device: an installation, sessions and the standard events. On
-Node it is for a command-line tool or a desktop application without Electron:
+**Device mode** (`mode: 'device'`, the default of every other entry) is an application on a
+person's device: an installation, sessions and the standard events. On Node it is for a
+command-line tool or a desktop application without Electron:
 
 ```ts
 analytics.init({ baseUrl, publishableKey, analyticsDatabaseId, app: { version: '1.0.0' }, mode: 'device', persistenceDir: '/path/to/app-data/inlet' });
+// …
+await analytics.close(); // before a command-line tool exits, so its events are sent and saved
 ```
 
 Give the crash and feedback modules the same directory, so all three share one
 installation. The platform is `macos`, `windows` or `linux` with the version the system
 reports, which on macOS is the kernel's (`24.1.0`); pass `os: { name: 'macOS', version: '15.1' }`
-to report the product version. Node, Bun and Deno are detected (`runtime`); where a
-runtime permission refuses file or system access, the module keeps memory and leaves the
-version out.
+to report the product version. Node, Bun and Deno are detected (`runtime`). Where a runtime
+permission refuses file or system access, the module keeps memory and leaves the version
+out; when it cannot write the installation ID it says so through `debug` and marks its
+events `ephemeral`.
 
 ## What gets sent
 
 Exactly the fields of the analytics envelope and nothing else: an event ID (UUID v7), the
 time, the name, an optional category, the installation ID, the user ID you set, the session
 ID, your attribution and experiments, your params, the app version, build and ID, the
-platform, the operating system and browser with their **major** versions, the language, the
-environment, whether the identity is ephemeral, and the SDK's name and version.
+platform, the operating system and browser with their **major** versions (the full system
+version outside browsers), the language, the environment, whether the identity is
+ephemeral, and the SDK's name and version.
 
 Params, attribution, experiments and the user ID are yours: the SDK sends them only when you
 set them. The user-agent string, the page address, the referrer, the screen and anything
@@ -741,9 +868,10 @@ rollout date on. Turning `app_started` off leaves sessions, retention and crash-
 without data.
 
 A session ends after `sessionTimeoutMinutes` without activity (30 by default, 1 to 240) and
-after 24 hours; activity is a `track`, a crash capture, a feedback submission, or the page
-coming back to the foreground. `reset()` — for a sign-out — clears the user ID and starts a
-new session, keeping the installation.
+after 24 hours; activity is a `track`, a crash capture, a feedback submission, or the
+application coming back to the foreground. `reset()` — for a sign-out — clears the user ID
+and starts a new session, keeping the installation. In Electron, React Native and Node
+device mode every process start begins a session with `trigger: 'launch'`.
 
 **Several tabs.** Every tab of an origin shares one installation and one session. Opening a
 new tab continues the session and sends nothing; the tab that notices the session expired
@@ -751,13 +879,12 @@ rotates it under a Web Lock, so exactly one `app_started` is sent. Where Web Loc
 unavailable (outside a secure context) the next session ID is derived from the expired one,
 so tabs rotating at once agree on it. One tab at a time sends what every tab queued.
 
-Outside browsers every process start begins a session with `trigger: 'launch'`.
-
 **Web identity has limits.** Browsers clear storage when the user asks, Safari removes
 script-written storage after seven days without a visit, and a private window keeps nothing.
-When `localStorage` or IndexedDB is unavailable the module keeps memory for the page, marks
-its events `ephemeral` (they count everywhere except new installations and cohorts) and says
-so through `debug`. Call `setUserId` after sign-in to follow signed-in people across devices.
+When `localStorage` is unavailable the module keeps the identity in memory for the page and
+marks its events `ephemeral` (they count everywhere except new installations and cohorts);
+when IndexedDB is unavailable it keeps the queue in memory for the page. It says either
+through `debug`. Call `setUserId` after sign-in to follow signed-in people across devices.
 
 ## Attribution, experiments and the user ID
 
@@ -781,7 +908,9 @@ where storage allows, so a crash that kills the process is found at the next sta
 analytics module then sends `session_crashed` with the time of the crash, however long the
 application stayed closed. The flag is raised after `beforeSendSync` (drop a report there
 and it is not a crash) and before dedupe and sampling, so every crashing session counts once
-even when its report is never sent.
+even when its report is never sent — a report too large to send included. On React Native
+this is best effort unless the crash module's store is synchronous (see
+[React Native](#react-native) above).
 
 In a browser, only an error whose stack has a frame in your own code counts, so a browser
 extension's error does not. `app_started` reports `crashReporting: true` only when a crash
@@ -798,22 +927,22 @@ Otherwise that version reads as "not measured" rather than wrongly crash-free.
 
 Events are written to the queue before they are sent and replayed on the next start. They
 go in batches of up to `batchSize` (50) every `flushIntervalMs` (5 s in browsers, 10 s
-elsewhere), at once when a full batch is queued, and on `flush()`. When the page is hidden
-or closed the module sends what fits in 60 KiB of `keepalive` requests (browsers allow 64
-KiB per page); the rest waits for the next page. A transport failure backs off
-exponentially with jitter; a `429`, or a `503` with `Retry-After`, pauses analytics for that
-long — and only analytics: the crash module keeps sending. An event the server answered,
-accepted or refused, is never sent again. Past `queueSize` (1,000) the oldest of your events
-is dropped first, the standard events last.
+elsewhere), at once when a full batch is queued, on `flush()`, and when a React Native
+application goes to the background. When a page is hidden or closed the module sends what
+fits in 60 KiB of `keepalive` requests (browsers allow 64 KiB per page); the rest waits for
+the next page. A transport failure backs off exponentially with jitter; a `429`, or a `503`
+with `Retry-After`, pauses analytics for that long — and only analytics: the crash module
+keeps sending. An event the server answered, accepted or refused, is never sent again. Past
+`queueSize` (1,000) the oldest of your events is dropped first, the standard events last.
 
-**Size.** `inlet-sdk/analytics/browser` is 15.1 KB minified and gzipped, the event rules
+**Size.** `inlet-sdk/analytics/browser` is 15.4 KB minified and gzipped, the event rules
 included. The build fails past 20 KB.
 
 ## Analytics options
 
 | Option | Purpose |
 | --- | --- |
-| `baseUrl`, `publishableKey`, `analyticsDatabaseId`, `app` | Required. `app` is `{ version, build?, id? }`; `id` tells apart the apps of one product. A secret key or an empty version throws at `init`. |
+| `baseUrl`, `publishableKey`, `analyticsDatabaseId`, `app` | Required. `app` is `{ version, build?, id? }`; `id` tells apart the apps of one product. A secret key or an empty version throws at `init`. In Electron main `app` is optional: the application's version and name. |
 | `enabled` | Collect or not. Default true, unless a stored opt-out applies. |
 | `mode` | `device` or `server`. The Node entry defaults to `server`, the others to `device`. |
 | `environment` | Defaults to `production`. |
@@ -824,8 +953,10 @@ included. The build fails past 20 KB.
 | `beforeSend(event)` | Synchronous; return the event, a changed one, or `null`. |
 | `onDrop(reason, detail)` | Every dropped event, with its reason. |
 | `timeoutMs` | Per request. Default 20000. |
-| `store` | The bare entry: a store for the identity and the queue (the crash module's `QueueStore` shape; synchronous `getSync`/`setSync` keep crash flags through a fatal crash). |
-| `persistenceDir`, `os` | Node device mode: where the identity and queue live; the OS to report. |
+| `store` | The bare entry: a store for the identity and the queue (the crash module's `QueueStore` shape; synchronous `getSync`/`setSync` keep crash flags through a fatal crash). React Native: AsyncStorage or a synchronous store. |
+| `persistenceDir`, `os` | Node device mode: where the identity and queue live; the OS to report. Electron main: `persistenceDir` only. |
+| `acceptRendererIdentity` | Electron main: apply a window's identity and consent calls. Default true. |
+| `Platform`, `AppState`, `maxStoreBytes` | React Native: the modules from `react-native`; the byte budget, 1 MB by default. |
 | `fetch`, `random(bytes)`, `debug(message, detail)` | As in the other modules. |
 
 `getInstallationId()` returns the installation ID — to forward to your backend, or to quote
@@ -836,9 +967,10 @@ returns the current session ID or `null`.
 
 # React Native
 
-React Native 0.74 or later. Both React Native entries take React Native's modules and your
-storage as parameters and import nothing, so they add no native dependency you did not
-choose, and they touch no browser global when loaded.
+React Native 0.74 or later. The crash and feedback React Native entries take React Native's
+modules and your storage as parameters and import nothing, so they add no native dependency
+you did not choose, and they touch no browser global when loaded. The analytics entry is
+described [with the rest of analytics](#react-native); give all three the same store.
 
 ```ts
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -871,7 +1003,7 @@ feedback.init({ ...inlet, feedbackDatabaseId: 'fdb_…', storage: AsyncStorage }
   Under `__DEV__` React Native already tracks them for LogBox and a second tracker would
   replace it, so the default is off there; `trackRejections: true` turns it on anyway.
 - **Storage**: one report per key and at most 2 MB of crash reports, 1 MB of pending
-  submissions, oldest dropped first, adjustable with `maxStoreBytes`, so that the modules
+  submissions (and 1 MB for analytics), oldest dropped first, adjustable with `maxStoreBytes`, so that the modules
   together stay inside the 6 MB Android gives AsyncStorage by default.
 - **The fatal write** happens before the previous handler runs only when the store is
   synchronous. AsyncStorage is not, so with it the write is best effort: a crash that
@@ -902,13 +1034,14 @@ The modules of one application share one identity, whatever entry initialised th
 | --- | --- | --- |
 | **Session ID** | A random, time-ordered UUID. A new one after 30 minutes without activity (the analytics module's `sessionTimeoutMinutes`), after 24 hours, and on every process start. A capture, a submission or a `track` is activity. | Memory; with analytics enabled in a browser, `localStorage`, shared by the origin's tabs |
 | **User ID** | What you pass to `setUser(id)` or `setUserId(id)` in any module; `null` clears it. | Memory |
-| **Installation ID** | A random UUID the analytics module creates at its first enable, kept until `forget`. Crash reports and submissions carry it **only while an analytics client is enabled**. | With analytics enabled: `localStorage`, or `installation-id.json` under the persistence directory |
+| **Installation ID** | A random UUID the analytics module creates at its first enable, kept until `forget`. Crash reports and submissions carry it **only while an analytics client is enabled**. | With analytics enabled: `localStorage`; `installation-id.json` under the persistence directory (`<userData>/inlet` in Electron); `inlet-sdk:installation-id` in the React Native store |
 
 Without an enabled analytics client nothing is written to the device for the identity, the
 unclean-exit sentinel included, and a page load begins a new session. With one, the identity
 is stored under keys every module reads (`inlet-sdk:installation-id` and its siblings in
-`localStorage`; files of the same names on disk), so give every module the same persistence
-directory on Node. While analytics is disabled the only thing written is its opt-out.
+`localStorage` and in a React Native store; files of the same names on disk), so give every
+module the same persistence directory on Node and the same store on React Native. In
+Electron the main process holds it, and windows reach it through the renderer entries. While analytics is disabled the only thing written is its opt-out.
 
 It is sent only to a deployment whose `/v1/health` lists `identity`; an older deployment gets
 exactly the fields it has always accepted, so upgrading the SDK before the server loses no

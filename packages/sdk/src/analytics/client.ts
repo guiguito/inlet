@@ -81,7 +81,8 @@ export class AnalyticsClient {
   private readonly flushIntervalMs: number;
   private readonly sessionTimeoutMs: number;
   private readonly locks: LockManagerLike | null;
-  private readonly ephemeral: boolean;
+  /** AN-236, AN-237: the identity cannot persist. Set at construction, or at the first enable when the installation ID cannot be written. */
+  private ephemeral: boolean;
   private readonly sharedSession: boolean;
   private enabled = false;
   private closed = false;
@@ -94,6 +95,8 @@ export class AnalyticsClient {
   private readonly ownSessions = new Set<string>();
   private attribution: string | null = null;
   private experiments: Record<string, string> = {};
+  /** What this client installs on the identity, so that it takes off only its own (a second `init` may have attached since). */
+  private readonly rotateHook = (session: SessionRecord, trigger: SessionTrigger) => this.announce(session, trigger);
 
   constructor(options: AnalyticsInitOptions, adapter: AnalyticsAdapter = {}) {
     if (typeof options.publishableKey !== 'string' || !options.publishableKey.startsWith('ipk_')) {
@@ -201,9 +204,11 @@ export class AnalyticsClient {
       // AN-225: an explicit `enabled` wins; without one, a persisted opt-out applies.
       const optedOut = device && this.storage.read(IDENTITY_KEYS.optOut) === '1';
       this.setEnabledSync(options.enabled ?? !optedOut);
-      for (const call of this.waiting) call();
-      this.waiting = [];
+      // Cleared before the calls that waited run, or each would queue itself again.
       this.ready = null;
+      const waiting = this.waiting;
+      this.waiting = [];
+      for (const call of waiting) call();
     };
     if (this.ready) void this.ready.then(start);
     else start();
@@ -218,7 +223,9 @@ export class AnalyticsClient {
         this.waiting.push(() => this.track(name, options));
         return;
       }
-      if (!this.enabled) {
+      // A closed client queues nothing: its store is the next client's too, and a write of
+      // its own queue would drop what that client stored.
+      if (!this.enabled || this.closed) {
         this.onDrop('disabled', { name });
         return;
       }
@@ -254,12 +261,22 @@ export class AnalyticsClient {
 
   /** AN-224: sticky; attached to every later event and persisted with the installation. */
   setAttribution(value: string | null): void {
+    // Before an asynchronous store has loaded (React Native), the stored value would
+    // overwrite this one when it arrives: applied after it instead.
+    if (this.ready) {
+      this.waiting.push(() => this.setAttribution(value));
+      return;
+    }
     this.attribution = value === null || value === undefined ? null : this.boundAttribution(value);
     this.writeState();
   }
 
   /** AN-224: sticky, at most five; a sixth is refused through `debug`. */
   setExperiment(key: string, variant: string | null): void {
+    if (this.ready) {
+      this.waiting.push(() => this.setExperiment(key, variant));
+      return;
+    }
     if (variant === null || variant === undefined) delete this.experiments[key];
     else this.putExperiment(key, variant);
     this.writeState();
@@ -267,7 +284,11 @@ export class AnalyticsClient {
 
   /** AN-225. `forget` also deletes the installation and everything kept with it. */
   async setEnabled(enabled: boolean, opts: { forget?: boolean } = {}): Promise<void> {
-    if (this.ready) await this.ready;
+    // Before an asynchronous store has loaded, in its place among the calls that wait: a
+    // consent callback's `setEnabled(true); track(…)` at startup must not drop the event.
+    if (this.ready) {
+      return new Promise((resolve, reject) => this.waiting.push(() => void this.setEnabled(enabled, opts).then(resolve, reject)));
+    }
     this.setEnabledSync(enabled);
     if (!enabled && opts.forget) await this.forget();
   }
@@ -303,11 +324,14 @@ export class AnalyticsClient {
    * client initialised next owns it whatever this flush still does.
    */
   async close(timeoutMs = 2_000): Promise<void> {
-    if (this.ready) await this.ready;
-    const wasEnabled = this.enabled && !this.closed;
+    // Closed before anything is awaited: a client whose asynchronous store is still loading
+    // never enables, so it cannot attach over the client a second `init` just made.
+    const wasOpen = !this.closed;
     this.closed = true;
     this.stopTimer();
     this.detach();
+    if (this.ready) await this.ready;
+    const wasEnabled = wasOpen && this.enabled;
     if (wasEnabled) await this.transport.flush(timeoutMs);
     this.transport.close();
     // What was sent must not be replayed by the next run.
@@ -388,6 +412,12 @@ export class AnalyticsClient {
     if (!installationId) {
       installationId = uuidV4(this.options.random);
       this.storage.write(IDENTITY_KEYS.installationId, installationId);
+      // AN-237, AN-238: a refused write (a runtime permission, a full disk) is found here, at
+      // the first enable, by reading the ID back — never by a probe write while disabled.
+      if (!this.ephemeral && normalizeUuid(this.storage.read(IDENTITY_KEYS.installationId) ?? '') !== installationId) {
+        this.ephemeral = true;
+        this.debug('The installation ID could not be written (a runtime permission, or a full disk). It is kept in memory for this run, and events are marked ephemeral.');
+      }
     }
     identity.storage = this.storage;
     identity.sharedSession = this.sharedSession;
@@ -413,7 +443,7 @@ export class AnalyticsClient {
     else delete state.appBuild;
     this.writeState(state);
 
-    identity.onRotate = (session, trigger) => this.announce(session, trigger);
+    identity.onRotate = this.rotateHook;
     identity.onCrashFlag = (flag) => this.sendCrash(flag);
     // A page load continues an unexpired session and emits nothing (AN-229); an expired or
     // missing one rotates here, and `onRotate` announces it.
@@ -427,6 +457,8 @@ export class AnalyticsClient {
   private detach(): void {
     if (this.mode !== 'device') return;
     const identity = this.identity;
+    // Only what this client attached: another client may own the identity now.
+    if (identity.onRotate !== this.rotateHook) return;
     identity.analyticsEnabled = false;
     identity.installationId = null;
     identity.onRotate = null;
@@ -649,7 +681,9 @@ export class AnalyticsClient {
       this.debug(`setExperiment: "${key}" is not an experiment key (1 to 40 letters, digits, "_", "." or "-"); refused.`);
       return;
     }
-    if (!(key in this.experiments) && Object.keys(this.experiments).length >= ANALYTICS_LIMITS.experimentsMax) {
+    // Own keys only: `constructor` or `toString` would otherwise read as already set and pass
+    // the cap, and a sixth sticky experiment makes every later event invalid.
+    if (!Object.prototype.hasOwnProperty.call(this.experiments, key) && Object.keys(this.experiments).length >= ANALYTICS_LIMITS.experimentsMax) {
       this.debug(`setExperiment: at most ${ANALYTICS_LIMITS.experimentsMax} experiments; "${key}" was refused. Clear one with setExperiment(key, null).`);
       return;
     }
@@ -670,7 +704,7 @@ export class AnalyticsClient {
 
   /** Written only in device mode while enabled: disabled, nothing but the opt-out (AN-225). */
   private writeState(base?: State): void {
-    if (this.mode !== 'device' || !this.enabled) return;
+    if (this.mode !== 'device' || !this.enabled || this.closed) return;
     const state = { ...(base ?? this.readState()) };
     if (this.attribution) state.attribution = this.attribution;
     else delete state.attribution;

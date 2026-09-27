@@ -7,8 +7,9 @@ import type { AnalyticsInitOptions, AnalyticsParamValue, TrackOptions } from './
  * `getSessionId`, `flush`, `close`.
  *
  * The core: any runtime with `fetch`, everything in memory unless given a `store`. The
- * `./browser` and `./node` entries are the same surface with their runtime's storage,
- * context and lifecycle.
+ * `./browser`, `./node`, `./electron` and `./react-native` entries are the same surface with
+ * their runtime's storage, context and lifecycle; `./electron-renderer` forwards to the
+ * Electron main process.
  *
  * AN-242, CR-110: one client per application on `globalThis`, whatever entry initialised
  * it, because each entry is bundled standalone and a module variable would be a separate
@@ -30,7 +31,7 @@ function missing(): null {
     warned = true;
     // eslint-disable-next-line no-console
     console.warn(
-      'inlet-sdk/analytics: track was called before init(). Nothing was queued. Call init() at startup, from any analytics entry (inlet-sdk/analytics, /browser or /node).',
+      'inlet-sdk/analytics: track was called before init(). Nothing was queued. Call init() at startup, from any analytics entry (inlet-sdk/analytics, /browser, /node, /electron or /react-native; an Electron renderer uses createElectronRenderer from /electron-renderer).',
     );
   }
   return null;

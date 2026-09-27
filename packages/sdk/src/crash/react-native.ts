@@ -2,11 +2,15 @@ import { sha256Hex } from '@inlet/shared/crash-core';
 import { CrashClient } from './client.js';
 import { getClient, init as initCore } from './index.js';
 import { parseStack } from './stack.js';
+import { IDENTITY_KEYS, sharedIdentity } from '../identity.js';
+import { identityStorageOver } from '../store.js';
+import { reactNativeOs, reactNativeVersion, type ReactNativePlatform } from '../context.js';
 import { ReactNativeStore, type ReactNativeStorage } from '../store-react-native.js';
 import type { CrashFrame, CrashInitOptions, RandomSource } from './types.js';
 
 export * from './index.js';
 export { ReactNativeStore, type ReactNativeStorage } from '../store-react-native.js';
+export { reactNativeOs, type ReactNativePlatform } from '../context.js';
 
 /**
  * `inlet-sdk/crash/react-native` (Crash Reports CR-120).
@@ -22,14 +26,6 @@ export { ReactNativeStore, type ReactNativeStorage } from '../store-react-native
  * sentinel and does not observe native crashes; a native crash summary reaches Inlet
  * through `captureReport`.
  */
-
-/** The parts of React Native's `Platform` the adapter reads. */
-export type ReactNativePlatform = {
-  OS: string;
-  /** A string on iOS (the OS version); an API level number on Android. */
-  Version: string | number;
-  constants?: { Release?: string; reactNativeVersion?: { major: number; minor: number; patch: number } };
-};
 
 /** React Native's `ErrorUtils` global. */
 export type ReactNativeErrorUtils = {
@@ -61,7 +57,14 @@ export const DEFAULT_MAX_STORE_BYTES = 2 * 1024 * 1024;
 
 export function init(options: ReactNativeInitOptions): CrashClient {
   const { Platform, storage, maxStoreBytes, ...rest } = options;
-  return initCore({
+  const store = new ReactNativeStore(storage, {
+    prefix: 'inlet-crash:',
+    queueKeys: ['queue'],
+    maxBytes: maxStoreBytes ?? DEFAULT_MAX_STORE_BYTES,
+    itemId: (item) => String((item as { envelope?: { eventId?: unknown } })?.envelope?.eventId ?? ''),
+    ...(options.debug ? { debug: options.debug } : {}),
+  });
+  const client = initCore({
     ...rest,
     platform: 'other',
     os: reactNativeOs(Platform),
@@ -70,30 +73,15 @@ export function init(options: ReactNativeInitOptions): CrashClient {
     // The fatal path's synchronous fingerprint, so client dedupe runs there too. The shared
     // core's SHA-256 needs no `crypto`, and matches the server's grouping byte for byte.
     hash: sha256Hex,
-    store: new ReactNativeStore(storage, {
-      prefix: 'inlet-crash:',
-      queueKeys: ['queue'],
-      maxBytes: maxStoreBytes ?? DEFAULT_MAX_STORE_BYTES,
-      itemId: (item) => String((item as { envelope?: { eventId?: unknown } })?.envelope?.eventId ?? ''),
-      ...(options.debug ? { debug: options.debug } : {}),
-    }),
+    store,
   });
-}
-
-/** CR-120: `iOS` or `Android` with the platform version, which on Android is not `Platform.Version`. */
-export function reactNativeOs(platform: ReactNativePlatform): { name: string; version?: string } {
-  if (platform.OS === 'ios') return { name: 'iOS', version: String(platform.Version) };
-  if (platform.OS === 'android') {
-    // `Platform.Version` is the API level on Android (34); the release is what a person reads (14).
-    const release = platform.constants?.Release;
-    return { name: 'Android', ...(release ? { version: release } : {}) };
-  }
-  return { name: platform.OS };
-}
-
-function reactNativeVersion(platform: ReactNativePlatform): string | undefined {
-  const version = platform.constants?.reactNativeVersion;
-  return version ? `${version.major}.${version.minor}.${version.patch}` : undefined;
+  // AN-151: crash flags live in this store, written on the fatal path synchronously when the
+  // store is synchronous, and read by the analytics module at its next start. With
+  // AsyncStorage they are read into memory first and written through: best effort.
+  const flags = identityStorageOver(store, [IDENTITY_KEYS.crashFlags]);
+  if (flags.ready) void flags.ready.then(() => sharedIdentity().useFlagStorage(flags.storage));
+  else sharedIdentity().useFlagStorage(flags.storage);
+  return client;
 }
 
 /**

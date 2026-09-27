@@ -8,11 +8,9 @@ import type { AnalyticsEnvelope } from './types.js';
  * - `IndexedDbEventQueue` (`store-browser.ts`): one record per event keyed by its event ID,
  *   shared by every tab of the origin, so the tab that flushes sends what the others queued.
  * - `KeyedEventQueue`: the whole queue as one JSON value of a `QueueStore` key — a file under
- *   the persistence directory on Node device mode (and, in 11b, the Electron main process).
+ *   the persistence directory on Node device mode and in the Electron main process, or the
+ *   React Native store, which splits it into one event per key under a byte budget.
  * - `MemoryEventQueue`: nothing persisted; Node server mode and the bare entry.
- *
- * A React Native store (11b) keeps one item per key under a byte budget; it implements this
- * same interface.
  */
 export type QueuedEvent = {
   event: AnalyticsEnvelope;

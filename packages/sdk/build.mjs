@@ -14,14 +14,15 @@ import { gzipSync } from 'node:zlib';
 import { copyFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { build } from 'esbuild';
+import { browserSafe, reactNativeSafe } from './build-checks.mjs';
 
 // The Electron renderer half is a crash-only entry: it has to be bundlable by Vite for a
 // renderer, which the `electron` entry never was (CR-109).
 const entriesOf = {
   crash: ['index', 'node', 'browser', 'electron', 'electron-renderer', 'react', 'react-native'],
   feedback: ['index', 'node', 'browser', 'electron', 'react', 'react-native'],
-  // AN-220: Electron main, renderer and React Native arrive with piece 11b.
-  analytics: ['index', 'node', 'browser'],
+  // AN-220, AN-238, AN-239.
+  analytics: ['index', 'node', 'browser', 'electron', 'electron-renderer', 'react-native'],
 };
 const platformOf = {
   index: 'neutral',
@@ -71,8 +72,34 @@ for (const format of ['esm', 'cjs']) {
 
 execFileSync('npx', ['tsc', '-p', 'tsconfig.json', '--emitDeclarationOnly'], { stdio: 'inherit' });
 standAlone();
-browserSafe();
-reactNativeSafe();
+// CR-109, AN-240: the bare entries, and the browser, Electron renderer and React Native ones.
+browserSafe(
+  [
+    'dist/index',
+    'dist/crash/index',
+    'dist/feedback/index',
+    'dist/analytics/index',
+    'dist/crash/react-native',
+    'dist/feedback/react-native',
+    'dist/analytics/react-native',
+    'dist/crash/browser',
+    'dist/crash/react',
+    'dist/crash/electron-renderer',
+    'dist/analytics/electron-renderer',
+    'dist/feedback/browser',
+    'dist/feedback/react',
+    'dist/analytics/browser',
+  ].flatMap((base) => [`${base}.js`, `${base}.cjs`]),
+);
+reactNativeSafe([
+  'dist/crash/react-native.js',
+  'dist/feedback/react-native.js',
+  'dist/analytics/react-native.js',
+  'dist/crash/index.js',
+  'dist/feedback/index.js',
+  'dist/feedback/react.js',
+  'dist/analytics/index.js',
+]);
 await browserSize();
 metroShims();
 versionsAgree();
@@ -113,74 +140,13 @@ function standAlone() {
 }
 
 /**
- * CR-109: fails the build if an entry meant for a browser or an Electron renderer picked up a
- * Node import, directly or through something it imports.
- *
- * `node:*` is external, so esbuild passes such an import straight through to the output and
- * says nothing — the breakage surfaces in the integrator's bundler instead. This is the check
- * that item 4 of the 0.1.0 integration review assumed already existed; `standAlone()` above is
- * about `.d.ts` self-containment and has never had anything to do with Node imports.
- */
-function browserSafe() {
-  // CR-109, AN-240: the bare entries and the React Native ones too.
-  const safe = [
-    'dist/index',
-    'dist/crash/index',
-    'dist/feedback/index',
-    'dist/crash/react-native',
-    'dist/feedback/react-native',
-    'dist/crash/browser',
-    'dist/crash/react',
-    'dist/crash/electron-renderer',
-    'dist/feedback/browser',
-    'dist/feedback/react',
-    'dist/analytics/index',
-    'dist/analytics/browser',
-  ];
-  // Matches an import or require of a node: module, not the string "node:" itself — the
-  // in-app frame filter in browser.js and react.js legitimately tests for that prefix.
-  const imports = /(?:from\s*|import\s*\(?\s*|require\(\s*)(['"])node:[^'"]*\1/;
-  for (const base of safe) {
-    for (const file of [`${base}.js`, `${base}.cjs`]) {
-      const match = imports.exec(readFileSync(file, 'utf8'));
-      if (match) {
-        throw new Error(
-          `${file} imports ${match[0]}. That entry must run in a browser or an Electron renderer, so it cannot reach Node — find what pulled it in (usually ./node.js or ../store-node.js) and move the shared part into a module that does not.`,
-        );
-      }
-    }
-  }
-}
-
-/**
- * AN-240, CR-120, FR-211: a React Native entry must touch no `window`, `document`,
- * `indexedDB` or `localStorage` when loaded, because on a device they do not exist and a
- * top-level read of one throws before the application renders anything. Each entry is
- * loaded here with those four globals defined as getters that throw, in a child process so
- * the trap cannot leak into the build.
- */
-function reactNativeSafe() {
-  const trap = ['window', 'document', 'indexedDB', 'localStorage']
-    .map((name) => `Object.defineProperty(globalThis, ${JSON.stringify(name)}, { configurable: true, get() { throw new Error('touched ${name} at load'); } });`)
-    .join('\n');
-  for (const entry of ['dist/crash/react-native.js', 'dist/feedback/react-native.js', 'dist/crash/index.js', 'dist/feedback/index.js', 'dist/feedback/react.js', 'dist/analytics/index.js']) {
-    const url = new URL(entry, `file://${process.cwd()}/`).href;
-    try {
-      execFileSync(process.execPath, ['--input-type=module', '-e', `${trap}\nawait import(${JSON.stringify(url)});`], { stdio: 'pipe' });
-    } catch (error) {
-      throw new Error(`${entry} cannot load in React Native: ${String(error.stderr ?? error.message).trim().split('\n').find((line) => line.includes('touched')) ?? error.message}`);
-    }
-  }
-}
-
-/**
  * AN-239: Metro resolves a package's `exports` by default only from React Native 0.79, so
  * every entry a React Native application imports also gets a directory whose
  * `package.json` names the built file, which is how Metro's legacy resolution finds it.
  * Listed in `files`; the build writes them so they can never point at a file that moved.
  */
 function metroShims() {
-  for (const entry of ['crash', 'crash/react-native', 'feedback', 'feedback/react', 'feedback/react-native']) {
+  for (const entry of ['crash', 'crash/react-native', 'feedback', 'feedback/react', 'feedback/react-native', 'analytics', 'analytics/react-native']) {
     const up = entry.split('/').map(() => '..').join('/');
     const target = entry.includes('/') ? entry : `${entry}/index`;
     mkdirSync(entry, { recursive: true });

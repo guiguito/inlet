@@ -38,7 +38,8 @@
     "src",
     "CHANGELOG.md",
     "crash",
-    "feedback"
+    "feedback",
+    "analytics"
   ],
   "exports": {
     ".": {
@@ -125,6 +126,21 @@
       "types": "./dist/analytics/browser.d.ts",
       "import": "./dist/analytics/browser.js",
       "require": "./dist/analytics/browser.cjs"
+    },
+    "./analytics/electron": {
+      "types": "./dist/analytics/electron.d.ts",
+      "import": "./dist/analytics/electron.js",
+      "require": "./dist/analytics/electron.cjs"
+    },
+    "./analytics/electron-renderer": {
+      "types": "./dist/analytics/electron-renderer.d.ts",
+      "import": "./dist/analytics/electron-renderer.js",
+      "require": "./dist/analytics/electron-renderer.cjs"
+    },
+    "./analytics/react-native": {
+      "types": "./dist/analytics/react-native.d.ts",
+      "import": "./dist/analytics/react-native.js",
+      "require": "./dist/analytics/react-native.cjs"
     },
     "./package.json": "./package.json"
   },

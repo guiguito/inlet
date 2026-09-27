@@ -13,9 +13,9 @@ import type { QueueStore } from './store.js';
  *
  * - a queue key holds one item per key, with the order in an index key, so one large
  *   report never makes the whole queue unreadable;
- * - the items of a queue are kept under a byte ceiling, dropping the oldest, so that the
- *   crash queue (2 MB), the feedback queue (1 MB) and the analytics queue (1 MB, Release
- *   8) together stay inside the default quota.
+ * - the items of a queue and its index are kept under a byte ceiling, dropping the oldest,
+ *   so that the crash queue (2 MB), the feedback queue (1 MB) and the analytics store
+ *   (1 MB) together stay inside the default quota.
  *
  * The fatal path writes synchronously only when the injected store is synchronous, as
  * MMKV is: `getSync` and `setSync` exist only then, which is how the crash transport knows
@@ -34,10 +34,12 @@ export type ReactNativeStoreOptions = {
   prefix: string;
   /** Keys whose value is a JSON array of queue items, stored one item per key. */
   queueKeys: string[];
-  /** The ceiling on one queue's items, UTF-8 bytes. The oldest are dropped past it. */
+  /** The ceiling on one queue, its items and its index, UTF-8 bytes. The oldest are dropped past it. */
   maxBytes: number;
-  /** An item's stable key; the queue items of both modules carry one. */
+  /** An item's stable key; the queue items of every module carry one. */
   itemId: (item: unknown) => string;
+  /** Items dropped only after every other one (the analytics standard events, AN-228, AN-231). */
+  keepLast?: (item: unknown) => boolean;
   debug?: (message: string, detail?: unknown) => void;
 };
 
@@ -118,11 +120,17 @@ export class ReactNativeStore implements QueueStore {
     } catch {
       items = [];
     }
-    const encoded = items.map((item) => ({ id: this.options.itemId(item), json: JSON.stringify(item) }));
-    let total = encoded.reduce((sum, item) => sum + encoder.encode(item.json).length, 0);
+    // Each item costs its JSON and its entry in the index (the ID, two quotes and a comma).
+    const encoded = items.map((item) => {
+      const id = this.options.itemId(item);
+      const json = JSON.stringify(item);
+      return { id, json, bytes: encoder.encode(json).length + encoder.encode(id).length + 3, last: this.options.keepLast?.(item) === true };
+    });
+    let total = encoded.reduce((sum, item) => sum + item.bytes, 2);
     let dropped = 0;
     while (encoded.length > 0 && total > this.options.maxBytes) {
-      total -= encoder.encode(encoded.shift()!.json).length;
+      const index = encoded.findIndex((item) => !item.last);
+      total -= encoded.splice(index === -1 ? 0 : index, 1)[0]!.bytes;
       dropped += 1;
     }
     if (dropped > 0) {
