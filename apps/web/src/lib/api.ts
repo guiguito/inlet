@@ -5,6 +5,17 @@ import type {
   AnalyticsRange,
   AnalyticsSplit,
   ColorScheme,
+  ConfigCondition,
+  ConfigContextBody,
+  ConfigExplanation,
+  ConfigMatchCondition,
+  ConfigSplitCondition,
+  ConfigParameter,
+  ConfigProblem,
+  ConfigPublishWarning,
+  ConfigTemplate,
+  ConfigTemplateDiff,
+  ConfigChangeSummary,
   CornerRadius,
   EmbeddingMode,
   ErrorDetail,
@@ -204,11 +215,12 @@ export type Member = {
 export type Invitation = {
   id: string;
   role: Role;
-  scope: 'project' | 'feedback_database' | 'crash_database' | 'analytics_database';
+  scope: 'project' | 'feedback_database' | 'crash_database' | 'analytics_database' | 'config_database';
   projectId: string | null;
   feedbackDatabaseId: string | null;
   crashDatabaseId: string | null;
   analyticsDatabaseId: string | null;
+  configDatabaseId: string | null;
   scopeName: string;
   status: 'pending' | 'redeemed' | 'revoked' | 'expired';
   createdAt: string;
@@ -222,7 +234,7 @@ export type InvitationWithLink = Invitation & { token: string; url: string };
 
 export type InvitationPreview = {
   role: Role;
-  scope: 'project' | 'feedback_database' | 'crash_database' | 'analytics_database';
+  scope: 'project' | 'feedback_database' | 'crash_database' | 'analytics_database' | 'config_database';
   scopeName: string;
   projectName: string;
   expiresAt: string;
@@ -367,8 +379,115 @@ export type SlackNotificationsPatch = {
 function databaseBase(databaseId: string): string {
   if (databaseId.startsWith('cdb_')) return `/v1/crash-databases/${databaseId}`;
   if (databaseId.startsWith('adb_')) return `/v1/analytics-databases/${databaseId}`;
+  if (databaseId.startsWith('cfg_')) return `/v1/config-databases/${databaseId}`;
   return `/v1/feedback-databases/${databaseId}`;
 }
+
+// --- Remote Config (Release 9) ---------------------------------------------------
+
+export type ConfigDatabase = {
+  id: string;
+  projectId: string;
+  name: string;
+  type: 'config';
+  refreshIntervalMinutes: number;
+  refreshIntervalBounds: { min: number; max: number };
+  deriveCountry: boolean;
+  activeVersion: number | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** RC-003, FD-008: versions and parameters, and the history export to offer first. */
+export type ConfigDeletionImpact = {
+  versions: number;
+  draftParameters: number;
+  activeParameters: number | null;
+  exportPath: string;
+  notice: string;
+};
+
+type ConfigActor = { kind: 'user' | 'key'; id: string; name: string | null } | null;
+
+/** The draft read without its template (RC-050, RC-053, RC-019, RC-028, RC-029): what the header and the problems show. */
+export type ConfigDraftState = {
+  configDatabaseId: string;
+  revision: number;
+  updatedAt: string;
+  updatedBy: ConfigActor;
+  activeVersion: number | null;
+  problems: ConfigProblem[];
+  warnings: ConfigPublishWarning[];
+  differsFromActive: boolean;
+  changes: number;
+  conditionUsage: Array<{ condition: string; parameters: string[] }>;
+};
+export type ConfigDraft = ConfigDraftState & { template: ConfigTemplate };
+/** A condition as the editor sends it: the server draws or keeps the salt (RC-020). */
+export type ConfigConditionBody = Omit<ConfigMatchCondition, 'salt'> | Omit<ConfigSplitCondition, 'salt'>;
+/** RC-051: a per-part change answers the state and the part as stored. */
+export type ConfigDraftChange = ConfigDraftState & { parameter?: ConfigParameter; condition?: ConfigCondition; affectedParameters?: string[] };
+
+export type ConfigVersion = {
+  number: number;
+  publishedAt: string;
+  publishedBy: ConfigActor;
+  note: string | null;
+  draftRevision: number;
+  rolledBackFrom: number | null;
+  active: boolean;
+  /** RC-052: what changed against the version active before it. */
+  changeSummary: ConfigChangeSummary;
+};
+/** RC-058: a publish, rollback or unpublish; `version` is what it made active, null for an unpublish. */
+export type ConfigActivity = { id: number; kind: 'publish' | 'rollback' | 'unpublish'; actor: ConfigActor; at: string; note: string | null; version: number | null };
+export type ConfigLifecycle = { version: ConfigVersion; created: boolean; warnings: ConfigPublishWarning[] };
+/** RC-057: the difference between two of the draft, the active version and a version. */
+export type ConfigDiff = ConfigTemplateDiff & { fromVersion: number | null; toVersion: number | null; warnings: ConfigPublishWarning[] };
+export type ConfigSource = 'draft' | 'active' | number;
+/** RC-061, RC-063: what the export route downloads; `defaults` is the defaults as JSON. */
+export const configExportPath = (databaseId: string, source: ConfigSource, format: 'json' | 'ts' | 'defaults' = 'json') =>
+  `/v1/config-databases/${databaseId}/export?source=${source}&format=${format}`;
+
+/** RC-060: piece 1's explanation of one context, answered by `POST …/preview` (piece 5). */
+export type ConfigPreview = ConfigExplanation & {
+  source: ConfigSource;
+  version: number | null;
+  live: string[];
+  warnings: Array<{ path: string; code: string }>;
+};
+
+/**
+ * RC-070: a count from 1 to 9 is never returned exactly, and carries no share; nor is one of 10 or more
+ * that would reveal such a count by subtraction (`withheld`, DECISIONS 34.5).
+ */
+export type ConfigReachCount = { count: number } | { count: null; fewerThan: 10 } | { count: null; withheld: true };
+/**
+ * RC-070 to RC-072: the reach route (piece 5). The Conditions view reads `summary.lastDay`;
+ * the series and the other summaries are History's and Integrate's (piece 8). Shares are
+ * fractions (0.1 is 10%).
+ */
+export type ConfigReach = {
+  unit: 'fetches';
+  notice: string;
+  summary: {
+    /** RC-072: History's share per version and Integrate's figures. Version counts are exact. */
+    last24Hours: {
+      from: string;
+      fetches: number;
+      notModified: number;
+      versions: Array<{ version: number; fetches: number; share: number | null }>;
+      activeVersion: number | null;
+      activeVersionShare: number | null;
+    };
+    lastDay: {
+      from: string;
+      fetches: number;
+      conditions: Array<{ id: string; name: string; fetches: ConfigReachCount; share: number | null; matchedNone: boolean }>;
+    };
+  };
+};
+export type ConfigConditionReach = ConfigReach['summary']['lastDay']['conditions'][number];
 
 // --- UX Analytics (Release 8) ----------------------------------------------------
 
@@ -645,6 +764,55 @@ function crashQuery(params: Record<string, string | number | undefined>): string
 }
 
 export const api = {
+  // --- Config databases (RC-001 to RC-004) ---
+  listConfigDatabases: (projectId: string) => request<ConfigDatabase[]>(`/v1/projects/${projectId}/config-databases`),
+  createConfigDatabase: (projectId: string, name: string) =>
+    request<ConfigDatabase>(`/v1/projects/${projectId}/config-databases`, { method: 'POST', body: { name } }),
+  getConfigDatabase: (databaseId: string) => request<ConfigDatabase>(`/v1/config-databases/${databaseId}`),
+  updateConfigDatabase: (databaseId: string, patch: { name?: string; refreshIntervalMinutes?: number; deriveCountry?: boolean }) =>
+    request<ConfigDatabase>(`/v1/config-databases/${databaseId}`, { method: 'PATCH', body: patch }),
+  deleteConfigDatabase: (databaseId: string) => request<{ deleted: true }>(`/v1/config-databases/${databaseId}`, { method: 'DELETE' }),
+  configDeletionImpact: (databaseId: string) => request<ConfigDeletionImpact>(`/v1/config-databases/${databaseId}/deletion-impact`),
+
+  // --- Config draft, publishing, preview and reach (RC-050 to RC-060, RC-072) ---
+  getConfigDraft: (databaseId: string) => request<ConfigDraft>(`/v1/config-databases/${databaseId}/draft`),
+  setConfigParameter: (databaseId: string, parameter: ConfigParameter) =>
+    request<ConfigDraftChange>(`/v1/config-databases/${databaseId}/draft/parameters/${encodeURIComponent(parameter.key)}`, { method: 'PUT', body: parameter }),
+  deleteConfigParameter: (databaseId: string, key: string) =>
+    request<ConfigDraftChange>(`/v1/config-databases/${databaseId}/draft/parameters/${encodeURIComponent(key)}`, { method: 'DELETE' }),
+  setConfigCondition: (databaseId: string, condition: ConfigConditionBody) =>
+    request<ConfigDraftChange>(`/v1/config-databases/${databaseId}/draft/conditions/${condition.id}`, { method: 'PUT', body: condition }),
+  deleteConfigCondition: (databaseId: string, conditionId: string) =>
+    request<ConfigDraftChange>(`/v1/config-databases/${databaseId}/draft/conditions/${conditionId}`, { method: 'DELETE' }),
+  reorderConfigConditions: (databaseId: string, order: string[]) =>
+    request<ConfigDraftChange>(`/v1/config-databases/${databaseId}/draft/conditions/order`, { method: 'PUT', body: { order } }),
+  reshuffleConfigCondition: (databaseId: string, conditionId: string) =>
+    request<ConfigDraftChange>(`/v1/config-databases/${databaseId}/draft/conditions/${conditionId}/reshuffle`, { method: 'POST' }),
+  diffConfig: (databaseId: string, from: ConfigSource = 'active', to: ConfigSource = 'draft') =>
+    request<ConfigDiff>(`/v1/config-databases/${databaseId}/diff?from=${from}&to=${to}`),
+  listConfigVersions: (databaseId: string, limit = 50, cursor?: string) =>
+    request<{ versions: ConfigVersion[]; nextCursor: string | null }>(`/v1/config-databases/${databaseId}/versions?limit=${limit}${cursor ? `&cursor=${cursor}` : ''}`),
+  getConfigVersion: (databaseId: string, number: number) =>
+    request<ConfigVersion & { template: ConfigTemplate }>(`/v1/config-databases/${databaseId}/versions/${number}`),
+  publishConfig: (databaseId: string, revision: number, note?: string) =>
+    request<ConfigLifecycle>(`/v1/config-databases/${databaseId}/publish`, { method: 'POST', body: { revision, ...(note ? { note } : {}) } }),
+  previewConfig: (databaseId: string, context: ConfigContextBody, source: ConfigSource) =>
+    request<ConfigPreview>(`/v1/config-databases/${databaseId}/preview`, { method: 'POST', body: { context, source } }),
+  getConfigReach: (databaseId: string) => request<ConfigReach>(`/v1/config-databases/${databaseId}/reach`),
+
+  // --- Config history (RC-054 to RC-058, RC-063, RC-064) ---
+  listConfigActivity: (databaseId: string, cursor?: string) =>
+    request<{ activity: ConfigActivity[]; nextCursor: string | null }>(`/v1/config-databases/${databaseId}/activity?limit=50${cursor ? `&cursor=${cursor}` : ''}`),
+  rollbackConfig: (databaseId: string, version: number, note?: string) =>
+    request<ConfigLifecycle>(`/v1/config-databases/${databaseId}/rollback`, { method: 'POST', body: { version, ...(note ? { note } : {}) } }),
+  unpublishConfig: (databaseId: string, confirm: string) =>
+    request<{ activeVersion: null; unpublishedVersion: number }>(`/v1/config-databases/${databaseId}/unpublish`, { method: 'POST', body: { confirm } }),
+  copyConfigVersionToDraft: (databaseId: string, version: number) =>
+    request<ConfigDraft>(`/v1/config-databases/${databaseId}/draft/copy`, { method: 'POST', body: { version } }),
+  /** The export route as text: the template (`json`) or the defaults as TypeScript (`ts`). */
+  exportConfig: (databaseId: string, source: ConfigSource, format: 'json' | 'ts') =>
+    request<string | object>(configExportPath(databaseId, source, format)).then((body) => (typeof body === 'string' ? body : JSON.stringify(body, null, 2))),
+
   // --- Analytics databases (AN-001 to AN-005) ---
   listAnalyticsDatabases: (projectId: string) =>
     request<AnalyticsDatabase[]>(`/v1/projects/${projectId}/analytics-databases`),

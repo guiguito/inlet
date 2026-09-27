@@ -4,6 +4,8 @@ import type { Db } from '../db/index.js';
 import {
   analyticsDatabaseMemberships,
   analyticsDatabases,
+  configDatabaseMemberships,
+  configDatabases,
   crashDatabaseMemberships,
   crashDatabases,
   feedbackDatabaseMemberships,
@@ -12,6 +14,7 @@ import {
   projectMemberships,
   projects,
   type AnalyticsDatabaseRow,
+  type ConfigDatabaseRow,
   type CrashDatabaseRow,
   type FeedbackDatabaseRow,
   type ProjectCredentialRow,
@@ -364,6 +367,84 @@ export async function listAccessibleAnalyticsDatabaseIds(db: Db, principal: Prin
     .select({ id: analyticsDatabaseMemberships.analyticsDatabaseId })
     .from(analyticsDatabaseMemberships)
     .where(eq(analyticsDatabaseMemberships.userId, principal.userId));
+  return [...new Set([...viaProject, ...viaDatabase].map((row) => row.id))];
+}
+
+// --- Config databases (Release 9): the fifth scope (Foundations 10.6) -------------------
+//
+// The same questions again, asked of the config tables, for the reason given above.
+
+export type ConfigDatabaseAccess = { database: ConfigDatabaseRow; project: ProjectRow; role: Role };
+
+const configDatabaseNotFound = () => apiError('config_database_not_found', 'That config database does not exist.');
+
+/** FD-007: project Admin wins, then the config-database assignment, then the project role. */
+export async function configDatabaseRoleOf(db: Db, principal: Principal, database: ConfigDatabaseRow): Promise<Role | null> {
+  const projectRole = await projectRoleOf(db, principal, database.projectId);
+  if (principal.kind === 'credential') return projectRole;
+  if (projectRole === 'admin') return 'admin';
+
+  const rows = await db
+    .select({ role: configDatabaseMemberships.role })
+    .from(configDatabaseMemberships)
+    .where(and(eq(configDatabaseMemberships.configDatabaseId, database.id), eq(configDatabaseMemberships.userId, principal.userId)))
+    .limit(1);
+  return effectiveRole(projectRole, rows[0]?.role ?? null);
+}
+
+/**
+ * Remote Config 7.3: reading needs Viewer, editing, publishing and renaming Creator, the
+ * delivery settings and deletion a database or project Admin.
+ */
+export async function requireConfigDatabase(db: Db, principal: Principal, databaseId: string, required: Role): Promise<ConfigDatabaseAccess> {
+  const [found] = await db
+    .select({ database: configDatabases, project: projects })
+    .from(configDatabases)
+    .innerJoin(projects, eq(projects.id, configDatabases.projectId))
+    .where(eq(configDatabases.id, databaseId))
+    .limit(1);
+  if (!found) throw configDatabaseNotFound();
+
+  const role = await configDatabaseRoleOf(db, principal, found.database);
+  if (role === null) throw configDatabaseNotFound();
+  if (!roleAtLeast(role, required)) {
+    throw errors.forbidden(`This action needs the ${required} role on this config database.`);
+  }
+  return { database: found.database, project: found.project, role };
+}
+
+/**
+ * RC-040, 7.1: the fetch takes any project credential, publishable or secret, for a config
+ * database of that credential's project, and answers an unknown or foreign one alike.
+ */
+export async function requireClientConfigDatabase(db: Db, credential: ProjectCredentialRow, databaseId: string): Promise<ConfigDatabaseRow> {
+  const [database] = await db
+    .select()
+    .from(configDatabases)
+    .where(and(eq(configDatabases.id, databaseId), eq(configDatabases.projectId, credential.projectId)))
+    .limit(1);
+  if (!database) {
+    throw apiError('config_database_inaccessible', 'That config database does not belong to this API key’s project.');
+  }
+  return database;
+}
+
+/** Config databases the principal can at least view, for listing endpoints. */
+export async function listAccessibleConfigDatabaseIds(db: Db, principal: Principal): Promise<string[]> {
+  if (principal.kind === 'credential') {
+    if (principal.credential.type !== 'secret') return [];
+    const rows = await db.select({ id: configDatabases.id }).from(configDatabases).where(eq(configDatabases.projectId, principal.credential.projectId));
+    return rows.map((row) => row.id);
+  }
+  const viaProject = await db
+    .select({ id: configDatabases.id })
+    .from(configDatabases)
+    .innerJoin(projectMemberships, eq(projectMemberships.projectId, configDatabases.projectId))
+    .where(eq(projectMemberships.userId, principal.userId));
+  const viaDatabase = await db
+    .select({ id: configDatabaseMemberships.configDatabaseId })
+    .from(configDatabaseMemberships)
+    .where(eq(configDatabaseMemberships.userId, principal.userId));
   return [...new Set([...viaProject, ...viaDatabase].map((row) => row.id))];
 }
 

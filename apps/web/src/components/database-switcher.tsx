@@ -52,7 +52,12 @@ export function DatabaseSwitcher({
     queryFn: () => api.listAnalyticsDatabases(projectId),
     enabled: open,
   });
-  const typesShown = [siblings, crashSiblings, analyticsSiblings].filter((query) => (query.data?.length ?? 0) > 0).length;
+  const configSiblings = useQuery({
+    queryKey: ['config-databases', projectId],
+    queryFn: () => api.listConfigDatabases(projectId),
+    enabled: open,
+  });
+  const typesShown = [siblings, crashSiblings, analyticsSiblings, configSiblings].filter((query) => (query.data?.length ?? 0) > 0).length;
 
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
@@ -114,7 +119,18 @@ export function DatabaseSwitcher({
             </Link>
           </DropdownMenuItem>
         ))}
-        {siblings.isLoading || crashSiblings.isLoading || analyticsSiblings.isLoading ? (
+        {(configSiblings.data?.length ?? 0) > 0 ? (
+          <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">Remote config</DropdownMenuLabel>
+        ) : null}
+        {configSiblings.data?.map((sibling) => (
+          <DropdownMenuItem key={sibling.id} asChild>
+            <Link to={`/config-databases/${sibling.id}`}>
+              {sibling.id === databaseId ? <CheckIcon /> : <span aria-hidden="true" className="size-4" />}
+              <span className="truncate">{sibling.name}</span>
+            </Link>
+          </DropdownMenuItem>
+        ))}
+        {siblings.isLoading || crashSiblings.isLoading || analyticsSiblings.isLoading || configSiblings.isLoading ? (
           <DropdownMenuItem disabled>Loading</DropdownMenuItem>
         ) : null}
         <DropdownMenuSeparator />

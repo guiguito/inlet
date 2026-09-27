@@ -46,13 +46,16 @@ export type AccessScope =
   /** FD-007: a crash database; the API calls route on the `cdb_` prefix. */
   | { kind: 'crashDatabase'; databaseId: string; name: string }
   /** FD-007: an analytics database; the API calls route on the `adb_` prefix. */
-  | { kind: 'analyticsDatabase'; databaseId: string; name: string };
+  | { kind: 'analyticsDatabase'; databaseId: string; name: string }
+  /** Foundations 10.6: a config database; the API calls route on the `cfg_` prefix. */
+  | { kind: 'configDatabase'; databaseId: string; name: string };
 
 const SCOPE_NOUN: Record<AccessScope['kind'], string> = {
   project: 'project',
   feedbackDatabase: 'feedback database',
   crashDatabase: 'crash database',
   analyticsDatabase: 'analytics database',
+  configDatabase: 'config database',
 };
 
 const ROLE_HELP: Record<Role, string> = {

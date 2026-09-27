@@ -223,6 +223,38 @@ test.describe('the MCP server', () => {
           'erase_identity',
           'export_analytics_events',
           'preview_erasure',
+          // Remote Config (Remote Config PRD section 8.3): the database tools of Release 9's piece 2.
+          'create_config_database',
+          'delete_config_database',
+          'get_config_database',
+          'list_config_databases',
+          'update_config_database',
+          // Publishing and history, piece 4.
+          'copy_config_version_to_draft',
+          'diff_config',
+          'export_config_history',
+          'get_config_version',
+          'list_config_activity',
+          'list_config_versions',
+          'publish_config',
+          'rollback_config',
+          'unpublish_config',
+          // The draft tools of piece 3.
+          'delete_config_condition',
+          'delete_config_parameter',
+          'export_config_defaults',
+          'export_config_template',
+          'get_config_draft',
+          'import_config_template',
+          'reorder_config_conditions',
+          'reshuffle_config_condition',
+          'save_config_draft',
+          'set_config_condition',
+          'set_config_parameter',
+          'validate_config_draft',
+          // Preview and reach, piece 5.
+          'preview_config',
+          'get_config_reach',
         ].sort(),
       );
 

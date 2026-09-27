@@ -107,3 +107,37 @@ describe('the analytics operator limits', () => {
     expect(parseOperatorLimits({ INLET_ANALYTICS_MAX_AGE_DAYS_DEFAULT: '30' }).analyticsMaxAgeDaysDefault).toBe(30);
   });
 });
+
+/** Foundations FD-032: the Remote Config rows of OPERATOR_LIMITS (Remote Config section 14, RC-002, RC-046). */
+describe('the config operator limits', () => {
+  it('default to section 14 of the Remote Config PRD', () => {
+    expect(parseOperatorLimits({})).toMatchObject({
+      configRefreshMinutesMin: 5,
+      configRefreshMinutesMax: 1_440,
+      configRefreshMinutesDefault: 60,
+      configFetchPerKeyFiveMinutes: 900_000,
+      configFetchPerKeyHour: 9_000_000,
+      configFetchPerInstallationFiveMinutes: 30,
+      configFetchPerAddressPerMinute: 6_000,
+    });
+  });
+
+  it('takes an override within the hard limits', () => {
+    const limits = parseOperatorLimits({ INLET_CONFIG_REFRESH_MINUTES_MIN: '1', INLET_CONFIG_REFRESH_MINUTES_MAX: '10080', INLET_LIMIT_CONFIG_PER_INSTALLATION_5M: '60' });
+    expect(limits).toMatchObject({ configRefreshMinutesMin: 1, configRefreshMinutesMax: 10_080, configFetchPerInstallationFiveMinutes: 60 });
+  });
+
+  it('refuses a value outside its hard limits, naming it', () => {
+    expect(() => parseOperatorLimits({ INLET_CONFIG_REFRESH_MINUTES_MAX: '10081' })).toThrow(/INLET_CONFIG_REFRESH_MINUTES_MAX: must be an integer from 1 to 10080/);
+    expect(() => parseOperatorLimits({ INLET_CONFIG_REFRESH_MINUTES_MIN: '0' })).toThrow(/INLET_CONFIG_REFRESH_MINUTES_MIN/);
+    expect(() => parseOperatorLimits({ INLET_LIMIT_CONFIG_PER_KEY_5M: '999' })).toThrow(/INLET_LIMIT_CONFIG_PER_KEY_5M/);
+    expect(() => parseOperatorLimits({ INLET_LIMIT_CONFIG_PER_INSTALLATION_5M: '4' })).toThrow(/INLET_LIMIT_CONFIG_PER_INSTALLATION_5M/);
+    expect(() => parseOperatorLimits({ INLET_LIMIT_CONFIG_PER_ADDRESS_PER_MINUTE: 'lots' })).toThrow(/INLET_LIMIT_CONFIG_PER_ADDRESS_PER_MINUTE/);
+  });
+
+  it('keeps MIN ≤ DEFAULT ≤ MAX for the refresh interval', () => {
+    expect(() => parseOperatorLimits({ INLET_CONFIG_REFRESH_MINUTES_DEFAULT: '2' })).toThrow(/INLET_CONFIG_REFRESH_MINUTES_\*: MIN ≤ DEFAULT ≤ MAX/);
+    expect(() => parseOperatorLimits({ INLET_CONFIG_REFRESH_MINUTES_MAX: '30' })).toThrow(/INLET_CONFIG_REFRESH_MINUTES_\*/);
+    expect(parseOperatorLimits({ INLET_CONFIG_REFRESH_MINUTES_DEFAULT: '5' }).configRefreshMinutesDefault).toBe(5);
+  });
+});

@@ -3,12 +3,15 @@ import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { ROLES } from '@inlet/shared';
 import type { AppContext } from '../context.js';
 import { apiError } from '../lib/errors.js';
-import { requireAnalyticsDatabase, requireCrashDatabase, requireDatabase, requireProject } from '../services/access.js';
+import { requireAnalyticsDatabase, requireConfigDatabase, requireCrashDatabase, requireDatabase, requireProject } from '../services/access.js';
 import { requireManagementPrincipal } from '../services/principal.js';
 import {
   clearAnalyticsDatabaseRole,
   listAnalyticsDatabaseMembers,
   setAnalyticsDatabaseRole,
+  clearConfigDatabaseRole,
+  listConfigDatabaseMembers,
+  setConfigDatabaseRole,
   clearCrashDatabaseRole,
   clearDatabaseRole,
   listCrashDatabaseMembers,
@@ -543,6 +546,119 @@ export function memberRoutes(ctx: AppContext): FastifyPluginAsyncZod {
         const principal = await requireManagementPrincipal(ctx, request);
         await requireAnalyticsDatabase(ctx.db, principal, request.params.databaseId, 'admin');
         return revokeInvitation(ctx, request.params.invitationId, { kind: 'analyticsDatabase', analyticsDatabaseId: request.params.databaseId });
+      },
+    );
+
+    // --- Config databases: the fifth scope (Foundations 10.6) ----------------
+
+    app.get(
+      '/config-databases/:databaseId/members',
+      {
+        schema: {
+          tags: ['Access'],
+          summary: 'List who can reach one config database',
+          params: databaseIdParam,
+          response: { 200: z.array(memberSchema), ...errorsFor(401, 403, 404) },
+        },
+      },
+      async (request) => {
+        const principal = await requireManagementPrincipal(ctx, request);
+        await requireConfigDatabase(ctx.db, principal, request.params.databaseId, 'viewer');
+        return listConfigDatabaseMembers(ctx, request.params.databaseId);
+      },
+    );
+
+    app.put(
+      '/config-databases/:databaseId/members/:userId',
+      {
+        schema: {
+          tags: ['Access'],
+          summary: 'Assign a role on one config database',
+          params: databaseIdParam.extend({ userId: z.string().min(1) }),
+          body: setRoleBodySchema,
+          response: { 200: memberSchema, ...errorsFor(400, 401, 403, 404) },
+        },
+      },
+      async (request) => {
+        const principal = await requireManagementPrincipal(ctx, request);
+        await requireConfigDatabase(ctx.db, principal, request.params.databaseId, 'admin');
+        return setConfigDatabaseRole(ctx, request.params.databaseId, request.params.userId, request.body.role);
+      },
+    );
+
+    app.delete(
+      '/config-databases/:databaseId/members/:userId',
+      {
+        schema: {
+          tags: ['Access'],
+          summary: 'Clear a config-database assignment',
+          params: databaseIdParam.extend({ userId: z.string().min(1) }),
+          response: { 200: okSchema, ...errorsFor(401, 403, 404) },
+        },
+      },
+      async (request) => {
+        const principal = await requireManagementPrincipal(ctx, request);
+        await requireConfigDatabase(ctx.db, principal, request.params.databaseId, 'admin');
+        await clearConfigDatabaseRole(ctx, request.params.databaseId, request.params.userId);
+        return { ok: true as const };
+      },
+    );
+
+    app.get(
+      '/config-databases/:databaseId/invitations',
+      {
+        schema: {
+          tags: ['Access'],
+          summary: 'List a config database’s invitations',
+          params: databaseIdParam,
+          response: { 200: z.array(invitationSchema), ...errorsFor(401, 403, 404) },
+        },
+      },
+      async (request) => {
+        const principal = await requireManagementPrincipal(ctx, request);
+        await requireConfigDatabase(ctx.db, principal, request.params.databaseId, 'admin');
+        return listInvitations(ctx, { kind: 'configDatabase', configDatabaseId: request.params.databaseId });
+      },
+    );
+
+    app.post(
+      '/config-databases/:databaseId/invitations',
+      {
+        schema: {
+          tags: ['Access'],
+          summary: 'Invite someone to one config database',
+          params: databaseIdParam,
+          body: createInvitationBodySchema,
+          response: { 201: invitationWithLinkSchema, ...errorsFor(400, 401, 403, 404) },
+        },
+      },
+      async (request, reply) => {
+        const principal = await requireManagementPrincipal(ctx, request);
+        await requireConfigDatabase(ctx.db, principal, request.params.databaseId, 'admin');
+        const created = await createInvitation(
+          ctx,
+          { kind: 'configDatabase', configDatabaseId: request.params.databaseId },
+          request.body.role,
+          principal.kind === 'user' ? principal.userId : null,
+        );
+        return reply.code(201).send({ ...created.invitation, token: created.token, url: invitationUrl(ctx, created.token) });
+      },
+    );
+
+    app.post(
+      '/config-databases/:databaseId/invitations/:invitationId/revoke',
+      {
+        schema: {
+          tags: ['Access'],
+          summary: 'Revoke an unredeemed config-database invitation',
+          params: databaseIdParam.extend({ invitationId: z.string().min(1) }),
+          response: { 200: invitationSchema, ...errorsFor(401, 403, 404, 409) },
+        },
+      },
+      async (request) => {
+        const principal = await requireManagementPrincipal(ctx, request);
+        await requireConfigDatabase(ctx.db, principal, request.params.databaseId, 'admin');
+        return revokeInvitation(ctx, request.params.invitationId, { kind: 'configDatabase', configDatabaseId: request.params.databaseId });
       },
     );
 

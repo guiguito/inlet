@@ -676,7 +676,8 @@ export function checkTemplateForSave(raw: unknown): ConfigCheckResult {
     };
   });
 
-  if (valuesBounded && serializedBytes(raw) > CONFIG_LIMITS.templateMaxBytes) {
+  // RC-019's "a draft past 2 MiB": measured as stored, with the defaults filled in, so an accepted draft stays editable and its export imports.
+  if (valuesBounded && serializedBytes({ parameters, conditions }) > CONFIG_LIMITS.templateMaxBytes) {
     add({ path: '', code: 'template_too_large', message: 'A template is at most 2 MiB serialized.' });
   }
   return problems.length > 0 ? { ok: false, problems } : { ok: true, template: { parameters, conditions } };

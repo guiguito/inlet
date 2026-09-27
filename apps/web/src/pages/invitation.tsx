@@ -112,6 +112,7 @@ const SCOPE_LABEL: Record<InvitationPreview['scope'], string> = {
   feedback_database: 'feedback database',
   crash_database: 'crash database',
   analytics_database: 'analytics database',
+  config_database: 'config database',
 };
 
 function RedeemCard({

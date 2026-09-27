@@ -129,6 +129,24 @@ export const ERROR_STATUS = {
   /** FD-022: a destructive action whose echoed name or ID does not match. */
   confirmation_mismatch: 400,
 
+  // --- Remote Config (Release 9, Remote Config PRD section 7.4) --------------
+  config_database_not_found: 404,
+  /** The fetch route answers this for an unknown database and a foreign one alike. */
+  config_database_inaccessible: 403,
+  /** A save, an import or a publish outside sections 6.2 and 6.3, with each problem's path. */
+  config_template_invalid: 400,
+  config_version_not_found: 404,
+  config_parameter_not_found: 404,
+  config_condition_not_found: 404,
+  /** An order that does not list every condition of the draft exactly once. */
+  config_condition_order_mismatch: 400,
+  /** RC-004: a publish or rollback beyond 10,000 versions. */
+  config_version_limit: 409,
+  /** An unpublish with no active version. */
+  config_not_published: 409,
+  /** RC-002: a delivery setting outside the deployment's bounds, which the message and details name. */
+  setting_out_of_bounds: 400,
+
   // --- Notifications -------------------------------------------------------
   /**
    * Slack refused a message. The Slack error string travels in the message and the

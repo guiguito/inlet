@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ANALYTICS_DEFAULTS as A, DEFAULT_SLACK_WEBHOOK_ORIGIN } from '@inlet/shared';
+import { ANALYTICS_DEFAULTS as A, CONFIG_DEFAULTS as C, DEFAULT_SLACK_WEBHOOK_ORIGIN } from '@inlet/shared';
 
 /**
  * Deployment configuration (PRD section 12.6).
@@ -227,6 +227,21 @@ export const OPERATOR_LIMITS = {
   analyticsQueryThreads: { env: 'INLET_ANALYTICS_QUERY_THREADS', default: 0, min: 0, max: 256 },
   /** AN-184: the bound within which erased events leave the event store's files. The operator may only shorten it. */
   analyticsErasureFileRemovalDays: { env: 'INLET_ANALYTICS_ERASURE_BOUND_DAYS', default: A.erasureFileRemovalDays, min: 1, max: A.erasureFileRemovalDays },
+
+  // --- Remote Config (section 14's defaults; DECISIONS 34.2 justifies each hard limit) ---
+  /**
+   * RC-002: the refresh interval's bounds and the default a new database starts at, in
+   * minutes. One minute to one week: shorter would make every installation a steady load,
+   * longer would leave a kill switch that is not live unapplied for days.
+   */
+  configRefreshMinutesMin: { env: 'INLET_CONFIG_REFRESH_MINUTES_MIN', default: C.refreshIntervalMinutesMin, min: 1, max: 10_080 },
+  configRefreshMinutesMax: { env: 'INLET_CONFIG_REFRESH_MINUTES_MAX', default: C.refreshIntervalMinutesMax, min: 1, max: 10_080 },
+  configRefreshMinutesDefault: { env: 'INLET_CONFIG_REFRESH_MINUTES_DEFAULT', default: C.refreshIntervalMinutes, min: 1, max: 10_080 },
+  /** RC-046, FR-088: the fetch, counted in requests. Piece 5 applies them. */
+  configFetchPerKeyFiveMinutes: { env: 'INLET_LIMIT_CONFIG_PER_KEY_5M', default: 900_000, min: 1_000, max: 100_000_000 },
+  configFetchPerKeyHour: { env: 'INLET_LIMIT_CONFIG_PER_KEY_HOUR', default: 9_000_000, min: 1_000, max: 1_000_000_000 },
+  configFetchPerInstallationFiveMinutes: { env: 'INLET_LIMIT_CONFIG_PER_INSTALLATION_5M', default: 30, min: 5, max: 100_000 },
+  configFetchPerAddressPerMinute: { env: 'INLET_LIMIT_CONFIG_PER_ADDRESS_PER_MINUTE', default: 6_000, min: 60, max: 1_000_000 },
 } as const;
 
 export type OperatorLimits = { -readonly [K in keyof typeof OPERATOR_LIMITS]: number };
@@ -254,6 +269,7 @@ export function parseOperatorLimits(source: NodeJS.ProcessEnv): OperatorLimits {
     ['INLET_ANALYTICS_MAX_AGE_DAYS', out.analyticsMaxAgeDaysMin, out.analyticsMaxAgeDaysDefault, out.analyticsMaxAgeDaysMax],
     ['INLET_ANALYTICS_MAX_EVENTS', out.analyticsMaxEventsMin, out.analyticsMaxEventsDefault, out.analyticsMaxEventsMax],
     ['INLET_ANALYTICS_LATENESS_DAYS', out.analyticsLatenessDaysMin, out.analyticsLatenessDaysDefault, out.analyticsLatenessDaysMax],
+    ['INLET_CONFIG_REFRESH_MINUTES', out.configRefreshMinutesMin, out.configRefreshMinutesDefault, out.configRefreshMinutesMax],
   ] as const) {
     if (problems.length === 0 && !(min <= def && def <= max)) {
       problems.push(`  ${prefix}_*: MIN ≤ DEFAULT ≤ MAX must hold; got ${min}, ${def}, ${max}`);

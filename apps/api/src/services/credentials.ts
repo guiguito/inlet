@@ -5,6 +5,7 @@ import { projectCredentials, type ProjectCredentialRow } from '../db/schema.js';
 import { apiError, errors } from '../lib/errors.js';
 import { randomToken, sha256 } from '../lib/crypto.js';
 import { PUBLISHABLE_PREFIX, SECRET_PREFIX } from './access.js';
+import { forgetCredential } from './config-delivery.js';
 
 /**
  * Project credentials (FR-080 to FR-088).
@@ -160,6 +161,8 @@ export async function rotateCredential(
     .returning();
   const row = updated[0];
   if (!row) throw errors.credentialNotFound();
+  // RC-047: the config fetch's cache of credentials forgets the old value at once.
+  forgetCredential(credentialId);
   return { ...toView(row), secret: minted.value };
 }
 
@@ -181,5 +184,6 @@ export async function revokeCredential(
     )
     .returning();
   if (!updated[0]) throw errors.credentialNotFound();
+  forgetCredential(credentialId);
   return toView(updated[0]);
 }

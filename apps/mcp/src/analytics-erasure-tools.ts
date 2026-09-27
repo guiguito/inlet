@@ -5,7 +5,7 @@ import { InletClient, InletError } from './client.js';
 
 /**
  * The project's erasure of an installation or user ID (Foundations FD-033, FD-020, FD-022; UX
- * Analytics 8.3, AN-183 to AN-185, AN-203) and the event export (AN-210, AN-204). Each tool is one
+ * Analytics 8.3, AN-183 to AN-185, AN-203; Remote Config RC-100) and the event export (AN-210, AN-204). Each tool is one
  * authenticated HTTP request (FD-021); the secret key carries project Admin authority, so the
  * erasure covers every database of its project.
  */
@@ -19,7 +19,7 @@ const PAGE = 1_000;
 
 /** FD-033, AN-183, AN-184: what an erasure matches and what it does not reach, in every erasure tool's description. */
 const ERASURE_SEMANTICS =
-  'It matches the identity fields only — the installation ID and the user ID the SDK attaches to crash reports, submissions and analytics events — and not IDs placed in clientContext, a crash report’s context or event params. Erasing a user ID also erases, in each analytics database, its server installation and every installation on which it is the only user ID ever seen, and the crash reports and submissions carrying those installations’ IDs (reports sent before sign-in included). Erasure does not stop an application from sending the same IDs again — an application stops with setEnabled(false, {forget: true}) — and it does not reach backups, past exports or messages already sent to Slack. It works without the analytics event store: an analytics database it cannot reach is named, and an erasure selected there applies once the store answers.';
+  'It matches the identity fields only — the installation ID and the user ID the SDK attaches to crash reports, submissions and analytics events — and not IDs placed in clientContext, a crash report’s context or event params. Erasing a user ID also erases, in each analytics database, its server installation and every installation on which it is the only user ID ever seen, and the crash reports and submissions carrying those installations’ IDs (reports sent before sign-in included). Erasure does not stop an application from sending the same IDs again — an application stops with setEnabled(false, {forget: true}) — and it does not reach backups, past exports or messages already sent to Slack. It works without the analytics event store: an analytics database it cannot reach is named, and an erasure selected there applies once the store answers. A config database holds no ID from a fetch, only IDs a team wrote into its rules: there the erasure removes the ID from every rule of the draft and of every version that names it (an equals rule becomes an empty in list, a notEquals rule an empty notIn list), each version otherwise unchanged and the active version still active and served rewritten at once; the draft’s revision is incremented, so a publish of the revision reviewed before is refused as stale_draft_revision.';
 
 function json(value: unknown): CallToolResult {
   return { content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] };
@@ -47,7 +47,7 @@ export function registerAnalyticsErasureTools(server: McpServer, client: InletCl
     {
       title: 'Preview the erasure of an installation or user ID',
       description: [
-        'FD-033, AN-183. What erasing the ID would delete in each crash, feedback and analytics database of the project: `reports` and `groupUsers` (the user ID’s group-user associations) in a crash database, `submissions` and `attachments` in a feedback database, `events` and `installations` in an analytics database, whose `status` is `unreachable` when the event store could not be asked.',
+        'FD-033, AN-183, RC-100. What erasing the ID would delete in each crash, feedback, analytics and config database of the project: `reports` and `groupUsers` (the user ID’s group-user associations) in a crash database, `submissions` and `attachments` in a feedback database, `events` and `installations` in an analytics database, whose `status` is `unreachable` when the event store could not be asked, and `draftRules` and `versionRules` (the rules naming the ID in the draft and across the versions) in a config database.',
         ERASURE_SEMANTICS,
         'Read-only. Call it before erase_identity, and pass the database IDs to erase in from its answer.',
       ].join(' '),
@@ -62,7 +62,7 @@ export function registerAnalyticsErasureTools(server: McpServer, client: InletCl
     {
       title: 'Erase an installation or user ID across the project',
       description: [
-        'FD-033, AN-183 to AN-185. Permanently deletes what preview_erasure lists, in the databases named in `databases`. Pass the same ID again as `confirm` (confirmation_mismatch otherwise). Crash reports and submissions go at once; analytics events are unreadable when it answers and leave the event store within the deployment’s bound, 30 days by default. Events the same IDs send afterwards are kept. Answers what it deleted per database; `deferred` for an analytics database the event store could not reach. Recorded with its actor, time and counts, never the ID.',
+        'FD-033, AN-183 to AN-185, RC-100. Permanently deletes what preview_erasure lists, and rewrites the config rules it counts, in the databases named in `databases`. Pass the same ID again as `confirm` (confirmation_mismatch otherwise). Crash reports and submissions go at once; analytics events are unreadable when it answers and leave the event store within the deployment’s bound, 30 days by default. Events the same IDs send afterwards are kept. Answers what it deleted per database; `deferred` for an analytics database the event store could not reach. Recorded with its actor, time and counts, never the ID.',
         ERASURE_SEMANTICS,
       ].join(' '),
       inputSchema: {

@@ -145,8 +145,8 @@ Every setting is an environment variable. Two are required and have no default.
 
 ### Operator limits
 
-The limits of the collection routes, the bounds of crash retention and the analytics
-limits and storage settings are platform defaults that people using Inlet cannot change.
+The limits of the collection routes, the bounds of crash retention, the analytics
+limits and storage settings, and the Remote Config refresh interval and fetch limits are platform defaults that people using Inlet cannot change.
 You, the operator, can, through the variables below (Foundations FD-032). A value outside the hard limits stops the server at
 startup with a message naming the variable, as does a set of retention bounds whose
 minimum, default and maximum are out of order. Leave a variable unset to keep its default.
@@ -196,6 +196,13 @@ in memory on the API process (see Health and observability).
 | `INLET_ANALYTICS_QUERY_MEMORY_BYTES` | `805306368` (768 MiB) | 64 MiB to 1 TiB | Memory limit of an analytics query. Sized for the Small host, whose ClickHouse is capped at about 3 GB: three slots use 2.25 GiB and leave the rest to inserts and merges. The Overview runs seven statements at once in its slot and gives each a seventh of this limit, past half of which it spills to the temporary disk (below). Raise it to about 8 GB on the reference host |
 | `INLET_ANALYTICS_QUERY_THREADS` | `0` | 0 to 256 | Threads per analytics query; the Overview divides them among the seven statements it runs at once, at least one each, so below 7 its slot uses 7. `0` means half of what the event store reports as its own `max_threads`, its cores by default |
 | `INLET_ANALYTICS_ERASURE_BOUND_DAYS` | `30` | 1 to 30 | Days within which erased analytics events leave the event store's files ([Erasure on disk](#erasure-on-disk)). The worker forces the rewrite of the partitions still carrying them once half of it has passed. You may only shorten it |
+| `INLET_CONFIG_REFRESH_MINUTES_MIN` | `5` | 1 to 10,080 | Shortest refresh interval a team may set on a config database, in minutes |
+| `INLET_CONFIG_REFRESH_MINUTES_MAX` | `1440` | 1 to 10,080 | Longest refresh interval a team may set, in minutes (10,080 is a week) |
+| `INLET_CONFIG_REFRESH_MINUTES_DEFAULT` | `60` | 1 to 10,080 | Refresh interval of a new config database |
+| `INLET_LIMIT_CONFIG_PER_KEY_5M` | `900000` | 1,000 to 100,000,000 | Config fetches per key per 5 minutes, all of an application's installations together |
+| `INLET_LIMIT_CONFIG_PER_KEY_HOUR` | `9000000` | 1,000 to 1,000,000,000 | Config fetches per key per hour |
+| `INLET_LIMIT_CONFIG_PER_INSTALLATION_5M` | `30` | 5 to 100,000 | Config fetches per installation per 5 minutes |
+| `INLET_LIMIT_CONFIG_PER_ADDRESS_PER_MINUTE` | `6000` | 60 to 1,000,000 | Config fetch requests per client address per minute, applied only behind a trusted proxy |
 
 Narrowing the retention bounds rewrites nobody's setting. A crash database whose stored
 cap or age now falls outside them is enforced at the nearest bound, and its retention
@@ -204,7 +211,40 @@ settings follow the same rule: narrowing their bounds rewrites no database, and 
 reports the value enforced. The analytics limits (event names, param keys, categories) are
 the deployment's, not a database's: every analytics database reports and applies your
 current values. The three storage triples must each keep MIN ≤ DEFAULT ≤ MAX, and the default
-lateness must not exceed the default maximum age, or the server refuses to start.
+lateness must not exceed the default maximum age, or the server refuses to start. The config
+refresh interval follows the same rules: its triple keeps MIN ≤ DEFAULT ≤ MAX, and narrowing
+the bounds rewrites no database; each reports, and is fetched at, its interval at the
+nearest bound. The fetch limits are enforced by the fetch route; see [The config
+fetch](#the-config-fetch).
+
+### The config fetch
+
+Every installation of an application fetches its configuration at each launch and every
+refresh interval, so the fetch route is built to answer from memory (Remote Config PRD 9.4):
+
+- **Limits, in fetches.** Per key over five minutes and the hour
+  (`INLET_LIMIT_CONFIG_PER_KEY_5M`, `…_HOUR`), set well above a fleet's peak because every
+  installation shares the publishable key; per installation ID over five minutes
+  (`INLET_LIMIT_CONFIG_PER_INSTALLATION_5M`), a noise control against one looping device.
+  The route is exempt from the platform's ceiling of 1,000 requests a minute per key.
+- **The per-address ceiling** (`INLET_LIMIT_CONFIG_PER_ADDRESS_PER_MINUTE`, 6,000 a minute)
+  applies only behind a trusted proxy (`INLET_TRUSTED_PROXIES`), and is counted apart from
+  analytics ingest's. Without one it is off and startup says so once.
+- **Country.** A rule on `country` uses the header your proxy names in
+  `INLET_COUNTRY_HEADER` (Cloudflare's `CF-IPCountry`, for one), believed only behind a
+  trusted proxy, else the bundled IP-to-country database. Each config database can turn
+  derivation off; the address is used for the lookup and never stored or logged.
+- **What one instance holds in memory**: credentials and config databases for ten seconds
+  (so a key revoked or a database deleted on another instance takes effect within ten
+  seconds; on the instance that made the change, at once), each active version compiled, up
+  to 64 MiB of answers ready to send (compressed once per encoding), the rate-limit counters
+  and the reach counts, written to PostgreSQL every ten seconds. A restart empties it all and
+  loses at most the last ten seconds of reach counts; nothing else is lost.
+- **The growth path, documented, not built.** Inlet runs one API instance. The fetch path
+  holds nothing but caches, so a second instance needs only to learn of a publish and of an
+  erasure (through PostgreSQL `LISTEN`/`NOTIFY`; reading one version number a second would miss
+  an erasure, which rewrites a version without changing its number) and a shared rate-limit
+  store. Until then, run one instance.
 
 ### Analytics event store
 
@@ -281,8 +321,11 @@ every request would seem to come from the proxy and one ceiling would refuse the
 The per-key and per-installation limits, counted in events, apply either way. The trusted
 proxy is also what makes Inlet believe a country header (below).
 
+The config fetch has a ceiling of its own, `INLET_LIMIT_CONFIG_PER_ADDRESS_PER_MINUTE`, under
+the same rule ([The config fetch](#the-config-fetch)).
+
 **Do not add CORS headers at the proxy.** Inlet sets them itself, on crash ingest, analytics
-ingest (`POST` only), the four feedback collection routes and `/v1/health`, so that the
+ingest and the config fetch (`POST` only), the four feedback collection routes and `/v1/health`, so that the
 browser SDK can report from an integrator's own site.
 An `add_header 'Access-Control-Allow-Origin' '*'` on top of Inlet's produces two identical
 headers, which browsers reject as invalid, and it would open every other route as well. A

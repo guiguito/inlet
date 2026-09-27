@@ -39,7 +39,10 @@ describe('erasure and event export tools', () => {
       expect(description).toContain('clientContext');
       expect(description).toContain('setEnabled(false, {forget: true})');
       expect(description).toContain('backups, past exports or messages already sent to Slack');
+      // RC-100: what the erasure does in a config database.
+      expect(description).toContain('the active version still active');
     }
+    expect(configs.get('preview_erasure')!.description).toContain('`draftRules` and `versionRules`');
     expect(configs.get('erase_identity')!.annotations).toMatchObject({ destructiveHint: true });
     expect(configs.get('preview_erasure')!.annotations).toMatchObject({ readOnlyHint: true });
     expect(configs.get('export_analytics_events')!.description).toContain('1,000 per call');

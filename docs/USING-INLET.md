@@ -13,6 +13,7 @@ For the person collecting the feedback. If you are deploying it, read
 - [Slack notifications](#slack-notifications)
 - [Crash reports](#crash-reports)
 - [Analytics databases](#analytics-databases)
+- [Config databases](#config-databases)
 - [Honouring an erasure request](#honouring-an-erasure-request)
 - [Sharing access](#sharing-access)
 - [Exporting and deleting](#exporting-and-deleting)
@@ -34,6 +35,8 @@ application instead of answers from a person. They sit beside the feedback datab
 the project page, share its API keys and access rules, and are described in
 [Crash reports](#crash-reports). And it can hold **analytics databases**, which count how
 an application is used from the events it sends; see [Analytics databases](#analytics-databases).
+And it can hold **config databases**, which hold the values its apps fetch at launch, and
+who gets which; see [Config databases](#config-databases).
 
 Access is granted at either the project or the feedback-database level, so you can let
 someone read one form's responses without seeing the rest of the project.
@@ -818,6 +821,337 @@ hour."), links to Settings → Storage, and says when it resolves how long it la
 events it affected. It never carries an installation ID, a user ID, a session ID, an event
 name, a param, an attribution or an experiment variant.
 
+## Config databases
+
+A config database is remote configuration for one product: the switches, limits, copy and
+settings its apps read at launch, changed from Inlet without shipping a release. Each value
+is a **parameter** with a default, and **conditions** (a version range, a platform, a
+country, a percentage of installations, a list of user IDs) can give it another value for
+some of your users. You edit a draft and publish it as a numbered version; apps receive the
+values the active version resolves for them, and nothing else. Environments are projects:
+keep a staging config in a staging project.
+
+Release 9 is arriving in pieces. Creating a config database, its settings and the
+**Parameters** tab (editing, previewing and publishing the draft) work now; the draft can
+also be edited, published, rolled back and unpublished through the API and MCP. The History
+and Integrate tabs come next.
+
+### How a config is built
+
+If you have never used remote configuration, this is the whole model.
+
+- **Parameters** are the values your app reads: a key (`new_checkout`), a type (string,
+  number, boolean or JSON) and a **default**, the value everyone gets unless a condition says
+  otherwise. A parameter can be marked **live**, which makes a running app apply a change as
+  soon as it fetches it (a kill switch); other changes wait for the app's next launch.
+- **Conditions** are named tests on what the app says about itself when it fetches: its
+  version, platform, locale, country, user ID, installation, custom attributes, or a
+  percentage of installations or users. A **match** condition is true when all its rules
+  are. A parameter can hold one value per condition ("Beta testers → true").
+- **The first true condition wins.** Conditions are in one priority order, the first the
+  highest. For each parameter, the app gets the value of the first condition, in that order,
+  that is true for it and under which the parameter holds a value; if there is none, the
+  default. Put the narrow condition (a beta list) above the broad one (a 10% rollout).
+- **Splits** are conditions that divide their population among two to five **variants** by
+  weight, for an experiment: 50% `control`, 50% `annual_first`. A parameter holds a value per
+  variant it wants to change; the control variant usually holds none, so control users get
+  whatever they would have got without the split.
+- **Percentages only grow the way you expect.** Each installation or user falls in a fixed
+  bucket for each condition, so raising a rollout from 10% to 50% keeps every one of the
+  first 10% and adds more, and lowering it removes only those above the new figure.
+  **Reshuffle** draws new buckets: a different 10%.
+- **The in-app defaults** are the values your own code passes to the SDK. The app uses them
+  before its first fetch, offline, when nothing is published, and when a remote value has the
+  wrong type, so an app is never without a value. Export the draft's defaults as TypeScript
+  to keep them in step.
+- **The draft** is where all of this is edited. Every change is saved and gives the draft a
+  new revision; nothing reaches an app until the draft is published as a version. While you
+  edit, Inlet lists what would stop the draft from publishing (a value that fails its schema,
+  weights that do not add up to 100%) and warns about changes that would send apps to their
+  in-app defaults (a parameter removed, or its type changed).
+- **Targeting is not access control.** Conditions decide what an app receives, not what a
+  user may do: anyone with your publishable key can ask for the values of any user ID. Never
+  put a secret in a parameter, and never rely on a condition to protect a feature.
+
+To move a config from staging to production, export the staging draft's template and
+import it into the production database's draft: conditions keep their IDs and buckets, so
+the same installations are in the same rollout in both.
+
+### Publishing, rolling back and unpublishing
+
+Nothing reaches an app until you publish. Publishing is in the Parameters tab (see
+[Publishing](#publishing) below); rolling back and unpublishing are in the History tab (see
+[Rolling back](#rolling-back) and [Unpublishing](#unpublishing)), and all three are also in the
+API (`docs/API.md`, "Publishing and history") and over MCP (`docs/MCP.md`).
+
+- **Review, then publish.** Compare the draft with the active version (the difference: what
+  each parameter and condition was and becomes, whether the order changed) and read the
+  warnings: a parameter removed or changing type sends the apps that read it to their in-app
+  default. Then publish the revision you reviewed, with a note saying why ("10% rollout of
+  the new checkout"). If someone changed the draft in the meantime, publishing refuses and
+  asks you to review again; if the draft breaks a rule, it lists every problem. Publishing
+  creates the next version (1, 2, 3…), makes it active, and announces it in Slack when the
+  database's notifications are on: the version, who published it, the note and the changed
+  keys, never a value. Publishing the same revision twice is harmless: the second time,
+  nothing new is created or announced.
+- **What apps do.** An app fetches at launch and every refresh interval while it runs. It
+  applies a new version's values at its **next launch**, so a screen never changes under a
+  user, except for **live** parameters, which apply as soon as they are fetched. So after
+  a publish, expect running apps to pick it up within one refresh interval, and to show
+  it at their next launch; lower the refresh interval for an incident.
+- **Roll back** when a version goes wrong: compare the active version with an earlier one,
+  then roll back to it. This publishes a *new* version equal to the earlier one ("version 16,
+  rolling back to version 12"), and apps take it like any other publish. History only grows.
+  Your draft is not touched, so it still holds the bad change; **copy the version into the
+  draft** to start again from what is now live, then fix it there.
+- **Unpublish** to switch the whole config off: type the database's exact name. Nothing is
+  active from then on, and every app falls back to its **in-app defaults** at its next
+  fetch, at once rather than at the next launch. Every version is kept: publishing or rolling
+  back puts one back.
+- **The history** lists every publish, rollback and unpublish, newest first, with who did
+  it, when and the note, so you can see when nothing was active. Every version can be read in
+  full or compared with any other, and **the history export** downloads all of it, versions,
+  activity and draft, as one JSON file.
+- **Promote from staging to production** (PRD 5.6): export the staging database's active
+  version as a template (`export?source=active`), import it into the production database's
+  draft, compare that draft with production's active version, and publish.
+
+### Creating a config database
+
+On the project page, under **Config databases**, choose **New config database** and name it
+after the product ("Mobile app"). One database serves every app of that product; the
+project's publishable key will fetch from it with no new credential. It opens on
+**Parameters**. It starts with an empty draft and nothing published, so an app that fetches
+from it uses the defaults in its own code.
+
+The switcher at the top of every database page lists config databases beside the project's
+other databases, so you can move between them without going back to the project.
+
+### Editing parameters and conditions
+
+The **Parameters** tab is the draft. Its header says how many changes the draft holds that
+are not published ("3 changes not published", or "No unpublished changes"), whether it
+differs from the active version, and whether your last change was saved ("Saving…",
+"Saved", or "Not saved" when it failed: the editor stays open with your edit, so you can fix
+it and save again). Every change you save is one small save of that parameter or condition,
+so two people editing different parameters never overwrite each other. A switch moves
+between the **Parameters** view and the **Conditions** view. A Viewer sees everything, and
+can preview, but is offered no control that changes anything.
+
+**A parameter.** Choose **New parameter** (or **Add a parameter** in a new database) and fill in:
+
+1. **Key**, the name your code reads: a letter first, then letters, digits, `_`, `.` or `-`
+   (`new_checkout`). A key that breaks the rule, or one already used, is refused as you type.
+2. **Type**: String, Number, Boolean or JSON. Changing it resets the values to the new type.
+3. **Description** (optional): for your team; apps never receive it.
+4. **Live**: turn it on for a kill switch, so a running app applies a change as soon as it
+   fetches it rather than at its next launch.
+5. **Default value**: what every app gets unless a condition gives it another. A JSON value is
+   typed in a text box that checks it as you type and names the line and column of a mistake;
+   **Format** indents it. A JSON parameter may also have a **Schema** (JSON Schema 2020-12)
+   that its values must pass to be published.
+6. **Conditional values**: choose **Add a value under…** and a condition (for a split, one of
+   its variants), then set the value apps get when that condition is the first true one.
+   Remove one with its ✕.
+
+**Save** stores it in the draft. Changing the key renames the parameter: the new key is saved
+and the old one deleted, and the parameter moves to the end of the list. If the deletion fails,
+both keys are listed until you choose **Save** again. The list then shows each parameter's key, type, a **Live**
+badge, the description, the default on one line, and one chip per conditional value in
+priority order: "Beta testers → true", "Paywall copy: annual_first → {…}". Search by key or
+description. If something would stop the draft from publishing (a value failing its schema,
+a value under a condition that no longer exists), it is shown under the parameter, and in its
+editor beside the value concerned. **Delete parameter** in the editor removes it, after asking.
+
+**A condition.** In the Conditions view, choose **New condition**, name it, and choose its
+kind:
+
+- A **match** condition is true when every one of its rules is true. Each rule is an
+  attribute (app version, platform, country, user ID, a custom attribute your app sends as
+  `attributes.plan`…), an operator the attribute accepts, and a value. The editor writes the
+  rule back in words so you can check it: "App version is 1.4.0 or later", "Platform is one
+  of iOS or Android", "10.00% of installations", "User ID is one of 40 values (…)".
+  - For **is one of** and **is none of**, paste the values one per line; blank lines, spaces
+    around a value and repeated values are dropped, and the editor counts what is left (at
+    most 1,000).
+  - A **percentage** is typed with two decimals (12.50) and counts installations or users.
+  - A rule on **the time** takes a date and time in your time zone.
+  - Under a rule on a user ID or an installation ID the editor reminds you: **Targeting is
+    not access control. Anyone with your publishable key can ask for the values of any
+    user.**
+- A **split** divides the apps that pass its population rules (none means everyone) among
+  two to five variants by weight, typed as percentages with two decimals that must add up to
+  100.00% (the editor shows what remains). It has an **experiment key** your analytics sees,
+  and counts installations or users.
+
+The list shows the conditions in **priority order**, highest first, each with its kind, its
+rules in words, how many parameters use it, and **Unused** when none does. Change the order by
+dragging a row, or with **Move up** and **Move down** (reachable with Tab and Enter; a screen
+reader announces the new position). Once apps fetch, each condition also shows its share of
+the last day's fetches, "fewer than 10 fetches" when so few matched, "withheld" when the
+number would give away a day with fewer than 10, or "matched no fetch";
+these count fetches, not devices.
+
+- **Reshuffle** (in a condition's editor) draws new buckets for it: once published, a 10%
+  rollout reaches a different 10%, and a split assigns its variants afresh. It asks first.
+- **Delete** lists the parameters whose values under the condition go with it, then asks.
+
+### Previewing a change
+
+**Preview as** (in the header) shows what one app would receive, before anything is
+published. Fill in what you know about the app: platform, app version and build, OS version,
+locale, country, user ID, installation ID, and custom attributes (a key, a type and a value
+each). Leave the rest empty, as an app that does not send it. Choose the source (**the
+draft**, **the active version** or **a version** by number) and **Preview**. You see:
+
+- each parameter's value, and where it came from: the condition (and variant) that gave it,
+  or "The default";
+- each condition, **True** or **False**, and for a false one the first rule that failed, in
+  words, or that the app carries no ID for its percentage or split;
+- the experiments the app would be in;
+- for the draft, anything that could not be evaluated because publishing would refuse it.
+
+A preview is not a fetch: it counts in no reach figure and derives no country (type one in).
+
+### Publishing
+
+**Publish** (in the header, for a Creator or Admin) opens the review of what the draft
+changes against the active version: each parameter and condition added, changed or removed,
+with its values before and after (JSON indented; a long value folds behind its first line),
+whether the priority order changes, and the warnings about apps that would fall back to their
+in-app default (a parameter removed, or its type changed). If anything would be refused, it
+is listed and the button is disabled until you fix it. Add a note saying why ("10% rollout"),
+then choose the button, which names the version it creates: **Publish version 15**.
+
+The review publishes exactly what it showed: if someone changed the draft while you read it,
+the publish is refused and the review reloads with their change, for you to check again.
+Afterwards the header says **No unpublished changes** and the draft equals the new active
+version. **Publish** is offered only while the draft differs from the active version; if
+someone published the same draft while your review was open, publishing creates nothing, and
+says so.
+
+### Reading the history
+
+The **History** tab lists every publish, rollback and unpublish, newest first, with who did
+it (a person, or the label of the key an agent used), when, and the note. Each version shows
+what it changed against the version active before it ("Parameters: 1 added, 1 changed."), an
+**Active** badge on the one apps receive, and its share of the last 24 hours' fetches, which
+count fetches, not devices. An unpublish reads "Unpublished: apps use their in-app defaults",
+so the periods when nothing was active are visible. With nothing published the top of the
+tab says **Nothing is published. Apps use their in-app defaults.** **Show older activity**
+loads the next 50 entries.
+
+Each version offers:
+
+- **View**: its whole template, as text. Versions never change.
+- **Compare with…**: what changes from this version to the draft, the active version or
+  another version, per parameter and condition, with the values before and after.
+- **Export**: its template as JSON (which **Import** takes back into a draft, in this or
+  another database), or its defaults as TypeScript or JSON.
+
+**Export the history** at the top downloads every version with its record, the activity and
+the draft as one JSON file. A Viewer reads, compares and exports; rolling back, copying and
+unpublishing are for a Creator or Admin.
+
+### Rolling back
+
+On an earlier version, **Roll back to this version** opens a review of what the rollback
+changes against the active version, with the same warnings as a publish (a parameter it
+removes or whose type it changes sends the apps that read it to their in-app default). Add a
+note and choose **Roll back to version 12**: this publishes a *new* version equal to version
+12 ("version 16, rolling back to version 12"), which apps take like any publish.
+
+**The draft is not changed**, and the review says so: it may still hold the change you rolled
+back, and the Parameters header says the draft differs from the active version. **Copy to
+draft** on the version (after confirming) replaces the whole draft with its template, so you
+start again from what is live; unpublished changes in the draft are lost.
+
+### Unpublishing
+
+**Unpublish**, at the top of History for a Creator or Admin, switches the whole config off:
+type the database's exact name to confirm. Every app falls back to its in-app defaults at its
+next fetch, at once rather than at its next launch. Every version is kept, and publishing or
+rolling back puts one back.
+
+### Integrating your app
+
+The **Integrate** tab has what a developer needs, filled in for this database:
+
+- the **config database ID** and the project's **publishable keys**, each with a copy button
+  (both are safe to ship in an app; create a key on the project page if there is none);
+- a snippet for each runtime (browser, React Native, Electron main and renderer, Node on a
+  server and on a device, and any other runtime with `fetch`), with this deployment's address,
+  a key and the ID in place. Each starts with `installationId: false` where the SDK would
+  store an installation ID, and turns it on in your consent callback: you decide whether that
+  ID needs consent where your users are;
+- **Defaults for your code**: the active version's defaults as a TypeScript object with its
+  type. Save it as `inlet-config-defaults.ts` and pass it as `defaults`, so the app reads
+  sensible values before its first fetch and offline;
+- **How values reach your app**: new values apply at the next launch, a live parameter as soon
+  as it is fetched, and apps fetch every refresh interval; with the fetches of the last 24
+  hours and the share answered from the active version;
+- the reminder that **targeting is not access control**: anyone with your publishable key can
+  ask for the values of any user, so never put a secret in a value.
+
+Everything the SDK offers, runtime by runtime, is in `packages/sdk/README.md`, section
+"Remote config".
+
+### Reading reach: fetches, not devices
+
+Inlet counts, for 30 days, how many **fetches** each version, condition and variant received,
+never how many devices: counting devices would mean storing their IDs, and a config fetch
+stores nothing about the app that made it. An app fetches at each launch and every refresh
+interval, so one device counts many times; read the figures as shares and trends, not as
+users. What you get (`GET …/reach`, or `get_config_reach` over MCP; the History, Integrate and
+Conditions views show the same):
+
+- each version's **share of the last 24 hours' fetches**: after a publish, watch the new
+  version's share climb as apps fetch it;
+- the share answered from the **active version**, and how many fetches were "not modified";
+- each condition's **share of the last day's fetches**, marked when it **matched none** (a
+  typo in a list, a version range nobody runs yet);
+- refusals by reason (rate limits, malformed requests).
+
+A condition or variant true for 1 to 9 fetches shows **fewer than 10**, never the number, so
+that a condition naming one person does not chart that person's use. A figure that would give
+such a number away by subtraction is **withheld** too: a split's count on a day one of its
+variants had fewer than 10, and a condition's last-day count when one of the two days had
+fewer than 10 (it would be the total minus the other day).
+
+### The refresh interval and your fleet
+
+The refresh interval (Settings → Delivery, 60 minutes by default) is how long a running app
+waits between fetches; every app also fetches at launch. It travels with every answer, so a
+change reaches each app at its next fetch. Shorter means a publish reaches running apps
+sooner and costs more fetches: a fleet of a million installations refreshing hourly makes
+about five million fetches a day, a few hundred a second at peak, which one Inlet instance
+answers from memory. Each app adds up to 10% of random variation to the interval, so a fleet
+does not fetch in step. Lower it during an incident, raise it back afterwards; a **live**
+parameter still waits for the next fetch, only not for the next launch.
+
+### Settings
+
+- **General.** Rename the database; its ID never changes, so integrated apps keep
+  fetching. **Delete** it, which an Admin does by typing its exact name. The dialog says how
+  many versions and parameters go, and offers the **history export** first: every version
+  with its template, but not the reach counts, the memberships or the notification settings.
+  Apps that fetch a deleted database fall back to their in-app defaults.
+- **Delivery.** Two settings an Admin of the database or the project changes; each applies
+  to fetches answered from then on and leaves every version as it is.
+  - The **refresh interval**: how long a running app waits between fetches. 60 minutes by
+    default, from 5 to 1,440; the operator of your deployment may have changed those
+    bounds, and the page shows the ones in force. A value outside them is refused with the
+    bounds named.
+  - **Country**: whether each fetch gets the country its request came from, so a condition
+    can target it. On by default; the address is used for the lookup and never stored. The
+    attribution of the IP-to-country data is shown below the switch.
+- **Notifications.** The same Slack settings as every database. A config database
+  announces publishes, rollbacks and unpublishes, never a value or a rule, so there is no
+  content-level choice. **Send a test message** posts a sample publish.
+- **Access.** The same panel as every database: invite someone to this config database
+  alone, or give a project member another role here. A Viewer reads, a Creator edits and
+  publishes, an Admin also changes the delivery settings and deletes.
+
 ## Honouring an erasure request
 
 When someone asks you to delete their data, erase their user ID, or the installation ID of their
@@ -830,9 +1164,10 @@ not a member of the project.
    database's **Users**, or read it on a crash report or a submission. Without analytics, the
    crash and feedback screens filter by user ID too.
 2. **Preview.** Choose **User ID** or **Installation ID**, paste the ID and choose **Preview**. It
-   lists every crash, feedback and analytics database of the project that you administer, with
-   what the erasure would delete in each: crash reports, the user's place in each crash group's
-   affected users, submissions and their screenshots, analytics events and installations.
+   lists every crash, feedback, analytics and config database of the project that you administer,
+   with what the erasure would delete in each: crash reports, the user's place in each crash group's
+   affected users, submissions and their screenshots, analytics events and installations, and
+   the config rules that name the ID in the draft and across the versions.
 3. **Select** the databases to erase in, **type the ID** again, and choose **Erase**. The panel
    shows what each database lost.
 
@@ -851,6 +1186,14 @@ What it does:
 - **Crash reports and submissions are gone at once.** Analytics events disappear from every
   screen at once; the server deletes them from the event store within minutes, and from its
   files on disk within 30 days (your operator may shorten that).
+- **In a config database the rules are rewritten.** A config database never stores an ID from a
+  fetch; it holds one only where your team wrote it into a condition, such as a beta list. The
+  erasure removes the ID from those rules in the draft and in every version: out of the list, or,
+  for a rule that was "user ID equals" the ID, an empty list that matches no one ("not equals"
+  becomes an empty "not in", which matches everyone). Nothing else in a version changes — its
+  number, who published it, its note — and the active version stays active: from the next fetch,
+  the person is answered as the rewritten rules say, no longer as a named member of the list. If
+  the draft named the ID it moves to a new revision, so reopen it before you publish.
 - **Each erasure is recorded** with who did it, when and what it deleted in each database, never
   the ID itself.
 

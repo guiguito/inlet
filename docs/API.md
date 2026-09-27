@@ -19,6 +19,7 @@ Everything is under `/v1`. Requests and responses are JSON unless stated otherwi
 - [Access: members and invitations](#access-members-and-invitations)
 - [Crash reports](#crash-reports)
 - [Analytics databases](#analytics-databases)
+- [Config databases](#config-databases)
 - [Erasing an installation or user ID](#erasing-an-installation-or-user-id)
 - [Errors](#errors)
 - [Limits](#limits)
@@ -2317,12 +2318,605 @@ a slot, and the rules are the same over MCP. A client that closes its connection
 answer — a chart replaced by the next one — leaves the queue at once, or has its running
 statement cancelled in the event store, and its slot is free for its next query.
 
+## Config databases
+
+A config database delivers remote configuration to a product's apps: named, typed
+parameters, and the conditions that give some of them other values for some users, devices
+or versions (Remote Config PRD). Its draft is edited and published as numbered versions, and
+applications fetch the values the active version resolves for them; it needs PostgreSQL
+only, no optional service. Release 9 is being built in pieces: the databases themselves,
+their delivery settings, deletion, the shared surface, the draft, publishing, the history,
+the fetch, preview and reach are available.
+
+```
+POST /v1/projects/prj_5waxfxyby3st/config-databases
+Cookie: inlet_session=…
+
+{ "name": "Mobile app" }
+```
+
+```json
+{
+  "id": "cfg_7hq3m2vx8ncd",
+  "projectId": "prj_5waxfxyby3st",
+  "name": "Mobile app",
+  "type": "config",
+  "refreshIntervalMinutes": 60,
+  "refreshIntervalBounds": { "min": 5, "max": 1440 },
+  "deriveCountry": true,
+  "activeVersion": null,
+  "createdAt": "2026-09-27T10:00:00.000Z",
+  "updatedAt": "2026-09-27T10:00:00.000Z"
+}
+```
+
+### Routes
+
+```
+GET    /v1/projects/{projectId}/config-databases     the ones you can read, newest first
+POST   /v1/projects/{projectId}/config-databases     {name}
+GET    /v1/config-databases/{id}
+PATCH  /v1/config-databases/{id}                     {name?, refreshIntervalMinutes?, deriveCountry?}
+GET    /v1/config-databases/{id}/deletion-impact     → {versions, draftParameters, activeParameters, exportPath, notice}
+DELETE /v1/config-databases/{id}
+GET|PUT|DELETE /v1/config-databases/{id}/members[/{userId}]
+GET|POST       /v1/config-databases/{id}/invitations, …/invitations/{invitationId}/revoke
+GET|PATCH      /v1/config-databases/{id}/slack-notifications, POST …/slack-notifications/test
+```
+
+- **Creation** needs Creator or Admin. A new database has an empty draft, no active version
+  (`activeVersion: null`, so applications use their in-app defaults), the deployment's
+  default refresh interval and country derivation on.
+- **Reading** needs Viewer. It returns the delivery settings in force and
+  `activeVersion`, the number of the version fetches are answered from.
+- **Renaming** needs Creator or Admin.
+- **Deletion** needs a database or project Admin. The draft, every version, the activity,
+  the reach counts, the memberships, invitations, notification settings and queued
+  deliveries go in one transaction; deleting a project does the same for each of its config
+  databases. The impact counts versions, the draft's parameters and the active version's
+  (`null` when nothing is published), and `exportPath` names the history export to offer
+  first, which holds every version and not the reach counts, the memberships or the
+  notification settings. The HTTP route takes no confirmation, as for the other types; the
+  interface and the MCP tool `delete_config_database` ask for the exact name.
+- **Slack settings** are the shared ones. A config database announces publishes,
+  rollbacks and unpublishes, never a value or a rule, so `contentLevel` is accepted and
+  never read (see [Publishing and history](#publishing-and-history)). Its test message is a
+  sample publish ("Mobile app: version 1 published by Inlet."), not the feedback sample.
+- **A publishable key reads and changes nothing here** (`403 insufficient_scope`); it only
+  fetches values ([the fetch route](#the-fetch-route)).
+
+### The delivery settings
+
+Two settings decide how values reach applications (RC-002). Changing either needs a
+database or project Admin; both apply to fetches answered afterwards and leave every
+version unchanged.
+
+- **`refreshIntervalMinutes`**: how long a running application waits between fetches,
+  returned with every answer. 60 by default, from 5 to 1,440; a deployment's operator may
+  change the default and the bounds (`INLET_CONFIG_REFRESH_MINUTES_*`, see
+  [DEPLOYMENT.md](DEPLOYMENT.md#operator-limits)), and a read reports them as
+  `refreshIntervalBounds`. A value outside them is `400 setting_out_of_bounds`, with
+  `details[0].path` = `refreshIntervalMinutes` and a message naming the bounds. When an
+  operator narrows the bounds, a stored interval outside them is reported, and applied, at
+  the nearest bound, without being rewritten.
+- **`deriveCountry`**: whether a fetch gets a country from its request, for conditions on
+  `country`. On by default. The address is used for the lookup and never stored.
+
+### The draft
+
+A config database has one draft: the template its next version will publish. A **template**
+is an ordered list of parameters and an ordered list of conditions (PRD 9.1). The draft,
+every version, an export and an import share this format:
+
+```json
+{
+  "parameters": [
+    {
+      "key": "new_checkout", "type": "boolean", "description": "The redesigned checkout",
+      "live": true, "default": false,
+      "conditional": [{ "condition": "cnd_early", "value": true }]
+    },
+    {
+      "key": "paywall", "type": "json",
+      "default": { "headline": "Go Pro", "plans": ["monthly", "annual"] },
+      "schema": { "type": "object", "required": ["headline", "plans"] },
+      "conditional": [{ "condition": "cnd_paywall", "variant": "annual_first",
+                        "value": { "headline": "Save 40%", "plans": ["annual", "monthly"] } }]
+    }
+  ],
+  "conditions": [
+    { "id": "cnd_early", "name": "Early rollout", "kind": "match", "salt": "q8Zt0bLm3Rx9Kc2V",
+      "rules": [{ "attribute": "appVersion", "operator": "versionGte", "value": "1.4.0" },
+                { "attribute": "percentage", "operator": "lt", "value": 1000, "unit": "installation" }] },
+    { "id": "cnd_paywall", "name": "Paywall copy", "kind": "split", "salt": "Hs7yP1eW4dN0gT6u",
+      "experiment": "paywall_copy", "unit": "installation", "rules": [],
+      "variants": [{ "key": "control", "weight": 5000 }, { "key": "annual_first", "weight": 5000 }] }
+  ]
+}
+```
+
+Conditions are in priority order, the first the highest; parameter order is only how the
+team arranges them. Percentages and weights are integers in hundredths of a percent (1000
+is 10%; weights sum to 10000). [USING-INLET.md](USING-INLET.md#how-a-config-is-built)
+explains the model.
+
+```
+GET    /v1/config-databases/{id}/draft                              the template and its state
+PUT    /v1/config-databases/{id}/draft                              {template, expectedRevision?}: replace it all
+PUT    /v1/config-databases/{id}/draft/parameters/{key}             a parameter: create or replace
+DELETE /v1/config-databases/{id}/draft/parameters/{key}
+PUT    /v1/config-databases/{id}/draft/conditions/{conditionId}     a condition: create or replace
+DELETE /v1/config-databases/{id}/draft/conditions/{conditionId}     → affectedParameters
+PUT    /v1/config-databases/{id}/draft/conditions/order             {order: [conditionId, …]}
+POST   /v1/config-databases/{id}/draft/conditions/{conditionId}/reshuffle
+POST   /v1/config-databases/{id}/draft/validate                     → {revision, problems, warnings}
+POST   /v1/config-databases/{id}/draft/import                       an export: {format: 1, parameters, conditions}
+GET    /v1/config-databases/{id}/export?source=draft|active|{n}&format=json|ts|defaults
+```
+
+Reading, validating and exporting need Viewer; every change needs Creator or Admin. A
+secret key may do all of it; a publishable key none (`403 insufficient_scope`).
+
+**The read** returns the template with its `revision`, `updatedAt` and `updatedBy`
+(`{kind: "user" | "key", id, name}`), and what the editor shows without a second call:
+
+- `problems`: what publishing this revision would refuse, each with its `path` and the
+  `parameter`, `condition` and `variant` it concerns (below);
+- `warnings`: parameters of the active version the draft removes or changes the type of
+  ("Apps that read `limit` as a number will use their in-app default.");
+- `differsFromActive` and `changes`: whether the draft publishes something new, and how many
+  parameters and conditions it adds, changes or removes against the active version (one
+  more for a reorder), for "3 changes not published". With nothing published, any non-empty
+  draft differs;
+- `conditionUsage`: per condition, in priority order, the parameters holding a value under
+  it: what deleting it removes, and an empty list marks it unused;
+- `activeVersion`, the version these are measured against.
+
+**Every change increments the revision.** Publishing takes the revision it publishes, so a
+change made since you read the draft makes a publish of the old revision fail with
+`stale_draft_revision` instead of publishing something you did not review.
+
+**Why per-part routes.** `PUT /draft` replaces the whole template and is last-write-wins:
+two people saving at once, the second overwrites the first (pass `expectedRevision` to be
+refused with `stale_draft_revision` instead). Each per-part route changes one parameter or
+one condition, or the conditions' order, under a lock on the draft, and leaves the rest as
+it is, so two people or agents editing different parameters both keep their change. The
+interface saves only through them. A per-part change answers the draft's new state, without
+the template, plus the `parameter` or `condition` as stored, or `affectedParameters` for a
+condition deleted.
+
+- A parameter's body is the parameter; `key` may be left out, and one that differs from the
+  path is refused (a rename is a delete and a create). A replaced parameter keeps its place,
+  a new one is appended.
+- You choose a new condition's ID: `cnd_` and 1 to 32 lower-case letters and digits. A new
+  condition is appended at the lowest priority; a replaced one keeps its place.
+- Deleting a condition deletes every value under it. Read `conditionUsage` first to list
+  the parameters affected.
+- The order lists every condition of the draft exactly once, else
+  `400 config_condition_order_mismatch`.
+
+**Salts.** A percentage rule and a split put each installation or user in a bucket computed
+from the condition's salt, so the salt decides who is in a 10% rollout. The server always
+draws it: a new condition gets a fresh one, an existing condition keeps its stored one
+whatever a body says, and a condition sent without an ID gets a server ID and a salt.
+Reshuffle draws a new salt, which moves every unit to a new bucket once published: a
+different 10%, different variants. Import is the one way to bring a salt in (below).
+
+**Save checks and publish checks.** A change is refused with `400 config_template_invalid`
+when it breaks a bound that does not depend on publishing (RC-019): a key, ID, variant or
+experiment key's syntax, a duplicate, a value of the wrong type or too large or deep, a
+schema that is not valid or uses `pattern`, and the counts (500 parameters, 100 conditions,
+10 rules, 5 splits, 5 variants, and 2 MiB for the template as stored, with `live`,
+`conditional`, the IDs and the salts filled in). Rule values on `platform`, `country`, `locale`,
+`language` and `installationId` are stored normalised. The rest is allowed in the draft and
+reported as its `problems`: a value naming a condition or variant that does not exist,
+weights not summing to 10000, a value failing its schema, and answers past 512 KiB.
+Publishing refuses while any remains. Each problem carries its path:
+
+```json
+{
+  "error": {
+    "code": "config_template_invalid",
+    "message": "The parameter key \"1st\" must start with a letter and hold at most 128 letters, digits, _, . and -.",
+    "details": [{ "path": "parameters.0.key", "parameter": "1st", "code": "invalid_key", "message": "…" }]
+  }
+}
+```
+
+A value failing its schema also names `valuePath`, the JSON Pointer inside the value
+(`/headline`). `warnings` never refuse anything. As everywhere in this API, a body holding a
+`__proto__` key, or `constructor` with a `prototype` inside, is refused as
+`400 malformed_json`, so a json value cannot use those keys.
+
+**Import and export.** `GET …/export?format=json` gives the template of the draft, the
+active version or a numbered version (`source=draft` by default) with `"format": 1`, as a
+download. `POST …/draft/import` takes that file back into any config database's draft,
+replacing it, with the save checks; it keeps the condition IDs and salts it carries, so a
+unit falls in the same buckets in both databases: export from staging, import into
+production. A condition without a salt gets one; a body that is not an export is
+`config_template_invalid`. `format=defaults` gives each parameter's default as JSON, and
+`format=ts` the same as TypeScript with its type, to pass to the SDK's `init` as the in-app
+defaults. A source naming no version, or `active` with nothing published, is
+`404 config_version_not_found`. A whole template sent to `PUT /draft` or to import may take
+2.25 MiB (the 2 MiB template and its envelope), past which it is `413 payload_too_large`;
+the template export is indented, or compact when indenting a template near its bound would
+pass that, so every export imports as downloaded. Send a file of your own compact
+(`jq -c`) if its indentation takes it over.
+
+### Publishing and history
+
+```
+POST /v1/config-databases/{id}/publish        {revision, note?}      → 201 or 200 {version, created, warnings}
+POST /v1/config-databases/{id}/rollback       {version, note?}       → 201 or 200 {version, created, warnings}
+POST /v1/config-databases/{id}/unpublish      {confirm}              → {activeVersion: null, unpublishedVersion}
+POST /v1/config-databases/{id}/draft/copy     {version}              → the draft
+GET  /v1/config-databases/{id}/activity       ?cursor&limit          → {activity, nextCursor}
+GET  /v1/config-databases/{id}/versions       ?cursor&limit          → {versions, nextCursor}
+GET  /v1/config-databases/{id}/versions/{number}                     → the version with its template
+GET  /v1/config-databases/{id}/diff           ?from&to               → the difference and its warnings
+GET  /v1/config-databases/{id}/export/history                        → one JSON document, streamed
+```
+
+Publishing, rolling back, unpublishing and copying need Creator or Admin; the rest needs
+Viewer. A secret key does all of it, a publishable key none (`403 insufficient_scope`), and
+no route edits a version: versions are immutable (RC-059).
+
+**Publishing** takes the draft revision you reviewed and an optional note of at most 500
+characters (RC-052):
+
+```
+POST /v1/config-databases/cfg_7hq3m2vx8ncd/publish
+Authorization: Bearer isk_…
+
+{ "revision": 8, "note": "10% rollout of the new checkout." }
+```
+
+```json
+{
+  "version": {
+    "number": 2,
+    "publishedAt": "2026-09-27T10:00:00.000Z",
+    "publishedBy": { "kind": "key", "id": "cred_…", "name": "CI deploy" },
+    "note": "10% rollout of the new checkout.",
+    "draftRevision": 8,
+    "changeSummary": {
+      "parameters": { "added": [], "changed": ["new_checkout"], "removed": [] },
+      "conditions": { "added": ["cnd_rollout"], "changed": [], "removed": [], "reordered": false },
+      "counts": { "parametersAdded": 0, "parametersChanged": 1, "parametersRemoved": 0, "conditionsAdded": 1, "conditionsChanged": 0, "conditionsRemoved": 0 }
+    },
+    "rolledBackFrom": null,
+    "active": true
+  },
+  "created": true,
+  "warnings": []
+}
+```
+
+- If the draft changed since that revision, `409 stale_draft_revision`: read it and review
+  it again. If it breaks a rule, `400 config_template_invalid` lists every problem with its
+  path, as `POST /draft/validate` does.
+- Otherwise the next version (numbered from 1) is created and made active, and the activity
+  and its Slack message are recorded, all in one transaction; `201`. `changeSummary` is
+  against the version that was active before, or against nothing when none was. `warnings`
+  names the parameters of that version the new one removes or changes the type of, whose
+  readers will use their in-app default (RC-017); they never refuse.
+- **A retry is harmless.** A publish of the revision that made the active version, even
+  once the draft has changed since, or of a draft whose template equals the active
+  version's, answers `200` with the active version and `created: false`, and nothing is
+  created, recorded or announced. A revision whose version is no longer active (after a
+  rollback or an unpublish) publishes again as a new version, which is how the same draft
+  undoes either.
+- A database holds at most 10,000 versions (RC-004): past them, publishing and rolling back
+  are `409 config_version_limit`.
+
+**Rolling back** to a version publishes a *new* version whose template equals it, with
+`rolledBackFrom` and the note "Rolled back to version 12." followed by yours (RC-054). The
+draft is not changed, so it may still hold what you rolled back; `POST /draft/copy` with the
+version replaces it (RC-055), keeping the version's condition IDs and salts, with
+`revision + 1`. A rollback to a version equal to the active one creates nothing (`200`,
+`created: false`); an unknown number is `404 config_version_not_found`.
+
+**Unpublishing** takes the database's exact name as `confirm` (`400 confirmation_mismatch`
+otherwise) and leaves it without an active version (RC-056): every application falls back to
+its in-app defaults at its next fetch. Every version is kept; publishing or rolling back
+undoes it. With nothing active it is `409 config_not_published`.
+
+**The activity** lists every publish, rollback and unpublish, newest first: `kind`, `actor`
+(`{kind: "user" | "key", id, name}`, the user's display name or the key's label, `name` null
+once deleted), `at`, `note`, and `version`, the version it made active, or `null` for an
+unpublish, so the periods with nothing active show (RC-058). **The versions** list, newest
+first, gives each version's record without its template, with `active`; `GET
+…/versions/{number}` adds the template. Both lists answer 50 a page by default (`limit` up to
+200); pass `nextCursor` back as `cursor`.
+
+**The difference** (`GET …/diff?from=active&to=draft`, the defaults) compares any two of
+`draft`, `active` and a version number (RC-057): per parameter (`key`) and per condition
+(`id`), `change` is `added`, `removed` or `changed`, with `before` and `after` as stored;
+`conditionsReordered` says whether the relative order of the conditions both hold changed;
+`warnings` are those of going from `from` to `to`. From `active` to `draft` is the review
+before publishing, from `active` to a number the review before rolling back (RC-053).
+`fromVersion` and `toVersion` name the versions compared (`null` for the draft). `active`
+with nothing published compares against an empty template, so a first publish's review lists
+everything as added.
+
+**Exports.** `GET …/export?source=active|<number>&format=json|ts|defaults` exports a
+version's template or defaults, as for the draft above. `GET …/export/history` downloads the
+whole history as one JSON document (RC-064), streamed, never built in memory:
+
+```json
+{
+  "format": 1,
+  "exportedAt": "…",
+  "database": { "id": "cfg_…", "name": "Mobile app", "activeVersion": 3, "refreshIntervalMinutes": 60, "deriveCountry": true, "createdAt": "…" },
+  "draft": { "revision": 9, "updatedAt": "…", "template": { "parameters": [], "conditions": [] } },
+  "activity": [ { "id": 1, "kind": "publish", "actor": {}, "at": "…", "note": null, "version": 1 } ],
+  "versions": [ { "number": 1, "publishedAt": "…", "…": "…", "template": {} } ]
+}
+```
+
+Activity and versions are oldest first, and cover what existed when the download started.
+It is the export the deletion impact offers; it holds no reach counts, memberships or
+notification settings.
+
+**What Slack announces** (RC-080 to RC-082), when the database's notifications are on:
+each publish, rollback and unpublish, queued in the transaction that makes it and delivered
+by the shared worker. The heading is the configured one, or `Config published`, `Config
+rolled back` or `Config unpublished`:
+
+```
+Config published
+Mobile app: version 15 published by Guilhem. 10% rollout of the new checkout.
+Changed: new_checkout, checkout_limits. Conditions: 1 added.
+Open in Inlet
+```
+
+A rollback reads "version 16 published by Guilhem, rolling back to version 12."; an
+unpublish, "unpublished by Guilhem: apps use their in-app defaults from their next fetch."
+Up to ten changed parameter keys are named, then "and N more"; conditions are counted
+added, changed and removed. A key's actor is its label. A note too long for Slack's
+3,000-character block once escaped is shortened, ending in "…". The message never carries a value,
+a rule, a list or a context, and there is no content level; "Open in Inlet" links to the
+History tab.
+
+### The fetch route
+
+An application asks for its values with one request (RC-040 to RC-049). The SDK
+(`inlet-sdk/config`) makes it for you; this is what it sends.
+
+```
+POST /v1/config-databases/cfg_7hq3m2vx8ncd/fetch
+Authorization: Bearer ipk_…
+Content-Type: application/json
+Accept-Encoding: br, gzip
+
+{
+  "installationId": "0b7f4c1e-2d3a-4f5b-8c6d-7e8f9a0b1c2d",
+  "userId": "user-42",
+  "platform": "ios",
+  "os": { "name": "iOS", "version": "18.1" },
+  "app": { "version": "1.4.2", "build": "812", "id": "com.example.shop" },
+  "locale": "fr-FR",
+  "attributes": { "plan": "pro", "beta": true },
+  "sdk": { "name": "inlet-sdk", "version": "0.4.0" },
+  "etag": "u0Q2c9yF3-2PZfWm1dA7xg"
+}
+```
+
+**Authentication.** The project's publishable key (`ipk_…`) or its secret key, as a bearer
+token. A publishable key fetches from any config database of its project and does nothing
+else there: the draft, versions, preview and reach refuse it with `403 insufficient_scope`.
+The project's existing publishable key works: a config database needs no new credential.
+
+**The context** is the body. Every field is optional (PRD 9.2):
+
+| Field | Bounds | Used by the rules as |
+| --- | --- | --- |
+| `installationId` | a UUID, any letter case, with or without dashes | `installationId`; the unit of percentages and splits by installation |
+| `userId` | at most 128 characters; placeholders such as `anonymous` are absent | `userId` |
+| `platform` | `web`, `ios`, `android`, `macos`, `windows`, `linux`, `server`, `other` | `platform`; `server` turns off country derivation |
+| `os` | `name` ≤ 32, `version` ≤ 64 | `osVersion` |
+| `app` | `version`, `build`, `id`, each ≤ 64 | `appVersion`, `appBuild`, `appId` |
+| `locale` | BCP 47, ≤ 35 characters | `locale`, and `language` its first subtag |
+| `country` | ISO 3166-1 alpha-2 | `country`; given, it overrides derivation |
+| `attributes` | at most 20; key `^[A-Za-z][A-Za-z0-9_]{0,39}$`; a string of ≤ 256 characters, a finite number or a boolean | `attributes.<key>` |
+| `deriveCountry` | boolean | `false` turns off country derivation |
+| `sdk` | `name` ≤ 64, `version` ≤ 32 | diagnostics only |
+| `etag` | ≤ 64 characters | the last answer's ETag |
+
+The context is lenient on purpose: a field the server does not know is ignored, and a known
+field outside its bounds is treated as absent and named in `warnings` with its path, so that
+a newer SDK or a mistaken attribute never costs an application its configuration. A body
+that is not JSON is `400 malformed_json`; one over 16 KiB, `413 payload_too_large`.
+
+**The answer.**
+
+```json
+{
+  "version": 14,
+  "values": { "new_checkout": true, "checkout_limits": { "max": 5 }, "headline": "Annual" },
+  "experiments": { "paywall_copy": "annual_first" },
+  "live": ["new_checkout"],
+  "etag": "u0Q2c9yF3-2PZfWm1dA7xg",
+  "refreshIntervalSeconds": 3600,
+  "warnings": [{ "path": "attributes.plan", "code": "invalid" }]
+}
+```
+
+`values` holds every parameter's resolved value: for each parameter, the first condition in
+priority order that is true for the context and holds a value for it decides it, else the
+default. `experiments` names the variant of every split whose population holds the context.
+`live` lists the parameters an SDK applies at once rather than at the next launch. With
+nothing published, `version` is `null` and `values`, `experiments` and `live` are empty: the
+application uses its in-app defaults. The answer carries values only, never a rule, a list,
+a condition or the draft.
+
+**ETag and not modified.** The ETag is computed from what the context receives (its values,
+experiments and live keys), not from the version: a publish that changes nothing this
+context receives leaves its ETag as it was, and the ETag reveals nothing a full answer would
+not. Send the last one as `etag`; when it still matches, the answer is a small `200`:
+
+```
+POST /v1/config-databases/cfg_7hq3m2vx8ncd/fetch     { …, "etag": "u0Q2c9yF3-2PZfWm1dA7xg" }
+→ 200 { "notModified": true, "refreshIntervalSeconds": 3600 }
+```
+
+After a publish that changes this context's values, the same request receives the full new
+answer, at once on the instance that published (within five seconds in any case). A `200`
+rather than a `304`, because `fetch` implementations, React Native and proxies handle a `304`
+to a `POST` inconsistently.
+
+**Compression.** With `Accept-Encoding: br` or `gzip`, the answer is compressed (Brotli
+preferred), `Content-Encoding` says which, and `Vary: Accept-Encoding` is set. Every answer
+carries `Cache-Control: no-store`.
+
+**Errors.** `401 unauthenticated` (no key), `401 invalid_api_key`, `401 revoked_api_key`;
+`403 config_database_inaccessible` for an unknown database or one of another project (both
+the same, as the other client routes answer); `400 malformed_json`; `413
+payload_too_large`; `415 unsupported_media_type` for a body that is neither `application/json`
+nor `text/plain` (a leading byte order mark is ignored); `429 rate_limit_exceeded` with
+`Retry-After` in seconds. A revoked or
+rotated key, a deleted database and a changed setting take effect at once on the instance
+that made the change, and within ten seconds in any case.
+
+**Rate limits** count fetches (RC-046): per key, 900,000 in five minutes and 9,000,000 in an
+hour; per installation ID, 30 in five minutes in each database; and, only behind a trusted
+proxy, 6,000 requests a minute per address, counted apart from analytics ingest's. The
+operator may change them ([DEPLOYMENT.md](DEPLOYMENT.md#the-config-fetch)); the
+per-installation limit is a noise control, not a security control. The route is exempt from
+the platform's ceiling of 1,000 requests a minute per key, since every installation of an
+application shares one publishable key.
+
+**Cross-origin.** Open under FD-015 for `POST` on this path only: any origin, no
+credentials, `Retry-After` exposed, and a preflight answer browsers may cache for a day
+(`Access-Control-Max-Age: 86400`). Every other config route stays same-origin.
+
+**Country derivation.** A rule on `country` needs a country. Unless the context carries
+`country` or `deriveCountry: false`, its `platform` is `server`, the fetch is authenticated
+with a secret key, or the database's `deriveCountry` setting is off, the server derives an
+ISO 3166-1 alpha-2 code for the fetch: from the trusted proxy's country header
+(`INLET_COUNTRY_HEADER`), believed only when the request came through a trusted proxy, else
+from the IP-to-country database bundled with Inlet (DB-IP Lite, CC BY 4.0). Nothing finer is
+derived, and nothing is looked up when the active version has no rule on `country`. To turn
+it off: `PATCH /v1/config-databases/{id}` with `{"deriveCountry": false}` for the database,
+or send `deriveCountry: false` (the Node SDK's server mode always does).
+
+**What is stored and logged.** Nothing from a fetch is stored except the reach counts below,
+which carry no identity. The address is held in memory for the country lookup and the
+per-address ceiling only. The request log of this route never carries the address, the port,
+the database ID, the key or any context field; a successful answer is not logged at all, a
+refusal is logged at `warn` as `config fetch refused` with the route pattern and the error
+code, and a failure at `error` as `config fetch failed` with the route pattern and the kind of
+error, never its message (a database error's message holds the query's parameters).
+
+### Preview
+
+```
+POST /v1/config-databases/{id}/preview     {context?, source?}
+```
+
+A Viewer or above (a session or the secret key, not a publishable key) evaluates a context
+against the draft (`source: "draft"`, the default), the active version (`"active"`) or a
+version number, to check a change before publishing it (RC-060). The context is a fetch body,
+read the same way; no country is derived, so pass `country` to preview a rule on it.
+
+```json
+{
+  "source": "draft",
+  "version": null,
+  "values": { "new_checkout": true },
+  "experiments": {},
+  "live": ["new_checkout"],
+  "parameters": [
+    { "key": "new_checkout", "value": true, "source": { "kind": "condition", "condition": "cnd_4k2m9x0a7q1t", "name": "Beta testers" } }
+  ],
+  "conditions": [
+    { "id": "cnd_4k2m9x0a7q1t", "name": "Beta testers", "kind": "match", "result": true },
+    { "id": "cnd_8f3n2p0z1q7s", "name": "Android 1.4+", "kind": "match", "result": false, "firstFalseRule": 1 }
+  ],
+  "problems": [],
+  "warnings": []
+}
+```
+
+Each parameter's `source` is `{kind: "default"}` or the condition (and, for a split, the
+variant) that gave the value. Each condition says whether it was true and, when false, the
+index of its first false rule, or `unitMissing` when the context lacks the installation or
+user ID a percentage or split needs. A preview of the draft evaluates it as it stands and
+lists in `problems` what publishing would refuse and it could not evaluate (such a condition
+is false, `notEvaluated: true`). A preview of the active version returns exactly the values
+and experiments a fetch with that context returns, derived country aside. `version` is the
+version previewed; `active` with nothing published answers the empty answer a fetch gives.
+A missing version is `404 config_version_not_found`. Preview counts in no reach figure.
+
+### Reach
+
+```
+GET /v1/config-databases/{id}/reach?from&to
+```
+
+How many fetches each version, condition and variant received (RC-070 to RC-072), for a
+Viewer or above. **These are fetches, not devices**: an application fetches at each launch
+and every refresh interval, so one device counts many times; counting devices would mean
+storing their IDs. Counts are kept 30 days and written from memory every ten seconds, so the
+latest seconds may not show yet and a restart may lose them.
+
+- **Hourly**, from `from` (default 24 hours ago): fetches answered (not-modified ones
+  included), not modified, per version, and refused by reason (the error code).
+- **Daily**, from `from` (default 30 days ago): fetches for which each condition was true,
+  and per variant of each split.
+- **`summary.last24Hours`**: each version's share of the last 24 hours' fetches (History),
+  and `activeVersionShare`, the share on the active version (Integrate).
+- **`summary.lastDay`**: each condition of the draft and the active version with its fetches
+  over today and yesterday (UTC), its share of the fetches of the same days, and
+  `matchedNone` when it was true for none (the Conditions view).
+
+A range is bounded to the 30 days kept; a `from` after `to`, or after now, is `400
+validation_failed`. **A count per condition or variant from 1 to 9 is never returned
+exactly**: it is `{"count": null, "fewerThan": 10}`, and its share is `null`, so that a
+condition naming one person does not chart that person's use. 0 is `{"count": 0}`. **Nor is a
+count that would give one away by subtraction**: a split's count on a day one of its variants'
+is from 1 to 9 (the split's count is the sum of its variants'), and a condition's last-day
+count when one of its two days' is hidden (it is their sum) are `{"count": null, "withheld":
+true}`, always 10 or more, with a `null` share. Series list only the periods that have counts.
+
+```json
+{
+  "unit": "fetches",
+  "notice": "These are fetches, not devices: …",
+  "hourly": { "from": "…", "to": "…", "series": [{ "periodStart": "2026-09-27T10:00:00.000Z", "fetches": 1840, "notModified": 1702, "versions": [{ "version": 14, "fetches": 1840 }], "refused": [] }] },
+  "daily": { "from": "…", "to": "…", "series": [{ "periodStart": "2026-09-27T00:00:00.000Z", "conditions": [{ "id": "cnd_4k2m9x0a7q1t", "fetches": { "count": null, "fewerThan": 10 } }], "variants": [] }] },
+  "summary": {
+    "last24Hours": { "from": "…", "fetches": 1840, "notModified": 1702, "versions": [{ "version": 14, "fetches": 1840, "share": 1 }], "activeVersion": 14, "activeVersionShare": 1 },
+    "lastDay": { "from": "…", "fetches": 1840, "conditions": [{ "id": "cnd_4k2m9x0a7q1t", "name": "Beta testers", "fetches": { "count": null, "fewerThan": 10 }, "share": null, "matchedNone": false }] }
+  }
+}
+```
+
+### Config errors
+
+| Code | Status | Meaning |
+| --- | --- | --- |
+| `config_database_not_found` | 404 | No such config database, or none you can reach. |
+| `config_database_inaccessible` | 403 | The fetch named a database of another project, or none. |
+| `setting_out_of_bounds` | 400 | A delivery setting outside the deployment's bounds, which the message names. |
+| `config_template_invalid` | 400 | A draft, import or publish outside the template's rules, with each problem's path. |
+| `config_version_not_found`, `config_parameter_not_found`, `config_condition_not_found` | 404 | The version, parameter or condition named is not there. |
+| `config_condition_order_mismatch` | 400 | An order that does not list every condition exactly once. |
+| `config_version_limit` | 409 | The database holds 10,000 versions. |
+| `config_not_published` | 409 | An unpublish with nothing published. |
+| `stale_draft_revision` | 409 | A publish, or a `PUT /draft` with `expectedRevision`, against a draft revision that is no longer the latest. |
+| `confirmation_mismatch` | 400 | An unpublish or deletion whose echoed name does not match. |
+
+The draft and publishing routes answer every code above but `config_database_inaccessible`,
+which only the fetch route answers. The fetch also answers `invalid_api_key`,
+`revoked_api_key`, `malformed_json`, `payload_too_large` and `rate_limit_exceeded`.
+
 ## Erasing an installation or user ID
 
 To honour a person's request to delete their data, a project Admin — or a database Admin, for
 the databases they administer — erases an installation ID or a user ID across a project's
-crash, feedback and analytics databases (Foundations FD-033, UX Analytics AN-183 to AN-185,
-Crash Reports CR-047, Feedback Collection FR-064A). It works whether or not the deployment
+crash, feedback, analytics and config databases (Foundations FD-033, UX Analytics AN-183 to AN-185,
+Crash Reports CR-047, Feedback Collection FR-064A, Remote Config RC-100). It works whether or not the deployment
 runs the analytics event store. The project's secret key may do it too (project Admin
 authority); a publishable key may not.
 
@@ -2341,7 +2935,8 @@ POST /v1/projects/{projectId}/erasures           {kind, id, confirm, databases}
     { "type": "crash", "id": "cdb_…", "name": "Checkout crashes", "status": "counted", "counts": { "reports": 3, "groupUsers": 3 } },
     { "type": "feedback", "id": "fdb_…", "name": "Checkout feedback", "status": "counted", "counts": { "submissions": 2, "attachments": 1 } },
     { "type": "analytics", "id": "adb_…", "name": "Checkout app", "status": "counted", "counts": { "events": 4, "installations": 2 } },
-    { "type": "analytics", "id": "adb_…", "name": "Marketing site", "status": "unreachable", "counts": null }
+    { "type": "analytics", "id": "adb_…", "name": "Marketing site", "status": "unreachable", "counts": null },
+    { "type": "config", "id": "cfg_…", "name": "Mobile app", "status": "counted", "counts": { "draftRules": 1, "versionRules": 3 } }
   ],
   "notice": "The erasure matches the identity fields only — …",
   "limits": "Erasure does not stop an application from sending the same IDs again — …"
@@ -2365,6 +2960,18 @@ POST /v1/projects/{projectId}/erasures           {kind, id, confirm, databases}
   them with their screenshots, as deleting a submission does; in an analytics database, the
   events carrying them and every record derived from them — installation records, identity
   links, first occurrences of the installations and of the user ID.
+- **In a config database**, which holds no installation or user ID from a fetch, only the IDs
+  a team wrote into its rules, `draftRules` and `versionRules` count the rules naming the ID in
+  the draft and across the versions (an installation ID found in any letter case, with or
+  without dashes). The erasure removes the ID from each: out of `in` and `notIn` lists, and an
+  `equals` rule becomes `in []`, a `notEquals` rule `notIn []` — an emptied list is valid. In
+  match conditions and split populations alike. Each version keeps its number, record, change
+  summary and note, the active version stays active and the next fetch is answered from it
+  rewritten; the draft, when it changed, gets a new revision, so a publish of the revision read
+  before answers `409 stale_draft_revision` (the revision that published the active version still
+  returns that version, rewritten, with `created: false`). This is the one change a version ever receives
+  (RC-059). The ID erased is the one given: a user ID's installations are not looked for in
+  the rules.
 - **The erasure** needs `confirm`, the same ID exactly (`400 confirmation_mismatch`), and
   `databases`, the IDs to erase in, each one you administer in this project (`403 forbidden`
   otherwise). It answers what it deleted per database, with `erasureId`, the erasure's record (actor, time, kind and counts, never the ID). Crash reports and submissions are gone
@@ -2560,4 +3167,11 @@ cross-origin request are all refused.
 | Export analytics events | No | Yes | Viewer or above |
 | Edit or delete one analytics event | No | No | Not supported |
 | Preview and erase an installation or user ID across a project | No | Yes | Project Admin, or the Admin of each database included |
+| List and read config databases, with their delivery settings | No | Yes | Viewer or above |
+| Create, rename a config database | No | Yes | Creator or Admin |
+| Change a config database's refresh interval or country derivation | No | Yes | Database or project Admin |
+| Read a config database's deletion impact, delete it | No | Yes | Database or project Admin |
+| Fetch a config database's resolved values | Yes | Yes | Not applicable |
+| Preview a context against a config's draft or a version | No | Yes | Viewer or above |
+| Read a config database's reach | No | Yes | Viewer or above |
 | Connect an MCP client to `/v1/mcp` | No | Yes | No |

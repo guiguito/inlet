@@ -276,12 +276,16 @@ and not `covered` when it begins before the oldest event kept; the summary divid
 whose period has ended and is covered.
 
 To honour a request to delete someone's data, `preview_erasure` lists, for an installation ID or
-a user ID, what erasing it would delete in every crash, feedback and analytics database of the
+a user ID, what erasing it would delete in every crash, feedback, analytics and config database of the
 key's project (it has project Admin authority), and `erase_identity` deletes it in the databases
 it names, the ID repeated as `confirm`. It matches the identity fields only, never an ID in
 `clientContext` or params; a user ID takes with it, in each analytics database, its server
 installation and the installations on which it is the only user ever seen, with their crash
-reports and submissions. It does not stop an app from sending again (`setEnabled(false,
+reports and submissions. In a config database, which holds no ID from a fetch, it removes the ID
+from the rules of the draft and every version that name it (`equals` becomes `in []`, `notEquals`
+`notIn []`), keeps the active version active and serves it rewritten at once, and increments the
+draft's revision, so a publish of the revision read before is refused as `stale_draft_revision`.
+It does not stop an app from sending again (`setEnabled(false,
 {forget: true})` does), and does not reach backups, past exports or Slack messages already sent;
 the tools' descriptions say so. It works without the event store: an unreachable analytics
 database is named, and erased once the store answers. `export_analytics_events` pages through
@@ -315,7 +319,7 @@ shorter range or a coarser interval).
 | `run_analytics_cohort` | A saved `cohortId` or an inline `definition` (exactly one); a run may give `granularity`, population `filters` and a `range`, replacing the definition's for that run (else its `defaultRange`, or the last 12 periods). Answers `rows` (each cohort period with members, oldest first: `start`, `label`, `size` as period 0, and `cells` per later period begun with `returned`, `share`, `incomplete`, `covered`), `summary` per period (`members`, `returned`, `share`, `incomplete`), `size`, `periods`, `firstInWindow`, `truncated` (at most 60 rows by day, 52 by week, 36 by month, 10 by year), `covered`, `keptFrom` and `event_deleted` warnings. The whole answer in one call; `format` `csv` or `json` returns the export. A query slot. |
 | `get_analytics_storage` | The storage `settings` in force and their `bounds`; `usage` (events a day, the events kept and the oldest week kept, from partition row counts, `keptFrom`, and the bytes of the database, the event store and PostgreSQL); `binding`, `keptDays` at the measured volume and `recommendations`. A database or project Admin, which a secret key is. No query slot. |
 | `get_analytics_data_health` | Over `last24h` and `last7d`: `refused` by code, `warned` by code, `removedByCap`, `duplicates`, `accepted`; and `incidents`, open or resolved in the last 7 days, with kind, times, figures and a summary. Works while the event store is down. No query slot. |
-| `preview_erasure` | For a `projectId`, a `kind` (`installation` or `user`) and an `id`: every crash, feedback and analytics database of the project with what erasing the ID would delete there — `reports` and `groupUsers` (its group-user associations), `submissions` and `attachments`, `events` and `installations` — or `status: "unreachable"` for an analytics database the event store could not be asked about; `notice` says it matches identity fields only, `limits` what erasure does not reach. A query slot while it counts events. |
+| `preview_erasure` | For a `projectId`, a `kind` (`installation` or `user`) and an `id`: every crash, feedback, analytics and config database of the project with what erasing the ID would delete there — `reports` and `groupUsers` (its group-user associations), `submissions` and `attachments`, `events` and `installations`, and in a config database `draftRules` and `versionRules` (the rules naming the ID in the draft and across the versions) — or `status: "unreachable"` for an analytics database the event store could not be asked about; `notice` says it matches identity fields only, `limits` what erasure does not reach. A query slot while it counts events. |
 | `export_analytics_events` | Every stored event of an analytics database, oldest effective time first, 1,000 per call with `nextCursor` (stable while events arrive), filtered by `from`/`to` local days, `name`, `installationId` and `userId`; each with its stored fields and derived values (local day, installation kind, install ages, clock correction, the sending key). Events an erasure took are never included. The whole export as newline-delimited JSON is `GET …/exports/events` over HTTP. A query slot per call. |
 | `export_analytics_profile` | For a request for access: the record, identity links, first occurrences and the first 1,000 stored events; pass `nextCursor` back as `cursor` for the next 1,000 until it is null. The whole export as one file is `GET …/export` over HTTP. A query slot per call. |
 
@@ -340,7 +344,7 @@ shorter range or a coarser interval).
 | `delete_analytics_database` | The database's exact name as `confirm`. Read `get_deletion_impact` first: it reports events, installations and user IDs (null while the event store is unreachable, which does not block deletion), funnels and cohorts. |
 | `delete_analytics_funnel` | The funnel's exact name as `confirm`; the tool reads the funnel first and refuses a name that does not match. Only the saved definition goes. |
 | `delete_analytics_cohort` | The cohort's exact name as `confirm`; the tool reads the cohort first and refuses a name that does not match. Only the saved definition goes; the standard Retention cohort answers `standard_cohort_immutable`. |
-| `erase_identity` | The same ID again as `confirm`, and `databases`, the IDs to erase in from `preview_erasure`. Deletes the crash reports (and the user ID's group-user associations, affected users adjusted, counts unchanged) and submissions (with screenshots) carrying the ID or the installations erased with a user ID, and the analytics events and derived records, unreadable at once and removed from the event store within the operator's bound (30 days by default). Answers what it deleted per database, `deferred` for an analytics database the event store could not reach. Recorded with its actor and counts, never the ID. |
+| `erase_identity` | The same ID again as `confirm`, and `databases`, the IDs to erase in from `preview_erasure`. Deletes the crash reports (and the user ID's group-user associations, affected users adjusted, counts unchanged) and submissions (with screenshots) carrying the ID or the installations erased with a user ID, and the analytics events and derived records, unreadable at once and removed from the event store within the operator's bound (30 days by default); in a config database, removes the ID from the rules of the draft and every version, the active version kept active and recompiled, the draft's revision incremented. Answers what it deleted per database, `deferred` for an analytics database the event store could not reach. Recorded with its actor and counts, never the ID. |
 | `delete_analytics_event` | The event's exact name as `confirm`. Its events are unreadable at once and removed from the event store in the background, and from its files within the operator's erasure bound (30 days by default, AN-184); its slot under the limit is freed; the name comes back as a new event if an app sends it again. Not for standard events. |
 
 `list_members`, `invite_member`, `set_member_role`, `remove_member`, `list_invitations`,
@@ -349,3 +353,85 @@ shorter range or a coarser interval).
 `databaseId`, as they accept a crash database ID. `set_member_role` with a crash or analytics
 database ID now routes to that database; before Release 8 it always addressed a feedback
 database.
+
+## Remote Config tools
+
+Release 9 adds a fourth database type. A **config database** (`cfg_…`) delivers remote
+configuration to a product's apps: typed **parameters** with defaults, and **conditions**
+that give some of them other values. A fetch returns resolved values only, never the rules.
+For each parameter, the first true condition in priority order that holds a value for it
+decides that value, else the default applies; a split assigns each unit one variant, and
+its control variant usually holds no value. Apps apply new values at their next launch, and
+live parameters at once. The server's instructions say this in a paragraph of their own,
+with the two habits to keep: preview a change before publishing it, and publish with the
+draft revision last read. The tools below cover section 8.3 of the Remote Config PRD but
+`preview_erasure` and `erase_identity`, which cover config databases too (above).
+
+### Reading
+
+| Tool | What it does |
+| --- | --- |
+| `list_config_databases`, `get_config_database` | The config databases of a project; one of them with its delivery settings (`refreshIntervalMinutes` in force, `refreshIntervalBounds`, `deriveCountry`) and `activeVersion`, the number of the version fetches are answered from, null when nothing is published. |
+| `get_config_draft` | The draft's template, its `revision`, who changed it last, the `problems` publishing would refuse, the `warnings` against the active version, whether it differs from the active version and by how many changes, and `conditionUsage` (per condition, the parameters holding a value under it). |
+| `validate_config_draft` | The `problems` and `warnings` of the current revision, as publishing would check them. Publishes nothing. |
+| `export_config_template` | The template of the draft, the active version or a numbered version (`source`), with `format: 1`, which `import_config_template` takes back. |
+| `export_config_defaults` | Each parameter's default as TypeScript (`format: "ts"`, a type and a `configDefaults` object for the SDK's `init`) or JSON, from the same sources. |
+| `diff_config` | The difference between any two of `draft`, `active` and a version number (`from`, `to`; `active` to `draft` by default, the publish review): per parameter and condition, added, removed or changed with the values before and after, whether the conditions' order changed, and the warnings of going from one to the other. From `active` to a version is the rollback review. |
+| `list_config_activity` | Every publish, rollback and unpublish, newest first, with its actor, time, note and the version it made active (null for an unpublish). Paged with `nextCursor`. |
+| `list_config_versions`, `get_config_version` | The versions newest first, each with its publisher, note, change summary, `rolledBackFrom` and whether it is active; one version with its template. |
+| `export_config_history` | The whole history as one JSON document: the database, the draft, the activity and every version with its template. Offer it before deleting. |
+| `preview_config` | The way to check a change before publishing it: a context (a fetch body: `installationId`, `userId`, `platform`, `os`, `app`, `locale`, `country`, `attributes`) against the draft (default), `active` or a version number. Each parameter's value and the condition (and variant) that gave it or that its default applied; each condition's result and, if false, its first false rule or the missing unit; the experiments; for the draft, `problems` it could not evaluate. The active version's preview equals what a fetch returns, except that no country is derived: pass `country`. Counts in no reach figure. |
+| `get_config_reach` | Fetches, not devices: per hour, fetches, not modified, per version and refused by reason; per day, fetches per condition and per variant; the summary of each version's share of the last 24 hours, the active version's share, and each condition's share of the last day with `matchedNone`. A count from 1 to 9 per condition or variant is `{count: null, fewerThan: 10}`, and one that would give such a count by subtraction (a split's on a day one of its variants' is hidden, a last-day count when one of its two days' is) `{count: null, withheld: true}`, each with no share. `from`, `to` in RFC 3339; 30 days at most. |
+
+### Writing
+
+| Tool | What it does |
+| --- | --- |
+| `create_config_database` | A config database for one product, with an empty draft, nothing published, the deployment's default refresh interval (60 minutes) and country derivation on. The project's existing publishable key fetches from it. |
+| `update_config_database` | Rename it, or change `refreshIntervalMinutes` (5 to 1,440 unless the operator changed them; `setting_out_of_bounds` names the bounds) and `deriveCountry`. Pass only what changes. |
+| `set_config_parameter`, `delete_config_parameter` | Create or replace one parameter (`key`, `type`, `default`, and optionally `description`, `live`, `schema`, `conditional`), or delete one. The rest of the draft is left as it is. |
+| `set_config_condition`, `delete_config_condition` | Create (you choose the `cnd_…` ID; appended at the lowest priority) or replace one condition; delete one with every value under it, answering `affectedParameters`. The server draws and keeps the salt. |
+| `reorder_config_conditions` | The priority order, naming every condition once (`config_condition_order_mismatch` otherwise). |
+| `reshuffle_config_condition` | A new salt: once published, a percentage reaches different units and a split reassigns its variants. Confirm with the user first. |
+| `save_config_draft` | Replace the whole draft, last-write-wins unless `expectedRevision` is passed. Prefer the per-part tools, which never overwrite someone else's change. |
+| `import_config_template` | Replace the draft with an export, keeping its condition IDs and salts, so units fall in the same buckets: how a config moves from staging to production. |
+| `copy_config_version_to_draft` | Replace the draft with a version's template (after a rollback, so the draft stops holding the change rolled back). |
+| `publish_config` | Publish the draft as the next version, with the `revision` you last read and a `note`; Slack announces it. `stale_draft_revision` if the draft moved since; `config_template_invalid` with every problem. A retried publish of the same revision is harmless: it answers the active version with `created: false` and announces nothing. |
+| `rollback_config` | Publish a new version equal to an older one, noted "Rolled back to version N." plus your note. The draft is not changed. |
+
+Every draft change returns the new `revision`, which publishing will need; a change the
+save checks refuse fails with `config_template_invalid` and each problem's path. The draft
+tools' descriptions state the evaluation rule, that a split's control variant usually holds
+no value, and that targeting is not access control: anyone with the publishable key can ask
+for the values of any user.
+
+### Destructive
+
+| Tool | What it demands |
+| --- | --- |
+| `delete_config_database` | The database's exact name as `confirm`; the tool reads the database first and refuses a name that does not match (`confirmation_mismatch`). Read `get_deletion_impact` first: it reports versions, the parameters of the draft and of the active version, and `exportPath`, the history export to offer before deleting. |
+| `unpublish_config` | The database's exact name as `confirm` (`confirmation_mismatch` otherwise). Leaves nothing active: every application falls back to its in-app defaults at its next fetch. Every version is kept; publishing or rolling back undoes it. |
+
+### The agent loop
+
+PRD 5.7, with the tools: a crash occurs only on Android 14 with the new checkout.
+
+1. `get_config_draft` on the production config database: note its `revision` (say 41) and
+   that `new_checkout` has no condition for Android 14.
+2. `set_config_condition` with `conditionId: "cnd_android14"`, `name: "Android 14"`,
+   `kind: "match"` and the rules `platform in ["android"]` and `osVersion versionEquals "14"`,
+   then `reorder_config_conditions` to put it first. `set_config_parameter` gives
+   `new_checkout` the value `false` under `cnd_android14`. Each answers the new revision (44).
+3. `validate_config_draft`: no problems. `diff_config` (active to draft): one condition added,
+   `new_checkout` changed, the order changed, no warnings.
+4. `publish_config` with `revision: 44` and `note: "Off on Android 14: crash group …"`. If the
+   answer is lost, calling it again with 44 returns the same version with `created: false`.
+5. After the fix ships, `delete_config_condition` and publish again; if the new version goes
+   wrong, `rollback_config` to the previous number, then `copy_config_version_to_draft`.
+
+`list_members`, `invite_member`, `set_member_role`, `remove_member`, `list_invitations`,
+`revoke_invitation`, `get_slack_notifications`, `update_slack_notifications`,
+`send_slack_test_message` and `get_deletion_impact` accept a config database ID as their
+`databaseId`. `send_slack_test_message` now reads the name it confirms from the database's
+own type; before Release 9 it always read a feedback database, so it failed for a crash or
+analytics database ID.
