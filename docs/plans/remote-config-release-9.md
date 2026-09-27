@@ -1,6 +1,6 @@
 # Release 9 (Remote Config): implementation plan and handoff
 
-**Status as of 27 September 2026: built and verified on branch `guiguito/remote_config`; not merged, and `inlet-sdk` 0.4.0 not published (both owner actions).** Every piece was built by a developer agent and verified by a separate review; the acceptance matrix is `docs/plans/remote-config-release-9-acceptance.md`. The PRD amendments the pieces propose below were applied to Notion and the mirrors, parity checked, in the same session; the "Left out" entries that name later pieces were done by those pieces. This file
+**Status as of 27 September 2026: built, verified, merged to `main` and published to npm as `inlet-sdk` 0.4.0.** Every piece was built by a developer agent and verified by a separate review; the acceptance matrix is `docs/plans/remote-config-release-9-acceptance.md`. The PRD amendments the pieces propose below were applied to Notion and the mirrors, parity checked, in the same session; the "Left out" entries that name later pieces were done by those pieces. This file
 is the working record of the build: the order of the pieces, the decisions every piece
 follows, the seams each piece leaves for the next, and what was left out. Update it in the
 same change as the code it describes.
