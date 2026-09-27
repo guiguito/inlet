@@ -7,8 +7,12 @@ import { api, ApiError, type AnalyticsLiveEvent, type CurrentUser } from '@/lib/
 import { ANALYTICS_CONSENT_NOTE, analyticsSnippets } from '@/lib/analytics-snippets';
 import { AccessPanel } from '@/components/access-panel';
 import { EventsPanel } from '@/components/analytics-events';
+import { FunnelsPanel } from '@/components/analytics-funnels';
+import { CohortsPanel } from '@/components/analytics-cohorts';
 import { OverviewPanel } from '@/components/analytics-overview';
+import { EventNameNotice, StoragePanel } from '@/components/analytics-storage';
 import { UsersPanel } from '@/components/analytics-users';
+import { erasureApi } from '@/lib/erasure';
 import { AppShell } from '@/components/app-shell';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { CopyField } from '@/components/copy-field';
@@ -30,7 +34,7 @@ import { pluralize } from '@/lib/format';
  * One analytics database (UX Analytics PRD section 8.1): Insights (Overview, Events,
  * Funnels, Cohorts), Users, Collect and Settings (General, Storage, Notifications, Access).
  * It opens on Insights → Overview. Piece 2 builds the shell and Settings, piece 3 Collect, piece
- * 4 Events, piece 5 Overview; the other panels say what they will hold until the pieces that build them replace them.
+ * 4 Events, piece 5 Overview, piece 6 Users, piece 7 Funnels, piece 8 Cohorts, piece 9 Storage.
  */
 const TABS = [
   {
@@ -57,13 +61,6 @@ const TABS = [
   },
 ] as const;
 
-/** What each panel not yet built will show, in one sentence. */
-const COMING: Record<string, string> = {
-  funnels: 'Funnels will appear here.',
-  cohorts: 'Cohorts, the standard Retention cohort first, will appear here.',
-  storage: 'The storage settings, usage and data health will appear here.',
-};
-
 /** UX Analytics 8.1: every analytics screen says so, in one sentence, and the rest of Inlet works. */
 export const EVENT_STORE_UNREACHABLE =
   'The analytics event store is unreachable, so this database cannot be read or collect events for now; the rest of Inlet works as usual.';
@@ -86,7 +83,6 @@ export function AnalyticsDatabasePage({ user }: { user: CurrentUser }) {
     enabled: Boolean(database.data),
   });
 
-  const placeholder = (key: string) => <EmptyState className="mt-4" title="Not here yet" description={COMING[key]} />;
 
   return (
     <AppShell
@@ -145,7 +141,7 @@ export function AnalyticsDatabasePage({ user }: { user: CurrentUser }) {
                 {entry.value === 'collect' ? (
                   <CollectPanel databaseId={databaseId} projectId={database.data.projectId} />
                 ) : entry.value === 'users' ? (
-                  <UsersPanel databaseId={databaseId} unreachable={EVENT_STORE_UNREACHABLE} />
+                  <UsersPanel databaseId={databaseId} unreachable={EVENT_STORE_UNREACHABLE} eraseIn={role === 'admin' ? database.data.projectId : undefined} />
                 ) : (
                   <Tabs value={panel ?? entry.panels[0].value} onValueChange={(next) => show(entry.value, next)}>
                     <TabsList>
@@ -161,15 +157,19 @@ export function AnalyticsDatabasePage({ user }: { user: CurrentUser }) {
                           <OverviewPanel databaseId={databaseId} unreachable={EVENT_STORE_UNREACHABLE} />
                         ) : sub.value === 'events' ? (
                           <EventsPanel databaseId={databaseId} role={role} unreachable={EVENT_STORE_UNREACHABLE} />
+                        ) : sub.value === 'funnels' ? (
+                          <FunnelsPanel databaseId={databaseId} role={role} unreachable={EVENT_STORE_UNREACHABLE} />
+                        ) : sub.value === 'cohorts' ? (
+                          <CohortsPanel databaseId={databaseId} role={role} unreachable={EVENT_STORE_UNREACHABLE} />
+                        ) : sub.value === 'storage' ? (
+                          <StoragePanel databaseId={databaseId} databaseName={database.data.name} unreachable={EVENT_STORE_UNREACHABLE} />
                         ) : sub.value === 'general' ? (
                           <GeneralSettings database={database.data} userId={user.id} />
                         ) : sub.value === 'notifications' ? (
                           <NotifyPanel databaseId={databaseId} hideContentLevel />
                         ) : sub.value === 'access' ? (
                           <AccessPanel scope={{ kind: 'analyticsDatabase', databaseId, name: database.data.name }} currentUserId={user.id} />
-                        ) : (
-                          placeholder(sub.value)
-                        )}
+                        ) : null}
                       </TabsContent>
                     ))}
                   </Tabs>
@@ -324,6 +324,15 @@ function GeneralSettings({
               </p>
               {impact.data.eventStore === 'unavailable' ? <p>{EVENT_STORE_UNREACHABLE}</p> : null}
               <p>{impact.data.notice}</p>
+              {/* AN-212, FR-025: the export offered before deletion is the streaming event export. */}
+              <p data-testid="analytics-export-offer">
+                Before deleting, you can{' '}
+                <a className="font-medium text-foreground underline underline-offset-4" href={erasureApi.exportEventsHref(database.id)} download>
+                  export every stored event
+                </a>{' '}
+                as newline-delimited JSON. It holds every stored event, and not the installation records and first occurrences
+                derived from them.
+              </p>
             </>
           ) : impact.error ? (
             <p>{impact.error instanceof ApiError ? impact.error.message : 'What would be deleted could not be read.'}</p>
@@ -394,6 +403,7 @@ function CollectPanel({ databaseId, projectId }: { databaseId: string; projectId
         </CardContent>
       </Card>
 
+      <EventNameNotice databaseId={databaseId} dataHealthHref={`/analytics-databases/${databaseId}?tab=settings&panel=storage#data-health`} />
       <LiveFeed databaseId={databaseId} />
 
       <Card>

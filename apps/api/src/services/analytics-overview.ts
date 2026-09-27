@@ -26,6 +26,7 @@ import {
   type ReadSkip,
   type ReadStore,
 } from './analytics-query.js';
+import { cohortCounts, membersSettings, membersSql } from './analytics-cohorts.js';
 
 /**
  * Insights → Overview (UX Analytics AN-140 to AN-144, AN-043 to AN-048, AN-107, AN-152;
@@ -188,21 +189,12 @@ export function activeRows(scope: FilterScope, filters: AnalyticsFilter[], p: Sq
 }
 
 /**
- * The installation records a new-installation count or a cohort reads (AN-031, AN-047): device
- * installations that are not ephemeral, with their install day and install dimensions under the
- * filters' column names, installed between `from` and `to`, filtered by those dimensions.
+ * The installation records a new-installation count reads (AN-031, AN-047): the install start of
+ * a cohort (piece 8's `membersSql`), device installations that are not ephemeral installed between
+ * `from` and `to`, filtered by their install dimensions. Rows `(unit, day)`.
  */
 function installedRows(scope: FilterScope, filters: AnalyticsFilter[], p: SqlParams, from: string, to: string): string {
-  return `SELECT installation_id, day FROM (
-      SELECT installation_id, i.day AS day, i.app_id AS app_id, i.platform AS platform, i.environment AS environment
-      FROM (
-        SELECT installation_id, minIfMerge(install) AS i, max(installation_kind) AS kind, max(ephemeral) AS eph
-        FROM installations
-        WHERE database_key = ${p.add(scope.databaseKey, 'UInt32')} AND ${scope.skip.installations(p)}
-        GROUP BY installation_id
-        HAVING max(has_qualifying) = 1)
-      WHERE kind = 'device' AND NOT eph)
-    WHERE day BETWEEN ${p.add(from, 'Date')} AND ${p.add(to, 'Date')} AND ${compileFilters(filters, p, scope)}`;
+  return membersSql({ scope, start: { kind: 'install' }, unit: 'installation', filters, from, to }, p);
 }
 
 /**
@@ -259,8 +251,6 @@ type Inputs = {
   timezone: string;
   range: { from: string; to: string };
   keptFrom: string | null;
-  /** `kept_from`: set once retention dropped a week (piece 9), so the oldest day kept is not the first ever. */
-  retentionFrom: string | null;
   nowMs: number;
   startedId: number | null;
   crashedId: number | null;
@@ -333,48 +323,41 @@ export async function overviewFigures(store: ReadStore, settings: QuerySettings,
     ? await store.query<{ d: string; n: string }>(
         `SELECT toString(day) AS d, count() AS n FROM (${installedRows(scope, filters, installs, installFrom, installTo)}) GROUP BY d`,
         installs.values,
-        settings,
+        membersSettings(settings, 'install'),
       )
     : [];
   const installsOn = new Map(installRows.map((row) => [row.d, Number(row.n)]));
   const sumDays = (map: Map<string, number>, w: { from: string; to: string }) => days(w).reduce((sum, day) => sum + (map.get(day) ?? 0), 0);
 
-  const retention = new SqlParams();
-  const retentionColumns = RETENTION_DAYS.flatMap((n) => {
-    // AN-140: the Nth day after installing has ended when it is before today.
-    const ended = `day + ${n} < ${retention.add(today, 'Date')}`;
-    const returned = `has(returned, day + ${n})`;
-    return [
-      `countIf(current AND ${ended}) AS base${n}`,
-      `countIf(current AND ${ended} AND ${returned}) AS back${n}`,
-      `countIf(NOT current AND ${ended}) AS basePrevious${n}`,
-      `countIf(NOT current AND ${ended} AND ${returned}) AS backPrevious${n}`,
-    ];
-  });
-  const startedCondition = input.startedId === null ? '0' : `event_name_id = ${retention.add(input.startedId, 'UInt32')}`;
-  const [retained] = installsNeeded
-    ? await store.query<Record<string, string>>(
-        // AN-103, AN-107: a member returned on day N when its installation sent `app_started` on
-        // that local day, on any platform and in any environment (population filters do not
-        // apply to returns); a background `app_started` of the installation counts (AN-047).
-        `SELECT ${retentionColumns.join(', ')}
-         FROM (
-           SELECT m.installation_id, m.day AS day, m.day >= ${retention.add(covered?.from ?? installTo, 'Date')} AS current, r.days AS returned
-           FROM (${installedRows(scope, filters, retention, installFrom, installTo)}) AS m
-           LEFT JOIN (
-             SELECT installation_id, groupArray(local_day) AS days FROM (
-               SELECT local_day, installation_id, count() AS c FROM events
-               WHERE database_key = ${retention.add(scope.databaseKey, 'UInt32')}
-                 AND ${startedCondition}
-                 AND installation_kind = 'device'
-                 AND local_day BETWEEN ${retention.add(addDays(installFrom, 1), 'Date')} AND ${retention.add(yesterday, 'Date')}
-                 AND ${scope.skip.events(retention)}
-               GROUP BY local_day, installation_id)
-             GROUP BY installation_id) AS r ON r.installation_id = m.installation_id)`,
-        retention.values,
-        settings,
-      )
-    : [undefined];
+  // AN-140, AN-107: D1, D7 and D30 are the standard Retention cohort by day, computed by the one
+  // retention computation cohorts use (piece 8's `cohortCounts`): a member returned on day N when
+  // its installation sent `app_started` on that local day, on any platform and in any environment
+  // (population filters do not apply to returns, AN-103); a background `app_started` counts (AN-047).
+  const counts = installsNeeded
+    ? await cohortCounts(store, settings, {
+        scope,
+        start: { kind: 'install' },
+        return: { kind: 'event', event: 'app_started', id: input.startedId, filters: [] },
+        unit: 'installation',
+        granularity: 'day',
+        filters,
+        from: installFrom,
+        to: installTo,
+        returnsTo: yesterday,
+      })
+    : [];
+  const currentFrom = covered?.from ?? installTo;
+  const retained: Record<string, number> = {};
+  for (const n of RETENTION_DAYS) {
+    for (const key of [`base${n}`, `back${n}`, `basePrevious${n}`, `backPrevious${n}`]) retained[key] = 0;
+    for (const count of counts) {
+      // AN-140: the Nth day after installing has ended when it is before today.
+      if (addDays(count.cohort, n) >= today || (count.n !== 0 && count.n !== n)) continue;
+      const suffix = count.cohort >= currentFrom ? '' : 'Previous';
+      const key = `${count.n === 0 ? 'base' : 'back'}${suffix}${n}`;
+      retained[key] = retained[key]! + count.units;
+    }
+  }
 
   // --- Sessions and crash-free sessions (AN-043, AN-046, AN-152).
   const sessions = new SqlParams();
@@ -448,12 +431,12 @@ export async function overviewFigures(store: ReadStore, settings: QuerySettings,
     return days(part).reduce((sum, day) => sum + dauOf(day), 0) / daysInRange(part) / mau;
   };
   const retentionFigure = (n: number) => {
-    const base = Number(retained?.[`base${n}`] ?? 0);
-    const basePrevious = Number(retained?.[`basePrevious${n}`] ?? 0);
+    const base = retained[`base${n}`]!;
+    const basePrevious = retained[`basePrevious${n}`]!;
     return {
       ...figure(
-        covered !== null && base > 0 ? Number(retained![`back${n}`]) / base : null,
-        rangePrevious && basePrevious > 0 ? Number(retained![`backPrevious${n}`]) / basePrevious : null,
+        covered !== null && base > 0 ? retained[`back${n}`]! / base : null,
+        rangePrevious && basePrevious > 0 ? retained[`backPrevious${n}`]! / basePrevious : null,
         covered,
       ),
       installations: covered !== null ? base : 0,
@@ -505,9 +488,9 @@ export async function overviewFigures(store: ReadStore, settings: QuerySettings,
       points: periods.map((period) => ({ start: period.start, label: period.label, value: inWindow(period.key, covered) ? dauOf(period.key) : 0, incomplete: period.incomplete })),
     },
     versionsFirstSeen: firstRows
-      // A version whose first day is the oldest day kept after retention dropped older weeks
-      // may be older than that: its marker would be a guess, so it has none.
-      .filter((row) => row.d >= range.from && row.d <= range.to && !(input.retentionFrom !== null && row.d <= input.retentionFrom))
+      // `version_first` is never pruned by retention (piece 9), so a version first seen before
+      // the oldest week kept keeps its true first day and its marker.
+      .filter((row) => row.d >= range.from && row.d <= range.to)
       .map((row) => ({ version: row.v, day: row.d }))
       .sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : a.version < b.version ? -1 : 1)),
   };
@@ -548,7 +531,7 @@ export async function runOverview(
     'query',
     async (store, settings) => {
       const keptFrom = await oldestKeptDay(store, database, settings);
-      return { keptFrom, ...(await overviewFigures(store, settings, { scope, filters, unit: query.unit, timezone, range, keptFrom, retentionFrom: database.keptFrom, nowMs, startedId: idOf('app_started'), crashedId: idOf('session_crashed') })) };
+      return { keptFrom, ...(await overviewFigures(store, settings, { scope, filters, unit: query.unit, timezone, range, keptFrom, nowMs, startedId: idOf('app_started'), crashedId: idOf('session_crashed') })) };
     },
     signal,
   );

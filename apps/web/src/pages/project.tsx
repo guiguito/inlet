@@ -18,6 +18,7 @@ import { AppShell, PageHeader } from '@/components/app-shell';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { CopyField } from '@/components/copy-field';
 import { EmptyState } from '@/components/empty-state';
+import { ErasePanel } from '@/components/erase-panel';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -941,6 +942,9 @@ function SettingsTab({ projectId, name }: { projectId: string; name: string }) {
           </form>
         </CardContent>
       </Card>
+
+      {/* Foundations FD-033: the project's erasure of an installation or user ID. */}
+      <ErasePanel projectId={projectId} />
 
       <Card className="border-destructive/40">
         <CardHeader>

@@ -1,7 +1,7 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router';
-import { keepPreviousData, useQuery } from '@tanstack/react-query';
-import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon, DownloadIcon, SearchIcon } from 'lucide-react';
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
+import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon, DownloadIcon, EraserIcon, SearchIcon } from 'lucide-react';
 import { ApiError } from '@/lib/api';
 import {
   profileHref,
@@ -16,9 +16,11 @@ import {
 } from '@/lib/analytics-profiles';
 import { queryErrorSentence } from '@/components/analytics-events';
 import { EmptyState } from '@/components/empty-state';
+import { ERASE_PURPOSE, ErasePanel } from '@/components/erase-panel';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -46,12 +48,13 @@ function when(value: string | null): string {
   return value ? formatDateTime(value) : '—';
 }
 
-export function UsersPanel({ databaseId, unreachable }: { databaseId: string; unreachable: string }) {
+/** `eraseIn`: the project, when the caller is a database or project Admin, who may erase a profile (AN-183). */
+export function UsersPanel({ databaseId, unreachable, eraseIn }: { databaseId: string; unreachable: string; eraseIn?: string | undefined }) {
   const [params] = useSearchParams();
   const installation = params.get('installation');
   const user = params.get('user');
-  if (installation) return <ProfileView databaseId={databaseId} subject={{ kind: 'installation', id: installation }} unreachable={unreachable} />;
-  if (user) return <ProfileView databaseId={databaseId} subject={{ kind: 'user', id: user }} unreachable={unreachable} />;
+  if (installation) return <ProfileView databaseId={databaseId} subject={{ kind: 'installation', id: installation }} unreachable={unreachable} eraseIn={eraseIn} />;
+  if (user) return <ProfileView databaseId={databaseId} subject={{ kind: 'user', id: user }} unreachable={unreachable} eraseIn={eraseIn} />;
   return <ProfileSearch databaseId={databaseId} unreachable={unreachable} />;
 }
 
@@ -218,7 +221,7 @@ function InstallationTable({ databaseId, rows, caption, userColumn = true }: { d
 
 // --- A profile ---------------------------------------------------------------------------------------
 
-function ProfileView({ databaseId, subject, unreachable }: { databaseId: string; subject: ProfileSubject; unreachable: string }) {
+function ProfileView({ databaseId, subject, unreachable, eraseIn }: { databaseId: string; subject: ProfileSubject; unreachable: string; eraseIn?: string | undefined }) {
   const [params, setParams] = useSearchParams();
   const back = () => {
     const next = new URLSearchParams(params);
@@ -249,7 +252,7 @@ function ProfileView({ databaseId, subject, unreachable }: { databaseId: string;
         )
       ) : profile.data ? (
         <>
-          <ProfileHeader databaseId={databaseId} subject={subject} profile={profile.data} />
+          <ProfileHeader databaseId={databaseId} subject={subject} profile={profile.data} eraseIn={eraseIn} />
           <div className="grid gap-4 lg:grid-cols-2">
             {profile.data.kind === 'installation' ? <ContextCard profile={profile.data} /> : <UserInstallations databaseId={databaseId} profile={profile.data} />}
             <CountsCard profile={profile.data} />
@@ -263,7 +266,8 @@ function ProfileView({ databaseId, subject, unreachable }: { databaseId: string;
   );
 }
 
-function ProfileHeader({ databaseId, subject, profile }: { databaseId: string; subject: ProfileSubject; profile: InstallationProfile | UserProfile }) {
+function ProfileHeader({ databaseId, subject, profile, eraseIn }: { databaseId: string; subject: ProfileSubject; profile: InstallationProfile | UserProfile; eraseIn?: string | undefined }) {
+  const queryClient = useQueryClient();
   return (
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div className="space-y-1.5">
@@ -303,9 +307,26 @@ function ProfileHeader({ databaseId, subject, profile }: { databaseId: string; s
             <DownloadIcon /> Export
           </a>
         </Button>
-        {/* Piece 10 adds the Admin's Erase action here (AN-183, PRD 8.1): shown to a database or
-            project Admin (the database page knows the caller's role), it opens the project's
-            erasure preview and asks for the ID to be typed. */}
+        {/* AN-183, 5.8, 8.1: an Admin's Erase opens the project's erasure in place, the ID filled in,
+            this database selected and the preview read, which asks for the ID to be typed. In place
+            rather than on the project's settings, which a database Admin who is no member of the
+            project cannot open. Closing it reads the profile again, gone once erased here. */}
+        {eraseIn ? (
+          <Dialog onOpenChange={(open) => (open ? undefined : void queryClient.invalidateQueries({ queryKey: ['analytics-profile', databaseId] }))}>
+            <DialogTrigger asChild>
+              <Button variant="destructive" size="sm">
+                <EraserIcon /> Erase
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>Erase this {subject.kind === 'installation' ? 'installation ID' : 'user ID'}</DialogTitle>
+                <DialogDescription>{ERASE_PURPOSE}</DialogDescription>
+              </DialogHeader>
+              <ErasePanel projectId={eraseIn} initial={{ kind: subject.kind, id: subject.id, databaseId }} framed={false} />
+            </DialogContent>
+          </Dialog>
+        ) : null}
       </div>
     </div>
   );

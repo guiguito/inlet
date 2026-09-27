@@ -29,6 +29,27 @@
       "when": 1790467185233,
       "tag": "0003_analytics_event_name_deletions",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1790477167657,
+      "tag": "0004_analytics_piece9_incident_resolution",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1790481025687,
+      "tag": "0005_analytics_piece10_erasure",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790484571593,
+      "tag": "0006_analytics_piece10_erasure_links",
+      "breakpoints": true
     }
   ]
 }

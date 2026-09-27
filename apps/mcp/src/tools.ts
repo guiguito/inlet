@@ -18,6 +18,10 @@ import {
 import { InletClient, InletError } from './client.js';
 import { registerAnalyticsTools } from './analytics-tools.js';
 import { registerAnalyticsProfileTools } from './analytics-profile-tools.js';
+import { registerAnalyticsStorageTools } from './analytics-storage-tools.js';
+import { registerAnalyticsFunnelTools } from './analytics-funnel-tools.js';
+import { registerAnalyticsCohortTools } from './analytics-cohort-tools.js';
+import { registerAnalyticsErasureTools } from './analytics-erasure-tools.js';
 import { registerCrashTools } from './crash-tools.js';
 
 /**
@@ -109,6 +113,10 @@ export function registerTools(server: McpServer, client: InletClient): void {
   registerCrashTools(server, client);
   registerAnalyticsTools(server, client);
   registerAnalyticsProfileTools(server, client);
+  registerAnalyticsStorageTools(server, client);
+  registerAnalyticsFunnelTools(server, client);
+  registerAnalyticsCohortTools(server, client);
+  registerAnalyticsErasureTools(server, client);
 
   // --- Reading ------------------------------------------------------------
 

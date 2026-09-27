@@ -43,7 +43,8 @@ import { Textarea } from '@/components/ui/textarea';
 
 type Role = 'admin' | 'creator' | 'viewer';
 
-const LABELS = {
+/** Words for each option of the definitions' selects, shared with the Funnels panel. */
+export const LABELS = {
   metric: { events: 'Events', installations: 'Unique installations', users: 'Unique user IDs', perInstallation: 'Events per installation' },
   interval: { hour: 'Hour', day: 'Day', week: 'Week', month: 'Month', year: 'Year' },
   preset: {
@@ -89,7 +90,7 @@ export function queryErrorSentence(error: unknown, unreachable: string): string 
   return 'The chart could not be loaded; try again.';
 }
 
-const SELECT = 'h-9 rounded-md border border-input bg-transparent px-2 text-sm shadow-xs focus-visible:outline-2 focus-visible:outline-ring';
+export const SELECT = 'h-9 rounded-md border border-input bg-transparent px-2 text-sm shadow-xs focus-visible:outline-2 focus-visible:outline-ring';
 
 /** A filter row is kept in the address as it is typed; only complete filters are sent. */
 function draftFilters(list: unknown): AnalyticsFilter[] {
@@ -99,7 +100,7 @@ function draftFilters(list: unknown): AnalyticsFilter[] {
       typeof filter === 'object' && filter !== null && typeof (filter as AnalyticsFilter).field === 'string' && typeof (filter as AnalyticsFilter).op === 'string',
   );
 }
-const complete = (filters: AnalyticsFilter[]) => filters.filter((filter) => analyticsFilterSchema.safeParse(filter).success);
+export const complete = (filters: AnalyticsFilter[]) => filters.filter((filter) => analyticsFilterSchema.safeParse(filter).success);
 
 /**
  * AN-064, AN-068: the builder's state, read from the address. `chart` is what the builder shows,
@@ -495,7 +496,7 @@ function ChartBuilder({
   );
 }
 
-function SplitControl({ split, disabled, onChange }: { split: AnalyticsSplit | undefined; disabled: boolean; onChange: (split: AnalyticsSplit | undefined) => void }) {
+export function SplitControl({ split, disabled, onChange }: { split: AnalyticsSplit | undefined; disabled: boolean; onChange: (split: AnalyticsSplit | undefined) => void }) {
   // An experiment or a param split waits for its key before it is applied.
   const [field, setField] = useState<AnalyticsSplit['field'] | ''>(split?.field ?? '');
   const [key, setKey] = useState(split?.key ?? '');
@@ -553,7 +554,22 @@ function SplitControl({ split, disabled, onChange }: { split: AnalyticsSplit | u
 const KEYED: AnalyticsFilterField[] = ['experiment', 'param'];
 const FILTER_VALUE_DIMENSIONS = new Set(['platform', 'platformVersion', 'runtime', 'app', 'appVersion', 'environment', 'country', 'attribution', 'installAttribution', 'category']);
 
-function FilterList({ databaseId, event, filters, label, onChange }: { databaseId: string; event: string; filters: AnalyticsFilter[]; label: string; onChange: (filters: AnalyticsFilter[]) => void }) {
+export function FilterList({
+  databaseId,
+  event,
+  filters,
+  label,
+  onChange,
+  fields = ANALYTICS_FILTER_FIELDS,
+}: {
+  databaseId: string;
+  event: string;
+  filters: AnalyticsFilter[];
+  label: string;
+  onChange: (filters: AnalyticsFilter[]) => void;
+  /** The fields offered: every one by default; a cohort's population filters offer fewer (AN-101). */
+  fields?: readonly AnalyticsFilterField[];
+}) {
   return (
     <div className="space-y-2">
       {filters.map((filter, index) => (
@@ -563,6 +579,7 @@ function FilterList({ databaseId, event, filters, label, onChange }: { databaseI
           event={event}
           filter={filter}
           label={`${label}, filter ${index + 1}`}
+          fields={fields}
           onChange={(next) => onChange(filters.map((f, i) => (i === index ? next : f)))}
           onRemove={() => onChange(filters.filter((_, i) => i !== index))}
         />
@@ -585,6 +602,7 @@ function FilterRow({
   event,
   filter,
   label,
+  fields,
   onChange,
   onRemove,
 }: {
@@ -592,6 +610,7 @@ function FilterRow({
   event: string;
   filter: AnalyticsFilter;
   label: string;
+  fields: readonly AnalyticsFilterField[];
   onChange: (filter: AnalyticsFilter) => void;
   onRemove: () => void;
 }) {
@@ -635,7 +654,7 @@ function FilterRow({
           onChange({ field, op, ...(KEYED.includes(field) ? { key: '' } : {}), ...(op === 'isSet' ? {} : { values: [] }) });
         }}
       >
-        {ANALYTICS_FILTER_FIELDS.map((field) => (
+        {fields.map((field) => (
           <option key={field} value={field}>
             {LABELS.field[field]}
           </option>

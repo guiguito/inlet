@@ -85,10 +85,10 @@ describe('the event store, configured and ready', () => {
       await scratch.connect();
       await scratch.connect();
       const recorded = await scratch.query<{ version: number; name: string }>('SELECT version, name FROM inlet_migrations ORDER BY version');
-      expect(recorded).toEqual([{ version: 1, name: '0001_events' }, { version: 2, name: '0002_version_first' }]);
+      expect(recorded).toEqual([{ version: 1, name: '0001_events' }, { version: 2, name: '0002_version_first' }, { version: 3, name: '0003_analytics_erasure_targets' }]);
       const tables = await scratch.query<{ name: string }>('SELECT name FROM system.tables WHERE database = {database:String} ORDER BY name', { database });
       expect(tables.map((t) => t.name)).toEqual([
-        'events', 'events_ingest', 'events_mv', 'inlet_migrations', 'installation_first', 'installation_first_mv',
+        'analytics_erasure_targets', 'events', 'events_ingest', 'events_mv', 'inlet_migrations', 'installation_first', 'installation_first_mv',
         'installation_users', 'installation_users_mv', 'installations', 'installations_mv', 'user_first', 'user_first_mv',
         'version_first', 'version_first_mv',
       ]);
@@ -103,7 +103,7 @@ describe('the event store, configured and ready', () => {
     await store.command('CREATE DATABASE IF NOT EXISTS {database:Identifier}', { database });
     const scratch = new EventStore({ url: TEST_ENV.INLET_CLICKHOUSE_URL, database, migrate: false, log: pino({ level: 'silent' }) });
     try {
-      await expect(scratch.connect()).rejects.toThrow(/0001_events, 0002_version_first are not applied/);
+      await expect(scratch.connect()).rejects.toThrow(/0001_events, 0002_version_first, 0003_analytics_erasure_targets are not applied/);
       expect(scratch.state).toBe('pending');
     } finally {
       await store.command('DROP DATABASE IF EXISTS {database:Identifier}', { database });

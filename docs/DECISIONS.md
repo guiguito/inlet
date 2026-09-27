@@ -4020,7 +4020,8 @@ limits: the installation record (`installations` with the existence rule of AN-0
 identity links (`installation_users`, the current user ID being the last seen with ties to the
 larger ID, as `argMax(user_id, (last_seen, user_id))` derives it), and its counts and calendar
 from its events (`installation_id =` or `user_id =`, served by the bloom filters of DECISIONS
-31.4). Sessions are the distinct session IDs of its `app_started` events (AN-043), active days
+31.4). Sessions are the distinct session IDs of its `app_started` events (AN-043; since piece 7, of
+the sessions holding one of its events, 33.7), active days
 the local days holding an event that is not a background event (AN-047), events every event
 including background ones. A user profile exists while one of its installations' records does
 (AN-126) and its totals are over the events carrying the user ID, on whichever installation.
@@ -4080,3 +4081,614 @@ calendar draws at most the last 53 weeks and hides its drawing from assistive te
 **Active days as a list** gives every active day as text. The feed groups consecutive events of
 one session, as a newest-first list meets them. The Admin's Erase action has its marked place in
 the profile header for piece 10.
+
+**A background event names the installation's user** (decided with piece 7). A background event
+carrying a user ID updates the installation's identity links and its current user, since
+`installation_users` has no platform filter: AN-047 protects an installation's context and last
+seen, and a user ID is identity, not context, so a backend naming the installation's user is the
+link AN-122 wants. Pinned by `analytics-funnels.test.ts` ("lets a background event carrying a user
+ID link the installation to that user, without moving its context").
+
+### 33.7 Funnels (piece 7, September 27, 2026)
+
+**The query** (`apps/api/src/services/analytics-funnels.ts`, DECISIONS 31.4). One statement per
+answer, in three levels. The inner level reads the events of the steps' names — `event_name_id IN
+(…)` over the covered range plus the window, so the sort key's `(database_key, event_name_id,
+local_day)` prefix prunes it — and groups them by unit into one array, `arraySort(groupArray(
+(effective_time, UUIDToNum(event_id), mask, local_day, lowest, installation_id[, split value])))`:
+`mask` is the bits of the steps the occurrence matches (an event may match several, and a name may
+be two steps), `lowest` its lowest step. Sorting tuples orders by effective time, then by the event
+ID's 16 bytes in the order of its text (`UUIDToNum`), which is the natural order of its hexadecimal
+digits and the one a reader can check; ClickHouse's own `UUID` comparison is not (it compares the
+last 64 bits first: checked on 26.8). `UUIDToNum`'s `FixedString(16)` rather than the ID's text
+halves the memory the arrays hold (below). The middle level works per unit, in two passes that do
+not depend on the number of entry groups (verification of piece 7). One sort of the occurrences by
+(entry group, not a candidate, time, lowest step, position) puts each group's entry first: step 1's
+first occurrence in the range in a closed funnel (AN-083), and in an open one the earliest
+occurrence of any step, the lower step winning a tie of time and the first by event ID among those
+(AN-084); the steps view is one group. Then one `arrayReverseFill` per step, from the last step
+back, gives at every position the chain of times a walk starting there reaches: the first
+occurrence of step k at or after it, of step k + 1 strictly after that one, and so on, `INF` where
+the chain ends — so the occurrence that reached step k − 1 can never reach step k. An entry's
+chain is the one at the position after it, picked out for all entries at once by a mask (entries
+are distinct positions), and the outer level zips the entries with their chains and walks each by
+lookup: step k is reached when its chain time is no later than entry plus the window, the chain's
+times only rising. Closed and open funnels differ only in the entry and in which chain an entry at
+step `E` reads (the one starting at step `E + 1`), so `continued`, conversion and the times need no
+second formula. The outer level aggregates the walked rows: `countIf` per figure,
+`quantileExactInclusive(0.5)` and `avg` of the per-unit seconds. The trend view has one row per
+unit and entry group, so a unit entering in two weeks is walked twice, from each week's first
+entry (AN-086). A split carries the value of the entering occurrence (for install attribution the
+entering installation's record, joined per unit); a first statement ranks the values by entries (ten, then Other and None), and the second
+counts each walked row twice through `ARRAY JOIN [('', ''), (group, value)]`, once in the whole and
+once in its group, so the overall figures and "Other" are exact sets, never sums. Every value is a
+bound parameter; step numbers and bit positions are the code's own integers.
+
+**The median is `quantileExactInclusive(0.5)`**, which averages the two middle values of an even
+count (the median of 5 minutes and 24 hours is 12 hours 2.5 minutes), rather than `medianExact`,
+which returns the upper one. Both are exact (31.4 forbids only approximations); the inclusive one
+is the median a reader computes by hand. Appendix B's medians have an odd count and are the same
+under both.
+
+**Answers.** Steps are numbered from 1 (`index`, and the drill-down's `step`), since the PRD and
+the interface speak of "step 2". In a closed funnel a step's `entered` is null (the funnel's
+`entered` is step 1's); `continued`, `shareOfPrevious` and the times are null for step 1 and
+`dropped` for the last; a share with a zero denominator is null, not 0. The trend view also returns
+the `steps` (index, event, label), so an export and the interface can name them. An experiment
+split carries `split.descriptive` and a `note` stating that no significance test is run (AN-087).
+Every answer carries `range`, `timezone`, `keptFrom`, `covered` and `notice` as trends do.
+
+**Incomplete groups** follow AN-086 literally: a group is incomplete while its period's last
+instant plus the window is later than now, and a range that cuts a period does not make it
+incomplete, unlike a trend's period (Appendix B.4: week 36 is complete though the range starts on
+its Tuesday). `buildPeriods` gives the groups; the rule is computed here.
+
+**`event_deleted`** comes from piece 4's resolver: a step whose name is `deleted` compiles to `0`
+(no occurrence matches), with the warning `{ code, step, event }`; `unknown` compiles to `0` with
+no warning. Inline definitions get the warning too, because AN-082 wants both computed identically.
+
+**The drill-down** walks the steps view with two more conditions: `received_time <= runAt` and
+`unit > cursor`, both in the inner level, so each page reads only what it lists. The first page
+fixes `runAt` (the API's clock) and later pages carry it in the cursor (base64url JSON `{ r, u }`),
+which also fixes the "now" of a preset range; the keyset by unit ID shows each unit once whatever
+arrives. The rows reuse piece 6's `summarySql`, `latestUserIds` and `presentSummary` (now
+exported), and the flags piece 6's `identityFlags`, called after the slot is released (PostgreSQL
+only). A user-ID funnel's row is the installation of the unit's entering event. Rejected: re-running
+the whole funnel per page and filtering in the API (reads every unit per page), and an offset cursor
+(moves under arriving events).
+
+**Saved funnels** are checked as a run checks them (the schema, then each filter compiled with a
+throwaway scope, so an installation ID that is not a UUID answers `invalid_query` at
+`definition.steps.N.filters.M.values.K` when saving), so a saved funnel always runs. Definition
+failures on the CRUD routes answer `invalid_query` with the path, like the runs, rather than the
+generic `validation_failed`, since the body is a query definition (7.4). The HTTP `DELETE` takes no
+confirmation, as the analytics database's does; `delete_analytics_funnel` reads the funnel and
+demands its exact name (FD-022), as `delete_analytics_database` does. Rejected: a `confirm` query
+parameter as the event deletion has, because 7.2 asks for it there only, and a funnel's deletion
+loses no data.
+
+**Slots.** The steps view and the drill-down take a `query` slot; the trend view the caller's
+`funnelTrend` lane (AN-205), under `INLET_ANALYTICS_FUNNEL_TREND_TIME_S` (120 s). The test holds a
+signed-in user's `query` slot by hand and shows that its funnel trend still answers while its
+steps view waits, and that an Overview, a trend and a funnel trend requested together all answer.
+The interface shows a spinner with the elapsed seconds while a run is under way: the API reports no
+progress, and ClickHouse's progress headers would need a streaming response for a whole answer.
+
+**What `EXPLAIN` and the timings showed** (the 22.5-million-event seed of 33.4 — 90 days, 15,000
+installations a day — on this laptop, the local ClickHouse at its 4 GB ceiling, `max_threads = 2`,
+median of five runs of the SQL `runFunnel` sends; three steps of 2.1 million events over the 90
+days, the "funnel's steps at most a tenth" of 9.5 at this seed's scale). `EXPLAIN indexes = 1` of
+the steps view over 14 days: the partition key keeps 3 of 13 parts and the primary key 45 of 622
+granules (the `event_name_id IN` set and the day bounds), so the walk reads about 1.6 % of the
+database. As first built — one `arrayJoin` row per unit and entry group, each carrying the unit's
+whole array and scanning it once per step with `arrayFirstIndex` — the closed funnel took 68 ms for
+the steps view over 14 days, 216 ms over 90 days, 763 ms for the trend by day over 90 days and
+568 ms by week; the open one 147 ms, 2.4 s and 1.2 s, and its trend by day needed 911 MB, over the
+default per-query memory limit of 768 MB (`INLET_ANALYTICS_QUERY_MEMORY_BYTES`), so it answered
+`query_limit_exceeded` on this modest database. Scaled by rows read to the reference workload
+(about 43 times this seed's step events) on four threads, the trends by day extrapolated to about
+16 s closed and 50 s open, over the 10 s budget. With the per-unit passes above, measured the same
+way: closed 58 ms (steps, 14 days), 241 ms (steps, 90 days), 233 ms (trend by day), 238 ms (by
+week); open 58 ms, 198 ms, 207 ms and 200 ms; about 300 MB for any 90-day shape, the arrays of the
+`GROUP BY unit` now being the whole of it. Every answer is identical to the first build's on the
+seed (the means differ below 10⁻¹⁰ s, the order of a floating sum) and in the randomised comparison
+with a plain TypeScript walk (`analytics-funnels-reference.test.ts`). Extrapolated as before: the
+steps view over 14 days about 1.3 s (budget 3 s), the trends by day over 90 days about 5 s (budget
+10 s), within budget as an extrapolation that piece 12's load test replaces. **Memory is the open
+risk:** the arrays hold every step occurrence of the range, about 140 bytes each, so a 90-day
+funnel would need about 13 GB at the reference workload (a limit of 8 GB there) and about 1.3 GB at
+the Small workload (768 MB by default), and 13 months several times more. Letting the aggregation
+spill (`max_bytes_before_external_group_by` at about half the memory limit) answered every 90-day
+shape on the seed under a 150 MB limit, at a peak of 75 MB and 35 to 45 % more time, with the same
+answers; whether funnel statements spill, and the disk the event store may use for it, is the
+owner's to decide with piece 12's measurements.
+
+**A profile's sessions** (piece 6's follow-up). A subject's sessions are now the distinct session
+IDs, named by an `app_started` (AN-043), of the sessions in which at least one of its events
+occurred, whatever user ID the `app_started` carried: the SDK stamps the user ID when an event is
+created, so a user who signs in after launch had no `app_started` of their own and showed 0
+sessions. `countsOf` reads the `app_started` events whose installation and session hold one of the
+subject's events, and never a backend's (AN-047: a background event makes no session); for an
+installation the count is unchanged (its sessions' `app_started` are its own), and active days keep
+their rule (the subject's own events that are not background events).
+
+**Rejected.** `windowFunnel` (31.4; `analytics-funnels.test.ts` runs it beside a funnel it
+answers differently); one statement per group of the trend view (90 statements for a daily trend,
+each rereading the same events); one `arrayJoin` row per group carrying the unit's whole array and
+scanning it per step (the first build, above: its cost and memory grow with the number of groups);
+computing the walk in the API from the events (moves every occurrence over the network); and
+`medianExact`, above.
+
+### 33.8 Cohorts (piece 8, September 27, 2026)
+
+**One retention computation.** `cohortCounts` (`apps/api/src/services/analytics-cohorts.ts`)
+answers, for a start, a return, a granularity, a counting unit, population filters and the days of
+the start periods, the number of members per (cohort period, N) — N = 0 being the cohort's size,
+N ≥ 1 those that returned in the Nth calendar period after their cohort's. The Overview's D1, D7
+and D30 (piece 5) now call it with the standard cohort by day and sum its counts per N over the
+installation days whose Nth day has ended, and its new installations are the install start's
+members (`membersSql`); piece 5's own retention statement and `installedRows` body are gone, so the
+Overview and a cohort table cannot disagree. Piece 5's tests pass unchanged.
+
+**The query** (31.4), one statement per run:
+
+- **Members** (`membersSql`), one row per unit with the local day of its start. The install: the
+  installation record's `minIfMerge(install)`, device installations that exist and are not
+  ephemeral (AN-031, AN-047); it never moves. The first event, or a named event without filters:
+  `installation_first` or `user_first` (event-name ID 0 for the first event), an installation
+  counted only if its record is a device installation that is not ephemeral (`IN` the record set),
+  so server, test and ephemeral installations are in no cohort; these tables outlive the events of
+  their day while the installation keeps sending (AN-108, AN-165), so dropping weeks moves no
+  member. A named event with filters: the unit's first matching occurrence among the events kept,
+  ordered as first occurrences are (the earliest local day, then received first), with
+  `firstInWindow` in the answer. Population filters are compiled by piece 4's `compileFilters`
+  unchanged, over the members' dimensions exposed under the filter compiler's column names (install
+  attribution through its installation-ID set, installations only). A unit's start must fall in the
+  first day of the first period to the last day of the last.
+- **Returns** (`returnsSql`): the distinct (period, unit) pairs of the return event, grouped as
+  `GROUP BY <period of local_day>, unit`, which the aggregate projections answer (`by_day` for
+  "any event", `by_event_day` for a name; checked with `EXPLAIN`). A named return counts background
+  events (AN-047); "any event" is `ANY_EVENT_ROWS`.
+- **The join**: returns `RIGHT JOIN` members on the unit, members being the hash table (one row
+  per unit) and the pairs streaming past it. Each output row yields N = 0 and, when the pair is a
+  later period, its offset (`arrayJoin`); each (cohort, N ≥ 1) is `countIf` (the pairs are
+  distinct), N = 0 `uniqExactIf` (a member appears once per matched pair). Period offsets are
+  differences of `toRelativeDayNum`, `intDiv(toRelativeDayNum(toMonday(d)), 7)`,
+  `toRelativeMonthNum` or `toYear` of the local day, so periods are the reporting timezone's
+  (31.4).
+- **The table** (`cohortTable`, pure): a row per period with members, oldest first; a cell per
+  later period that has begun, `incomplete` when it is the current period and `covered` false when
+  it begins before the oldest day kept; the summary per N over the cells ended and covered, else,
+  only where no cohort's period N has ended yet, marked incomplete, over those begun (AN-104 to
+  AN-106; a column whose ended cells are all uncovered has no summary value). Rows are the newest 60, 52, 36 or 10
+  periods of the range (`truncated`); columns run to the current period.
+
+**Memory, measured.** `scripts/measure-cohorts.mjs` runs the very statements `cohortCounts` sends
+against a seed of 20,160,000 events and 900,000 installations over 12 weeks
+(`SEED_DAYS=84 SEED_ACTIVE=60000 SEED_EVENTS=4 SEED_POOL=900000 node scripts/analytics-seed.mjs
+seed`, a mode added for this), at four threads, and finds each statement's peak as the smallest
+`max_memory_usage` it runs under (a binary search to about 4%: the local ClickHouse keeps no
+`query_log`, and the `X-ClickHouse-Summary` header's `memory_usage` is not the peak — it reported
+22 MiB for a statement that needs 1.3 GiB). Two runs, on a laptop shared with other test runs:
+
+| Cohort (900,000 installations) | Peak | Time, under 768 MiB |
+| --- | --- | --- |
+| Retention, 12 weekly cohorts (install, then the most frequent name) | 343 MiB | 0.82 s |
+| Retention by month | 566 MiB | 0.78 s |
+| First event, any event, by week | 566 MiB | 0.64 s |
+| Named start without filters, by week | 303 MiB | 0.31 s |
+| Named start with a filter (`firstInWindow`), by week | 167 MiB | 0.14 s |
+| User IDs, first event, any event, by week | 207 MiB | 0.31 s |
+| Install, population filter `platform = ios`, by week | 271 MiB | 0.60 s |
+
+Every case fits the default per-query limit of 768 MiB. They did not at first:
+
+- **One array of return periods per unit** (`groupArray` per unit, then `LEFT JOIN` from the
+  members) needed over a gigabyte for the Retention cohort alone: an aggregate state per unit over
+  every unit, which 33.1 warned about. Replaced by the right join over distinct pairs.
+- **The install state** (`minIfMerge` of a tuple of every install dimension) over 900,000
+  installations peaked at about 1.3 GiB in a hash table. `installations` is sorted by the unit it
+  is grouped by, so the statement sets `optimize_aggregation_in_order = 1` for the install start,
+  which holds one installation's state at a time: about 240 MiB, and faster (0.5 s against 1.7 s).
+  The first-occurrence tables did worse with it (their states are small, below), so it is set for
+  the install only (`membersSettings`). The Overview's new installations read the same members and
+  take the same setting; piece 5's statements, which read the same subquery, would have
+  exceeded 768 MiB at this scale without it.
+- **First occurrences carried whole** (`min(first)`, 17 elements with arrays) peaked at about
+  375 MiB for the members alone; the minimum over (day, received, time) and only the dimensions
+  needed (the environment, and whatever a population filter tests) peaks at about 170 MiB. The
+  same for a filtered start's events. A tie on all three times then falls to the dimensions carried
+  rather than to every dimension; either occurrence is the first of that day.
+- **The (period, unit) pairs of a frequent return** (5 million for "any event" here) are the
+  largest hash table left; the statement sets `max_bytes_before_external_group_by` to a quarter of
+  the query's memory limit, so it spills to disk rather than fail.
+
+Both settings are passed with the statement (`QuerySettings` gained the two keys), never
+interpolated. A test runs 12 weekly cohorts of 10,000 installations under the smallest limit the
+operator may set, 64 MiB.
+
+**Time.** PRD 9.5 budgets 2 s for 12 weekly cohorts at the reference workload. The Retention
+cohort took 0.82 s here with 900,000 installations; the install members are about 0.5 s of it and
+grow with every installation a database has ever kept, so at five million installations it would
+be about 4 s on this laptop, over budget. Piece 12's load test measures it; the next step, if
+needed, is a table of install days kept beside `installations` (as piece 5 noted), which would
+answer the install start without merging install states.
+
+**Rejected.** A statement per cohort row (12 to 60 statements); the per-unit arrays and the per-unit
+`groupBitmap` of offsets (1.7 GiB); `uniqExact` over every (cohort, N, unit) of raw event rows instead of
+distinct pairs (566 MiB, and slower); counting sizes in a second `UNION ALL` branch,
+which reads the members twice (3.9 s); `argMin` states (33.1); `windowFunnel`-style functions,
+irrelevant here; sampling or `uniq` (31.4: exact only).
+
+**Decisions.**
+
+- **The production default tests the start, not the returns.** A definition that names no
+  environment counts starts in `production` (AN-064), as an implicit population filter tested on
+  the unit's context at its start; returns are counted in any environment, as population filters
+  never apply to returns (AN-103) and as piece 5 counted D1, D7 and D30. An environment named on
+  the start's own filters lifts the default too.
+- **Install attribution is refused for user-ID cohorts** (`invalid_query` at the filter's
+  `field`): a user ID has no install, and its first occurrence carries no installation.
+- **Ephemeral installations are excluded from installation cohorts only.** A user-ID cohort counts a
+  user whatever installation its events came from: the user ID is what makes a private window's
+  visitor recognisable (the web note says so).
+- **User IDs from server installations count** (a backend's `purchase_completed` naming a user is a
+  named start or return of that user, AN-047); the test installation's never do.
+- **The answer's `range` is the resolved range asked for**; `truncated` says when its oldest periods
+  were left out, and `rows[0].start` is the first shown. `covered` is computed as for every answer,
+  but unfiltered starts are answered whatever it is, from the records that outlive the events.
+- **`summary`** carries `members` beside `returned` and `share`, and the answer `size` and `periods`,
+  so a reader can recompute every share; a summary cell with no cohort begun is `share: null`.
+- **Cells not yet begun are absent**, not null: `cells` lists the periods begun, `period` naming
+  each.
+- **Web.** Granularity, range and population filters change any run without saving (AN-100): the
+  standard cohort runs by its ID with them as overrides, every other cohort runs its current
+  definition inline. Incomplete cells carry `*`, uncovered ones `†`, both in the legend; each cell's
+  share, count and state are text for assistive technology.
+
+**PRD amendments for the orchestrator** (not applied here):
+
+- **Appendix E "Cohort"** should read: "`cohort` (`id`, `name`, `standard`, or null for an inline
+  definition), `definition` (the definition run), `granularity`, `unit`, `range`, `timezone`,
+  `keptFrom`, `covered`, `notice`, `firstInWindow`, `truncated`, `warnings` (`code`
+  `event_deleted`, `in` `start` or `return`, `event`), `size` (every member of the rows shown),
+  `periods` (the columns, period 0 included), `summary` (per period from 1, `period`, `members`,
+  `returned`, `share`, null when no member is counted, and `incomplete`), and `rows`, each with
+  `start`, `label`, `size` and `cells`, one per later period that has begun, each with `period`,
+  `returned`, `share`, `incomplete` and `covered`."
+- **AN-101** should add: "Install attribution is a population filter of installation cohorts only."
+- **9.2**, after "A definition may carry `defaultRange`": "A definition that names no `environment`
+  filter, among its population filters or its start's filters, counts starts in `production` only;
+  returns are counted in every environment."
+
+**Verification (tester, September 27, 2026).** A randomised reference
+(`test/integration/analytics-cohorts-reference.test.ts`: plain TypeScript over the same events,
+about 400 installations over fifteen months with ephemeral, background-first, background-only and
+server installations, late events lowering first occurrences, ties within a batch; every start
+kind, both returns and units, the four granularities in America/New_York and Asia/Kolkata,
+population filters, a range longer than the rows allowed, and the oldest weeks dropped) agrees
+with every answer, and with the Overview's D1, D7, D30 and new installations. It found one
+difference, fixed: the summary fell back to the incomplete value where some cohorts' period N had
+ended but none was covered; AN-106 gives that value only where no cohort's period N has ended.
+Re-measured on the same seed (`inlet_seed_p8`), seventeen shapes including the install start with
+"any event", sixty daily cohorts, the most frequent name filtered and three population filters:
+every one runs under the default 768 MiB, the largest at about 525 MiB (the install start by
+month, and by week with "any event"). External aggregation is load-bearing, not a safety margin:
+without it the first event with "any event" needs more than 2 GiB; with it the answers are
+identical whether it spills at 8 MiB, 192 MiB or 512 MiB.
+
+- **AN-047**, **section 10** and **section 4 "Ephemeral Installation"** should say what this piece
+  does, which `user_first` (no ephemeral flag) could not change without a migration: AN-047's last
+  sentence "Ephemeral installations shall be excluded from new installations and from every cohort
+  that counts installations, and their events shall count everywhere else, a cohort that counts
+  user IDs included."; section 10 "ephemeral installations never count as new installations or in
+  cohorts of installations"; section 4 "Excluded from installs and from cohorts of installations."
+
+### 33.9 Storage, retention and data health (piece 9, September 27, 2026)
+
+**Modules.** `services/analytics-retention.ts` (the retention plan and pass, the pruning, database
+removal, the orphan sweep, the daily maintenance, the mutation tracker), `services/analytics-incidents.ts`
+(opening, updating and resolving incidents, the counter pass, the counters kept eight days),
+`services/analytics-storage.ts` (the storage answer, the recommendations, changing the settings, data
+health), `services/analytics-slack-message.ts` (the 8.2 renderer, pure), `routes/analytics-storage.ts`.
+
+**Partition statistics are the whole measurement.** A week's events and bytes come from the active
+parts of `events` in `system.parts`, grouped by `partition_id`, which ClickHouse writes as
+`<key>-<YYYYMMDD of the Monday>` for a partition key of integers and dates; the other keyed tables'
+IDs are the key alone. The week is `toMonday(min(min_date))`, so nothing parses the ID's date. A
+partition is dropped with `ALTER TABLE … DROP PARTITION ID {partition:String}`, the ID bound as a
+parameter, and `max_partition_size_to_drop = 0` as a query setting: ClickHouse refuses to drop a
+partition over 50 GB by default, which a whole database's installation records can exceed.
+
+**The order of a retention pass.** In one transaction holding a row lock on the database
+(`for update skip locked`, the claim of UX Analytics 11): read the partitions, plan the drops, write
+`kept_from`, add the cap's events to the hour's `removed_by_cap`, and open, update or resolve the
+storage incidents with their deliveries. Commit; raise ingest's floor; drop. The plan always drops
+the weeks before `kept_from` first, so a drop that failed after the commit, a restart in between, or
+a week an insert racing the drop recreated is dropped at the next pass without being counted again.
+A settings change takes the same row lock, so it never lands mid-pass. *Rejected:* dropping first
+and writing `kept_from` after (a restart in between loses the floor, and a late event recreates the
+week); a transaction-scoped advisory lock, as the catalog refresh uses (the brief and section 11 ask
+for row locks, and the settings route then waits on the same lock naturally).
+
+**The plan.** Weeks whose last day is older than the maximum age go first, so events up to a week
+beyond the age remain; then, while the events kept exceed the cap, the oldest week, never one of the
+current or previous Monday of the reporting timezone. What remains over the cap is
+`storage_cap_exceeded`. Every week the cap drops is younger than the maximum age (the age dropped the
+older ones), so any cap drop is AN-169's "early" removal.
+
+**Recommendations.** Under a binding cap the days kept vary by a week of volume: between
+⌊cap ÷ volume⌋ − 7 and ⌊cap ÷ volume⌋, which gives the PRD's 43 to 50 days (500 million at 10 million
+a day) and 13 to 20 (200 million). The cap that keeps N days without ever removing a week early is
+(N + 14) × volume: the age keeps up to a week beyond N, and a binding cap varies by another week, so
+the cap's lowest must reach the age's highest. At 10 million a day that is 409 × 10 million, "about
+4.1 billion events", and at the measured bytes per event (the `events` partitions' bytes, rollups
+included, over their rows) about 205 GB at 50 bytes: the PRD's figures (5.9, 9.5), which N + 7 would
+not give (4.0 billion). The binding limit is the cap when ⌊cap ÷ volume⌋ < age + 7. The volume is the
+average of the last seven complete days, or the complete days since the first event while the
+database is younger. *Rejected:* measuring the volume from the counters' `accepted` (kept eight days
+only, and counts arrival hours, not local days).
+
+**Incidents.** The counter kinds are read from `analytics_dropped_counts` every minute. "Within an
+hour" is one counted UTC hour, the only grain the counters keep; a qualifying hour counts until it
+ended 24 hours ago, so an incident opens when some hour of the last 25 qualifies, and resolves once
+24 hours have passed since the end of the last hour it was seen to hold (`lastHour`, which never
+moves back: an hour's share of invalid events can fall below 10% as the hour goes on, and that must
+not resolve the incident at once); a resolved incident cannot reopen from the hours that opened it.
+"Rejected as invalid"
+is what the envelope rules refuse (`invalid_event`, `unknown_field`, `missing_identity`,
+`event_too_large`) over every event the hour received. An incident keeps the figures that opened it
+(AN-191: "the figures that opened it"); only `affected` (the events refused while open, the events
+the cap removed early, or the largest excess over the cap) and its last hour or last drop move on,
+silently. `affected` is summed from the counters since the first qualifying hour (`firstHour`, which
+may precede the hour the incident opened in), keeping the largest sum reached, because the counters
+are kept eight days. *Rejected:* a sliding 60-minute window (needs
+per-minute state the counters do not keep); refreshing the opening figures while open (the message,
+rendered at send time, would then report a later hour's figures as the ones that opened it).
+
+**A delivery says whether it announces the resolution.** `notification_deliveries.analytics_resolution`
+(migration `0004_analytics_piece9_incident_resolution`, additive). The message is rendered at send
+time from the incident as it stands, so an opening delivery held back by a Slack outage can meet an
+incident already resolved; the column keeps it an opening message. *Rejected:* inferring the phase
+from the delivery's order (breaks when Slack is switched on while an incident is open: its only
+delivery is the resolution) or from `created_at` against `resolved_at` (two clocks). The analytics
+test message is an example incident, not the feedback sample.
+
+**Pruning** (AN-165) is three steps per database, each a lightweight `DELETE` submitted without
+waiting and finished when a count of what it targets reaches zero: the installation records whose
+`last_event` (any platform) is older than the maximum age; then the identity links and first
+occurrences of installations that no longer have a record (`installation_id NOT IN (SELECT …
+installations …)`), which also clears what an erasure leaves; then the user first occurrences of user
+IDs no link carries. `system.mutations` only says whether to wait. Each call recounts, so a restart
+or an outage loses nothing, and no state is kept but which databases still have a cycle to finish.
+Ingest's install-time cache is evicted for the whole database once the records are gone, so a pruned
+installation that sends again starts over. *Rejected:* binding the pruned IDs as an array parameter
+(ClickHouse's HTTP interface carries parameters in the URL, 1 MB by default, about 25,000 UUIDs);
+one statement per table with the staleness subquery (the tables after the first would find no stale
+installation once its records are gone, and keep its links forever).
+
+**A mutation that keeps failing** (DECISIONS 33.1: a lightweight delete rebuilds a part and needs
+memory) stays unfinished in `system.mutations`, and ClickHouse retries it by itself. Nothing kills it:
+the pass waits, submits nothing more for that database, and logs `latest_fail_reason`. The operator
+raises the memory ceiling or runs `KILL MUTATION` (docs/DEPLOYMENT.md); the next pass then counts and
+submits again. *Rejected:* killing a mutation after a deadline (a slow but healthy mutation on a large
+part would never finish).
+
+**Removal.** For each record, claimed with a row lock on it: the key-scoped PostgreSQL rows first, in
+batches of 5,000 each committed on its own (the event store is not needed for them), then every
+partition of the key in every keyed event-store table, a check that none is left, and the record
+deleted last in the claiming transaction. An unreachable event store leaves the record. The list of
+event-store tables is `KEYED_TABLES`; a test compares it with every MergeTree table of the event store
+that has a `database_key` column, so a new table cannot be forgotten.
+
+**The orphan sweep** reads the event store before PostgreSQL, so nothing created in between looks
+orphaned (a database's and a name's rows are committed before the first event naming them). An
+unknown key gets a removal record; an unknown event-name ID a deletion record with the name `''`
+(no event name is empty, so no read resolves it), or its completed one reopened; key-scoped
+PostgreSQL rows of no database are deleted. It also moves the key and name sequences past the largest
+value the event store holds, so a PostgreSQL restored from an older backup never hands an orphaned key
+or name ID to something new. The sweep, the pruning and the counters' eight days run once a day and at
+the first maintenance tick after start. The day's pruning is queued before the sweep runs, and a sweep
+that fails (retried the next day) or one database's failing pruning step never holds back the rest.
+
+**Availability.** Storage reads partition statistics, so both storage routes answer
+`503 analytics_unavailable` while the event store is down; data health reads PostgreSQL only and
+answers through an outage. **Version markers** keep their true first day: `version_first` is never
+pruned, and the Overview no longer hides a marker on or before `kept_from`.
+
+**Assumptions.** "A change that lowers a limit" (AN-161) is a lower maximum age or maximum events: a
+shorter lateness window removes nothing and needs no name. A maximum age lowered below the stored
+lateness window drags the window down with it (never longer than the age); a lateness window sent
+longer than the age is refused. The preview's `removes` gives the events and the day before which
+they were recorded (the statement's "recorded before September 17"), not a first removed date.
+
+**Not measured at scale.** The passes were exercised at test volumes (a few hundred thousand rows);
+pruning's `NOT IN` sets and the orphan sweep's `GROUP BY database_key, event_name_id` over `events`
+are for piece 12's load test to time at the reference workload.
+
+### 33.10 Erasure and the event export (piece 10, September 27, 2026)
+
+**Modules.** `services/erasure.ts` (the project's erasure: who may erase what, the preview, the
+crash and feedback deletions, the pending erasures and the record), `services/analytics-erasure.ts`
+(a user ID's installations, the analytics counts, the worker pass `erasures`), `services/analytics-export.ts`
+(the event export), `routes/erasures.ts`, `routes/analytics-export.ts`; migration
+`0005_analytics_piece10_erasure` adds `resolved`, `states_submitted_at` and `deleted_at` to
+`analytics_pending_erasures` (additive). Submission deletion is now `deleteSubmissionRows(tx, rows)`
+in `services/submissions.ts`, which the individual deletion (FR-064A) and the erasure both call, so
+intents are marked, attachments cascade and their keys go to the purge queue the same way.
+
+**Who may erase.** Every crash, feedback and analytics database of the project is resolved through
+the type's own `…RoleOf` (FD-007); the preview and the erasure cover those whose effective role is
+Admin. A secret key is a project Admin (FR-083). Someone with no role anywhere in the project gets
+`404 project_not_found`, as every project route answers; a member who administers nothing,
+`403 forbidden`, which is what a Creator meets. A selected database outside that set is `403` for
+the whole request, never a partial erasure. Config databases (Remote Config RC-100) do not exist yet;
+`ERASURE_DATABASE_TYPES` is where they join.
+
+**What a user ID takes with it.** In each analytics database the actor administers and the event
+store reaches: the server installation `serverInstallationId(secret, userId)` and every installation
+whose links hold that user ID alone (`HAVING uniqExact(user_id) = 1 AND any(user_id) = …`). The crash
+reports and submissions matched are those carrying the user ID or the ID of any of those
+installations, from every reachable analytics database the actor administers, whether or not it is
+selected: "the installations being erased" is a fact about the person, and a report sent before
+sign-in belongs to them either way. *Rejected:* only the selected analytics databases' installations
+(an Admin erasing crash reports only would miss the pre-sign-in reports the PRD names).
+
+**Crash reports (CR-047).** One statement deletes the reports carrying the IDs; groups whose
+`latest_report_id` was among them point to the newest remaining report by received time, or none.
+The user ID's `crash_group_users` rows go in every group of the database, a report or not, and each
+such group's `affected_users` drops by one (the primary key makes it one row per user and group).
+`count`, first and last seen, releases, the daily rollups and the state stay, as retention leaves
+them (CR-082). An installation erasure deletes reports by installation ID and no association (no user
+ID is erased).
+
+**The erasure's time** is `rowsReceivedTime(Date.now())` from ingest's clock (piece 3): at least a
+millisecond after every received time already stamped, so "received before" (AN-184) splits exactly
+at the erasure. The counts it reports are taken with that bound. Crash and feedback deletions, the
+pending erasures and the `erasures` record are one PostgreSQL transaction; the caches (read skip,
+live feed, install times) are invalidated after it commits.
+
+**The worker pass** (`erasures`, 30 s, `erasuresIntervalMs`), per database, with row locks on its
+pending erasures (`for update skip locked`), every pending erasure of a database batched into one
+statement per table (DECISIONS 33.1: the cost is per statement and part):
+
+1. *Resolve* a user ID recorded while the store was down (`resolved = false`).
+2. *Events*: count the rows received before each erasure's time; while any remain, submit one
+   lightweight `DELETE` without waiting (unless `mutationRunning` says one runs) and clear
+   `states_submitted_at`.
+3. *States*: once no such event remains, submit the deletes of `installations`, `installation_users`,
+   `installation_first` (by installation) and `user_first` (by user ID), and stamp
+   `states_submitted_at`. They follow the events so that a batch stamped just before the erasure and
+   inserted just after is caught by the events' recount before the states go.
+4. *Replay*: once those deletes finished, `INSERT INTO events_ingest SELECT *, true FROM events`
+   for the same IDs, filtered by the read skip read afresh (which hides every row received before a
+   pending erasure's time, and deleted names). A replay never reaches `events`; it rebuilds the
+   aggregated states of events sent after the erasure, with their stored received times — piece 1's
+   warning that deleting an installation's state rows deletes the state later events contributed.
+   Then `deleted_at` is stamped, and **the read skip ignores the erasure from then on**: the
+   lightweight-delete mask hides the rows and the projections were rebuilt (`rebuild` mode), so
+   reads return to the rollups within minutes rather than after the file bound (piece 4's handoff).
+5. *Files*: the rows the deletes masked are read directly — `NOT _row_exists` with
+   `apply_deleted_mask = 0`, on every table, for these IDs. None left: the pending erasures, the only
+   holders of the IDs (AN-185), are deleted. Otherwise, once the oldest has waited half of
+   `INLET_ANALYTICS_ERASURE_BOUND_DAYS`, `ALTER TABLE … APPLY DELETED MASK IN PARTITION ID …` on each
+   partition still carrying them (`_partition_id`), submitted without waiting; merges may clear them
+   sooner. Half the bound leaves the other half for an outage or a failing rewrite.
+
+Every step recounts, so a restart, a failed statement or an outage loses nothing. *Rejected:* waiting
+for mutations (`store.command` keeps a 30-second timeout, DECISIONS 33.1); forcing the rewrite at once
+(a busy week's part is several GB, rewritten for every erasure; waiting batches erasures per
+partition and lets merges do most of it); keeping the read skip until the files are clean (up to 30
+days of reads off the rollups); recording the touched partitions (the masked rows name them).
+
+**Ingest honours a pending erasure.** Ingest's install-time lookup applies the installations skip, so
+an erased installation that sends again while its erasure is pending starts over: its later events'
+install ages do not derive from the erased install time, and after the replay its record's install
+time is its first event after the erasure, which is what ingest used.
+
+**Without the event store**, or while it does not answer (`reachable()`, then any
+`analytics_unavailable` from the counting), every analytics database is listed `unreachable` in the
+preview and `deferred` in the erasure. A deferred erasure is recorded with the server installation
+(derivable without the store) and, for a user ID, `resolved = false`; the worker resolves the rest
+when the store answers. **Counts for a deferred database are not reported**: the answer's `deleted`
+is `null` and the record's counts for it are `{ "deferred": 1 }`. *Rejected:* back-filling the
+record's counts later (the record would change after the fact, and the pending erasure would need a
+link to it for no reader). ponytail: the deferred resolution reads the links as they are then, so an
+installation on which the user ID alone appeared *after* the erasure is taken too; it held no row
+received before the erasure, so the replay restores its state and nothing it sent is lost.
+
+**Limits of the match, stated.** An installation erasure leaves the user ID's `user_first` alone (the
+user is not erased), though a first occurrence may have come from that installation: an aggregated
+state without an installation to split it by, carrying no erased ID. (A shared installation's own
+state is derived again; see the follow-ups below.) "The only user ever seen" reads the links including those of another user whose erasure is
+still pending, so an installation shared with a user erased a moment earlier stays; erasing again
+once that erasure finished takes it. The IDs are bound as array parameters, which travel in the URL
+(1 MB, about 25,000 UUIDs, 33.9): far beyond the installations of one person.
+
+**`version_first` needs no erasure**: its rows are `(database, app, platform, environment, app
+version, first day)`, with no installation or user ID (0002_version_first.sql). A test compares
+`ERASED_TABLES` with every MergeTree table of the event store holding an `installation_id` or
+`user_id` column.
+
+**The event export (AN-210).** Pages read one local day at a time, ordered by effective time and event
+ID, with the keyset `(effective_time, event_id) > (t, i)` within the day; the local day is the
+effective time's day in the reporting timezone, so days follow effective time and each statement stays
+in one day's partition. The next day holding a match is found with `min(local_day)`; a page fills
+across days. The horizon is ingest's clock at the first page, carried in the cursor, so pages never
+mix in later arrivals. The stream reads 5,000 a page, each under its own slot (`runAnalyticsQuery`
+per page); `?limit` (≤ 1,000) answers one JSON page with a cursor for MCP. Each page reads the erasure
+skip afresh (it is cached), so an erasure made while a long export streams is skipped from the next
+page on, as AN-184's "unreadable when it answers" asks of every read. *Rejected:* one statement
+ordered over the whole range per page (every page sorts the whole remaining range); ordering by the
+sort key (not the "effective time and event ID" AN-210 asks). ponytail: a page still sorts its day's
+matches for the top 5,000, about 10 million rows a day at the reference workload.
+
+**Verification follow-ups (September 27, 2026).** Four gaps the verification pinned, each now closed:
+
+- *No erased ID in any event-store file, the mutation log included* (PRD 12, AN-185). A lightweight
+  `DELETE`'s text stays in `system.mutations` and in `mutation_N.txt` beside the table's parts until
+  `finished_mutations_to_keep` (100) newer mutations push it out, which on a quiet table is never.
+  The worker now inserts each pending erasure's targets into `analytics_erasure_targets` (event-store
+  migration `0003`, partitioned by erasure number: the installations erased, the kept installations
+  the user was seen on, the user ID, the time bound) and every delete, replay and file check names
+  them by number: `installation_id IN (SELECT arrayJoin(installations) FROM analytics_erasure_targets
+  WHERE erasure IN [42])`, `received_time < (SELECT any(before) … WHERE erasure = 42)`. **Verified on
+  ClickHouse 26.8.12.53**: a lightweight `DELETE` accepts `IN (SELECT …)` over another table and a
+  scalar subquery, with no `allow_nondeterministic_mutations`; the stored command reads
+  `erasure = _CAST(7, 'UInt64')`, so the log holds numbers and times only. The subqueries are read
+  when the mutation runs, so the partition is dropped only once the pending erasure is deleted (no
+  masked row left), and any partition PostgreSQL no longer knows (a finished erasure whose drop
+  failed, a database removed) at the start of each pass. A partition counts as an erasure's own only
+  if it also holds that erasure's time; one with another time is dropped and written again, since
+  PostgreSQL restored from a backup older than the event store's reissues erasure numbers whose old
+  targets — another person's IDs — the sweep drops only while no pending erasure has the number
+  (found in verification: the worker otherwise erased that other person again, and not the new
+  one). Cost: one small table read per part the
+  mutation touches, negligible beside the part rewrite. The targets are an insert's data, not a
+  statement's text; query and part logs are the operator's concern (DEPLOYMENT.md "Erasure on
+  disk"; the bundled service turns every log table off). A test reads `system.mutations` and every
+  `mutation_*.txt` under the tables' `data_paths`. *Rejected:* amending AN-185 to allow the IDs in
+  the mutation log (it is a file of the event store, which PRD 12 says carries no ID after the
+  bound); `KILL MUTATION` or lowering `finished_mutations_to_keep` (the first cancels, the second
+  still keeps a hundred texts); passing IDs as parameters (substituted into the stored text).
+- *Reports and submissions sent before sign-in go with their user even when the erasure ran during
+  an outage.* A pending erasure now names its erasure record (`erasure_id`) and the crash and feedback
+  databases the erasure selected (`crash_database_ids`, `feedback_database_ids`; PostgreSQL migration
+  `0006_analytics_piece10_erasure_links`). When the worker resolves a deferred user erasure's
+  installations, it deletes the reports (CR-047 rules, without the user's associations, which went
+  in the request) and submissions (FR-064A, purge queue included) carrying those installations' IDs
+  in those databases, in its claiming transaction, and adds what they lost to the record's counts.
+  The shared deletes live in `services/erasure-deletes.ts`, called by the request and the worker.
+  *Rejected:* leaving them for a second erasure (the Admin would have to know the outage hid them).
+- *A shared installation's own state is derived again without the erased user's events.* The targets
+  hold the installations the user ID was seen on that are kept (`shared`, read from the identity
+  links before any delete). After the events' delete, their `installations` and `installation_first`
+  state goes with the erased installations' (the two installation-scoped tables derived from all of
+  an installation's events; `installation_users` is per user, and only the erased user's links go),
+  and the replay covers every remaining event of those installations with its stored received time,
+  so install time, first and last seen, latest dimensions and first occurrences come only from events
+  that remain. Cost: a shared installation's whole history is replayed once per erasure touching it.
+  The replay runs in the same pass as the states' deletes, right after submitting them: a mutation
+  applies only to the parts inserted before it was submitted (checked on 26.8 with merges stopped),
+  so the replayed states survive it and a shared installation always has a record; until the deletes
+  apply, reads merge the old states with the replayed ones, as before the erasure. The next pass,
+  once the deletes are done, replays again (idempotent, for an insert that committed its states just
+  before the deletes and its event row just after the first replay read) and ends the skip.
+  *Rejected:* replaying a pass later (the first build): for that pass a shared installation had no
+  record, so an event it sent then, with the install-time cache cold (after a restart), created a
+  new record and stored install ages counted from itself, which are never recomputed (AN-031,
+  AN-032); leaving shared-installation state
+  (AN-183 only corrects the latest user ID, but the record's latest dimensions and first occurrences
+  would keep what the erased user did); adding shared installations to the read skip (it would hide
+  another person's installation from every read while the erasure is pending).
+- *The deletion impact* (`eventStoreCounts`, `services/analytics.ts`) applies the erasure skip, so it
+  counts no erased row while the worker has not finished, as no other read does.
+
+**Web.** `components/erase-panel.tsx` in Project → Settings. A profile's Erase (shown to a database
+or project Admin) opens the same component in a dialog on the profile, the ID filled in, the
+profile's database selected and the preview read at once. *Rejected:* a link to the project's
+settings with the ID in the address, the first build — a database Admin who is not a member of the
+project cannot open the project page, so Erase led nowhere for the one Admin who most needs it.
+Closing the dialog reads the profile again. The analytics delete dialog links the export
+(`erasureApi.exportEventsHref`). **MCP**: `preview_erasure`, `erase_identity` (destructive, `confirm`),
+`export_analytics_events`, in `apps/mcp/src/analytics-erasure-tools.ts`.

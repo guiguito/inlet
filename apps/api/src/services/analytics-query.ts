@@ -409,8 +409,8 @@ export class ReadSkip {
 
   /**
    * For the installation-scoped tables, whose aggregated states carry no received time: an
-   * erased installation is left out whole until its pending erasure is gone (piece 10), which
-   * hides more rather than less.
+   * erased installation is left out whole until the worker has deleted its rows and replayed the
+   * events it sent afterwards (piece 10), which hides more rather than less.
    */
   installations(p: SqlParams, column = 'installation_id'): string {
     const ids = [...new Set(this.data.erasures.flatMap((erasure) => erasure.installationIds))];
@@ -431,7 +431,10 @@ async function loadSkip(db: Db, databaseKey: number): Promise<SkipData> {
   const erasures = await db
     .select({ kind: analyticsPendingErasures.kind, erasedId: analyticsPendingErasures.erasedId, installationIds: analyticsPendingErasures.installationIds, createdAt: analyticsPendingErasures.createdAt })
     .from(analyticsPendingErasures)
-    .where(eq(analyticsPendingErasures.databaseKey, databaseKey));
+    // Once the worker has deleted an erasure's rows (piece 10), the event store's own
+    // lightweight-delete mask hides them and the rollups are rebuilt, so reads return to the
+    // projections while the row waits, holding the ID, for the files to be rewritten.
+    .where(and(eq(analyticsPendingErasures.databaseKey, databaseKey), isNull(analyticsPendingErasures.deletedAt)));
   const deleted = await db
     .select({ id: analyticsEventNameDeletions.eventNameId })
     .from(analyticsEventNameDeletions)

@@ -12,6 +12,7 @@ For the person collecting the feedback. If you are deploying it, read
 - [Reading responses](#reading-responses)
 - [Slack notifications](#slack-notifications)
 - [Crash reports](#crash-reports)
+- [Honouring an erasure request](#honouring-an-erasure-request)
 - [Sharing access](#sharing-access)
 - [Exporting and deleting](#exporting-and-deleting)
 - [Working with Claude and other AI agents](#working-with-claude-and-other-ai-agents)
@@ -317,8 +318,7 @@ your browser's zone, which happens with a zone renamed recently such as `Europe/
 form proposes its former name (`Europe/Kiev`), which counts exactly the same hours.
 
 The database opens on **Insights → Overview**, with four groups: **Insights** (Overview,
-Events, Funnels, Cohorts), **Users**, **Collect** and **Settings**. For now **Overview**,
-**Events**, **Users**, **Collect** and **Settings** are where the work is.
+Events, Funnels, Cohorts), **Users**, **Collect** and **Settings**.
 
 ### Overview: reading the home
 
@@ -404,6 +404,11 @@ at most 500 distinct event names, 50 new ones an hour, 100 param keys and 10 cat
 event name, unless your operator changed those; events older than 30 days are refused. The
 [API reference](API.md#analytics-ingest) lists every rule.
 
+While events are being refused because the database holds as many event names as it may, or
+because more new names arrived within an hour than it accepts, Collect shows a notice above
+the live feed with a link to **data health** (Settings → Storage). Events with names already
+seen are still stored; delete or block names you no longer send in **Events**.
+
 ### Events: the catalog and its charts
 
 **Insights → Events** lists every event name the database has received, with its category,
@@ -457,6 +462,144 @@ did it".
 When a chart says every query slot is busy, the server is answering other charts; try again
 in a few seconds. When it says the chart took too long, choose a shorter range or a coarser
 interval.
+
+### Funnels: where people stop
+
+**Insights → Funnels** answers "of the people who start onboarding, how many finish, where do
+the others stop, and is it getting better?" The list shows each saved funnel with its steps,
+mode and window. A Creator or Admin creates, edits and deletes funnels; a Viewer opens and runs
+them, and may change one to try a variation without saving it.
+
+**Building one.** **Create a funnel**, then pick an event for each step, in order — two to ten
+steps, each with optional filters (only the `pro` plan, only version 1.5.0) and a label for the
+chart. Say, "Onboarding": `app_installed`, `signup_completed`, `first_project_created`. Then:
+
+- **Mode.** *Closed* (the default) counts only people who start at step 1. *Open* lets people
+  enter at whichever step they reach first, which suits a flow people can join halfway, such as
+  a checkout reachable from several screens.
+- **Window.** How long after entering someone may take to finish, from one minute to 90 days,
+  seven days by default. It is counted from the moment they entered, not from the previous step:
+  with seven days, someone who starts on Monday must reach the last step by the next Monday.
+- **Count.** Installations (the default) or user IDs. A user-ID funnel ignores events without a
+  user ID, so a step such as `app_installed`, which the SDK sends before anyone signs in, is
+  often empty; the editor says so.
+- **Filters on every step**, and **Split by** a dimension, an experiment or a param.
+
+Name it and **Save**; the range and view you were looking at become its defaults.
+
+**How a step counts.** Someone enters at their first `app_installed` in the range. They reach
+`signup_completed` with the first one after that, within the window, then
+`first_project_created` with the first one after the signup, still within the window of their
+entry. Other events in between do not matter. A `signup_completed` that happened before the
+install does not count, and a step completed after the end of the range still counts if it is
+within the window, so the last days of a range are not unfairly low. A backend's events (platform
+`server`) count as steps of the installation or user they name.
+
+**The steps view** draws one bar per step with how many reached it, their share of everyone who
+entered and of the previous step, and the median time between steps beside each gap; the table
+under it gives the same numbers with the mean times and how many dropped at each step. In an open
+funnel each step also says how many entered there; its conversion from the previous step counts
+only the people who came from that step, and someone who enters at the last step is not a
+conversion.
+
+**See who dropped.** Each step's "See who dropped" opens the installations (or user IDs) that
+reached it and not the next, 50 at a time, each with its platform, app version and last seen, and
+a mark when crash reports or feedback carry its IDs. Each links to its profile under **Users**,
+where the crashes and the feedback are one click away. The list keeps the moment you opened it, so
+events arriving while you page through it never move someone from one page to another.
+
+**The trend view.** Switch **View** to a trend by day, week or month to read conversion per entry
+period: everyone who entered in week 38 is followed through the funnel, and so on for each week.
+Show the overall conversion, every step, or one. Someone who starts twice, in two weeks, counts in
+both weeks, which is why the page says "Each week counts the installations that entered that
+week, so the weeks need not add up to the whole range." A period is **incomplete** — a dashed
+line with a hollow point, and "(incomplete)" in the table — while its entries' window is still
+open: with a seven-day window, last week's entrants may still convert until seven days after the
+week ends. Do not read a dip in the last points as a decline until they are complete.
+
+A trend over many months reads a lot of events, so it may take a while; the page shows how long
+it has been running. It has its own time limit, two minutes by default, and does not hold up your
+other charts. If it runs out of time, choose a shorter range or a coarser interval.
+
+**Experiments.** Split by an experiment key to read conversion per variant, taken from each
+person's entering event. The page labels it descriptive: it reports what happened in each
+variant and runs no significance test, so treat small differences with care.
+
+**Export** downloads the result as CSV or JSON. Every answer says which dates it covers; a range
+that starts before the oldest event kept covers what is kept, and says so. If an event a saved
+funnel uses is deleted, that step shows no one and the page says why.
+
+### Cohorts: who comes back
+
+**Insights → Cohorts** answers "of the people who installed in a given week, how many came back
+the week after, and the week after that?" The list shows each saved cohort with its start,
+return, period and counting unit. A Creator or Admin creates, edits and deletes cohorts; a Viewer
+opens and runs them, and may change one to read it another way without saving it.
+
+**The standard Retention cohort** comes first, with a lock. Every analytics database has it:
+installations grouped by the week they installed, and the share that started the app
+(`app_started`) in each following week. It cannot be edited or deleted — so that everyone reading
+"retention" in Inlet, and the D1, D7 and D30 of the Overview, which are the same computation by
+day, means the same thing — but you can switch it to days, months or years, change its range or
+narrow it to a platform, and read the result without saving anything.
+
+**Reading the table.** Each row is a cohort: the period in which its members started (a week is
+labelled `2026-W38`, "from" its Monday), and its **size**, period 0, which is always 100%. Then one
+cell per later period: *Week 1* is the week after the cohort's week, *Week 2* the one after that,
+and so on, in the database's reporting timezone. A cell shows the share of the cohort that did
+the return event in that period; hover over it or focus it with the keyboard for the number of
+people. The darker the cell, the larger the share. Periods are calendar periods, not rolling
+days: someone who installs on a Sunday and comes back on Monday has come back in week 1.
+
+- A cell marked **\*** is **incomplete**: its period has not ended, so more people may still come
+  back. The newest cells of every row are incomplete; do not read them as a drop.
+- A cell marked **†** is **not fully covered**: its period begins before the oldest event the
+  database keeps, so returns before that day are no longer known and the cell reads low. This
+  happens once the storage window has moved past a cohort's first weeks.
+- A cell left **empty** is a period that has not begun.
+- The **summary row** on top gives, for each period, the people who came back divided by the size
+  of the cohorts whose period has ended and is fully covered. Young cohorts, whose week 3 has not
+  happened yet, are left out of week 3's figure rather than counted as people who never came back.
+  Where no cohort's period has ended yet, the summary shows the incomplete value, marked **\***.
+
+The table shows at most 60 cohorts by day, 52 by week, 36 by month and 10 by year; a longer range
+shows the newest and says that the oldest are left out.
+
+**Building one.** **Create a cohort**, then choose:
+
+- **Start**: *the install* (installations only), *the first event* of any name, or *a named
+  event*, with optional filters. Say, "Buyers who buy again": start `purchase_completed`.
+- **Return**: *any event* (anything the app itself sends, not a backend's events) or *a named
+  event* with optional filters: `purchase_completed` again.
+- **By**: day, week, month or year — month for purchases.
+- **Count**: installations (the default) or user IDs.
+- **Who is in the cohort**: population filters on the platform, app, app version, environment,
+  country, attribution, install attribution or an experiment. They test each person at their
+  start — for the install, the platform and version they installed on; for an event, those of the
+  occurrence that started them — and never their returns: a cohort of iOS installs counts their
+  returns on the web too. Without an environment filter, only production counts.
+- **Start periods**: the last 12 periods by default, or a preset or dates.
+
+Name it and **Save**; the range you chose becomes its default.
+
+**Who is a member.** Without filters on the start, a person's start is the first time they ever
+did it: Inlet remembers each installation's install and the first time it did each event, even
+after the events of that day have been deleted to keep storage bounded, so a cohort's members do
+not change as time passes. Someone whose first purchase was before the range is in no row of it.
+With filters on the start ("the first purchase over €100"), Inlet can only look among the events it
+still keeps, so the page says that membership may change as older events are removed.
+
+**What does not count.** Installations whose storage the browser would not keep (a private window)
+are in no cohort of installations, since each visit would look like a new install; nor are a
+backend's server installations or the test installation. A cohort of user IDs counts a signed-in
+user's events from a private window and from a backend, since the user ID is what recognises them. **On the web**, browsers clear storage anyway — Safari
+after seven days without a visit — so a returning visitor can look like a new installation, and
+retention beyond a week reads lower than it is. The page says so. If your users sign in, count user
+IDs: a user ID stays the same across browsers and reinstalls.
+
+**Export** downloads the table as CSV or JSON: the summary first, then each cohort, one row per
+period, period 0 being the size. If an event a saved cohort uses is deleted, the page says so and
+that start or return has no one.
 
 ### Users: looking someone up
 
@@ -527,13 +670,134 @@ either way.
   default, which gives each event received afterwards the country its request came from and
   never stores the address (only an Admin can change it); and delete the database, typing
   its name. Deletion states how many events, installations, user IDs, funnels and cohorts go
-  with it, and takes effect at once whatever the size.
-- **Notifications**: the shared Slack panel. An analytics database will announce
-  data-health incidents only, so there is no content level to choose.
+  with it, and takes effect at once whatever the size. The dialog offers **export every stored
+  event** first: a newline-delimited JSON file of every event the database holds, one per line.
+  It holds the events, and not the installation records and first occurrences derived from
+  them; a profile's **Export** carries those for one installation or user.
+- **Storage**: what the database keeps, what it uses, and its data health (Admins see the
+  settings; everyone sees data health). See [Keeping storage bounded](#keeping-storage-bounded)
+  and [Data health and incidents](#data-health-and-incidents) below.
+- **Notifications**: the shared Slack panel. An analytics database announces data-health
+  incidents only, their opening and their resolution, so there is no content level to choose;
+  its test message is an example incident.
 - **Access**: members and invitations for this database alone, as for any other.
 
 When the event store is unreachable, the database's page says so in one sentence; its
 settings still open, and the rest of Inlet works as usual.
+
+### Keeping storage bounded
+
+**Settings → Storage** says how much the database holds and keeps it within what your machine
+can store. Three settings decide what is kept:
+
+- **Maximum age**: 13 months (395 days) by default, from 7 days to 25 months.
+- **Maximum events**: 500 million by default, from 100,000 to 10 billion.
+- **Lateness window**: how late an event may arrive, 30 days by default, from 1 to 90, never
+  longer than the maximum age.
+
+Your operator may have changed a default or a bound; the panel shows the ones in force beside
+each field. Below them, **Usage** shows events a day (the average of the last seven days, and
+each of the last 30 under "Events a day over the last 30 days"), the events kept and the oldest
+week kept, the disk this database uses in the event store, the disk of the whole event store and
+of PostgreSQL, which limit binds now and how many days of events the settings keep at your
+volume. **Recommendations** say, from your measured volume and disk per event, how many days the
+cap keeps, what keeping 30, 90 or 395 days would need, and warn when the cap is too small to
+honour or keeps fewer days than the lateness window.
+
+For example, at 10,000,000 events a day the default cap of 500 million events keeps between 43
+and 50 days, and keeping 13 months needs a cap of about 4.1 billion events and about 205 GB. Short
+of disk, lower the cap: **Save** first states what the change removes ("This removes about
+14,200,000 events recorded before September 17. Charts and funnels then start on that day;
+cohorts keep their members and lose the returns before it.") and asks you to type the
+database's name. The hourly retention pass then drops the older weeks, within the hour, and the
+panel shows the space returned. Raising a limit keeps more from then on; it never brings back
+what was removed, and the panel says so before you save.
+
+Retention removes **whole weeks** of the reporting timezone, so events up to a week older than
+the maximum age may remain, the events kept under a binding cap vary by up to a week of volume,
+and the current and previous weeks are always kept, whatever the cap. Once a week is dropped,
+an event dated before the oldest week kept is refused as too old, even within the lateness
+window, so nothing recreates it. Once a day the server also forgets installations that sent
+nothing within the maximum age: their records, identity links and first occurrences.
+
+### Data health and incidents
+
+**Data health**, at the bottom of Settings → Storage, lists what the database refused or
+removed over the last 24 hours and 7 days, and why: events over a rate limit, too old, too
+large, beyond the event-name limit or the hourly allowance of new names, blocked, invalid, with
+an unknown field or without an identity; events removed by the cap; values truncated, param keys
+and categories dropped, placeholder user IDs dropped, timestamps corrected; duplicates received
+and events stored. The counts match what each batch answered, and are written every ten seconds.
+
+When the database loses data for one reason, the server opens an **incident**, listed under
+data health, and, with Slack notifications on, sends one message when it opens and one when it
+resolves:
+
+- **Storage cap reached**: the cap removed a week younger than the maximum age. Further
+  removals while it is open send nothing. It resolves when you change the storage settings, or
+  after 14 days without such a removal.
+- **Storage cap exceeded**: even the current and previous weeks, always kept, hold more than
+  the cap. Events are still collected. It resolves once the cap can be met.
+- **Rate limited**: more than 1,000 events refused for rate limits within an hour.
+- **Event-name limit** and **too many new event names**: an event refused for either.
+- **Invalid events**: more than 10% of an hour of at least 1,000 events invalid.
+
+The last four resolve after 24 hours without recurrence. A message names the database and the
+incident with its figures ("Checkout app is rate limited: 12,480 events are refused in the last
+hour."), links to Settings → Storage, and says when it resolves how long it lasted and how many
+events it affected. It never carries an installation ID, a user ID, a session ID, an event
+name, a param, an attribution or an experiment variant.
+
+## Honouring an erasure request
+
+When someone asks you to delete their data, erase their user ID, or the installation ID of their
+device, across the project: **Project → Settings → Erase an installation or user ID**. From an
+analytics profile, an Admin's **Erase** opens the same erasure over the profile, with the ID filled
+in, that analytics database selected and the preview shown — the way in for a database Admin who is
+not a member of the project.
+
+1. **Find the ID.** The user ID is the one your app sets after sign-in; paste it into an analytics
+   database's **Users**, or read it on a crash report or a submission. Without analytics, the
+   crash and feedback screens filter by user ID too.
+2. **Preview.** Choose **User ID** or **Installation ID**, paste the ID and choose **Preview**. It
+   lists every crash, feedback and analytics database of the project that you administer, with
+   what the erasure would delete in each: crash reports, the user's place in each crash group's
+   affected users, submissions and their screenshots, analytics events and installations.
+3. **Select** the databases to erase in, **type the ID** again, and choose **Erase**. The panel
+   shows what each database lost.
+
+What it does:
+
+- It **matches the identity fields only**: the installation ID and user ID the SDK attaches. An
+  ID someone wrote into a submission's context, a crash report's context or an event's params is
+  not found; search those yourself.
+- **A user ID takes its installations with it**: in each analytics database, the installations
+  on which it is the only user ever seen, and the server installation its backend events
+  created — with their crash reports and submissions, so a crash from before the person signed
+  in goes too. A device shared with another signed-in user stays, now showing that other user.
+- **Crash groups keep their counts**: their reports carrying the ID go, each group loses the
+  person from its affected users, and a group whose latest report went shows its newest
+  remaining one.
+- **Crash reports and submissions are gone at once.** Analytics events disappear from every
+  screen at once; the server deletes them from the event store within minutes, and from its
+  files on disk within 30 days (your operator may shorten that).
+- **Each erasure is recorded** with who did it, when and what it deleted in each database, never
+  the ID itself.
+
+What it does not do:
+
+- It does **not stop the app sending again**. If the person keeps using your app, new events,
+  crash reports and submissions carrying the same IDs arrive and are kept. To stop an app
+  sending, have it call `setEnabled(false, {forget: true})`, which also forgets its installation
+  ID.
+- It does **not reach backups, files you exported earlier, or Slack messages already sent**.
+  Deal with those separately if your policy requires it.
+
+A database Admin sees and erases only the databases they administer; a project Admin covers
+all of them. If the analytics event store is not running or is unreachable, the preview says
+which analytics databases it could not reach; select them anyway and the erasure is recorded
+there, to apply as soon as the event store answers. Crash reports and submissions are erased
+either way.
 
 ## Sharing access
 

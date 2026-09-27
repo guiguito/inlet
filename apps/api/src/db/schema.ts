@@ -578,6 +578,12 @@ export const notificationDeliveries = pgTable(
     crashGroupId: text('crash_group_id').references(() => crashGroups.id, { onDelete: 'cascade' }),
     /** AN-192: the source of an `analytics_data_health` delivery; it goes with its incident. */
     analyticsIncidentId: integer('analytics_incident_id').references(() => analyticsIncidents.id, { onDelete: 'cascade' }),
+    /**
+     * AN-191: an `analytics_data_health` delivery announces the incident's resolution rather
+     * than its opening. Stored because the message is rendered at send time, when an opening
+     * delivery held back by a Slack outage may meet an incident already resolved.
+     */
+    analyticsResolution: boolean('analytics_resolution').notNull().default(false),
     /** The database whose Slack settings render and receive the message; `fdb_`, `cdb_` or `adb_`. */
     feedbackDatabaseId: text('feedback_database_id').notNull(),
     status: deliveryStatusEnum('status').notNull().default('pending'),
@@ -1024,7 +1030,9 @@ export const analyticsDroppedCounts = pgTable(
 
 /**
  * AN-184: every read skips the rows of `erasedId` and `installationIds` received before
- * `createdAt`, until the worker has removed them from the event store's files.
+ * `createdAt`, until the worker has deleted them from the event store (`deletedAt`); the row
+ * then stays, holding the ID, until no file of the event store carries those rows
+ * (services/analytics-erasure.ts, DECISIONS 33.10).
  */
 export const analyticsPendingErasures = pgTable(
   'analytics_pending_erasures',
@@ -1034,7 +1042,25 @@ export const analyticsPendingErasures = pgTable(
     kind: erasureKindEnum('kind').notNull(),
     erasedId: text('erased_id').notNull(),
     installationIds: uuid('installation_ids').array().notNull().default(sql`'{}'::uuid[]`),
+    /** The erasure's time, from ingest's received-time clock (AN-184: "received before"). */
     createdAt,
+    /**
+     * FD-033: false for a user ID erased while the event store did not answer, whose
+     * installations (those it was the only user of) the worker resolves once it answers.
+     */
+    resolved: boolean('resolved').notNull().default(true),
+    /** When the deletes of the installation-scoped rows were submitted (they follow the events'). */
+    statesSubmittedAt: timestamp('states_submitted_at', { withTimezone: true }),
+    /** When no row it erases remained readable in the event store; reads stop skipping it then. */
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    /**
+     * FD-033: the project's erasure it belongs to (`erasures.id`, no foreign key: the row is keyed
+     * by the database, AN-004), and the crash and feedback databases that erasure selected, where
+     * the worker erases the reports and submissions of the installations it resolves later.
+     */
+    erasureId: integer('erasure_id'),
+    crashDatabaseIds: text('crash_database_ids').array().notNull().default(sql`'{}'::text[]`),
+    feedbackDatabaseIds: text('feedback_database_ids').array().notNull().default(sql`'{}'::text[]`),
   },
   (table) => [index('analytics_pending_erasures_key_idx').on(table.databaseKey)],
 );

@@ -36,6 +36,7 @@ import {
   type InstallAges,
 } from './analytics-derive.js';
 import { effectiveStorage } from './analytics.js';
+import { SqlParams, readSkip, type ReadSkip } from './analytics-query.js';
 
 /**
  * Analytics ingest (UX Analytics 6.2 to 6.4, 9.4; DECISIONS 31.3 and 33.3).
@@ -488,7 +489,8 @@ async function store_(ctx: AppContext, store: EventStore, database: AnalyticsDat
 
   // AN-031: install times, from the cache, else from `installations`.
   const installationIds = [...new Set(unique.map((candidate) => candidate.installationId))];
-  const records = await installRecords(store, dbKey, installationIds);
+  const skip = await readSkip(ctx, dbKey);
+  const records = await installRecords(store, dbKey, installationIds, skip);
 
   // 9.4: the batches creating one installation take turns, so they stamp one install time.
   const toCreate = installationIds.filter((id) => records.get(id) === null && unique.some((c) => c.installationId === id && c.qualifying)).sort();
@@ -505,7 +507,7 @@ async function store_(ctx: AppContext, store: EventStore, database: AnalyticsDat
     if (toCreate.length > 0) {
       // Another batch may have created them while this one waited.
       for (const id of toCreate) installs.delete(`${dbKey}|${id}`);
-      for (const [id, value] of await installRecords(store, dbKey, toCreate)) records.set(id, value);
+      for (const [id, value] of await installRecords(store, dbKey, toCreate, skip)) records.set(id, value);
     }
 
     // Concurrent copies wait for the first. Checked again after every wait, and registered
@@ -656,7 +658,7 @@ async function store_(ctx: AppContext, store: EventStore, database: AnalyticsDat
  * above a thousand batches a second, twenty times the reference workload's rate.
  */
 let lastRowsReceivedMs = 0;
-function rowsReceivedTime(arrivedMs: number): number {
+export function rowsReceivedTime(arrivedMs: number): number {
   lastRowsReceivedMs = Math.max(arrivedMs, Date.now(), lastRowsReceivedMs + 1);
   return lastRowsReceivedMs;
 }
@@ -688,7 +690,7 @@ async function lock(key: string): Promise<() => void> {
 }
 
 /** AN-031: install times by installation ID, null for no record, through the cache. */
-async function installRecords(store: EventStore, databaseKey: number, ids: string[]): Promise<Map<string, number | null>> {
+async function installRecords(store: EventStore, databaseKey: number, ids: string[], skip: ReadSkip): Promise<Map<string, number | null>> {
   const out = new Map<string, number | null>();
   const missing: string[] = [];
   for (const id of ids) {
@@ -697,14 +699,17 @@ async function installRecords(store: EventStore, databaseKey: number, ids: strin
     else out.set(id, cached);
   }
   if (missing.length === 0) return out;
-  // The read expression of 0001_events.sql, for these installations only.
+  // The read expression of 0001_events.sql, for these installations only. An installation whose
+  // erasure is pending has no record (AN-184, piece 10): one that sends again starts over, so no
+  // install age of a later event is derived from the erased install time.
+  const p = new SqlParams();
   const rows = await store.query<{ id: string; install_ms: string }>(
     `SELECT toString(installation_id) AS id, toUnixTimestamp64Milli(minIfMerge(install).time) AS install_ms
      FROM installations
-     WHERE database_key = {databaseKey:UInt32} AND installation_id IN {ids:Array(UUID)}
+     WHERE database_key = {databaseKey:UInt32} AND installation_id IN {ids:Array(UUID)} AND ${skip.installations(p)}
      GROUP BY installation_id
      HAVING max(has_qualifying) = 1`,
-    { databaseKey, ids: missing },
+    { databaseKey, ids: missing, ...p.values },
   );
   const found = new Map(rows.map((row) => [row.id, Number(row.install_ms)]));
   for (const id of missing) {

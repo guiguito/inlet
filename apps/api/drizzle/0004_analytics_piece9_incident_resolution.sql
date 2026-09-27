@@ -1,0 +1,1 @@
+ALTER TABLE "notification_deliveries" ADD COLUMN "analytics_resolution" boolean DEFAULT false NOT NULL;

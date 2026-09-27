@@ -39,7 +39,12 @@ import { crashReadRoutes } from './routes/crash-reads.js';
 import { analyticsRoutes } from './routes/analytics.js';
 import { analyticsEventRoutes } from './routes/analytics-events.js';
 import { analyticsOverviewRoutes } from './routes/analytics-overview.js';
+import { analyticsStorageRoutes } from './routes/analytics-storage.js';
 import { analyticsProfileRoutes } from './routes/analytics-profiles.js';
+import { analyticsFunnelRoutes } from './routes/analytics-funnels.js';
+import { analyticsCohortRoutes } from './routes/analytics-cohorts.js';
+import { analyticsExportRoutes } from './routes/analytics-export.js';
+import { erasureRoutes } from './routes/erasures.js';
 import { requireAnalyticsDatabase, requireCrashDatabase } from './services/access.js';
 import { mcpRoutes } from './routes/mcp.js';
 import { projectRoutes } from './routes/projects.js';
@@ -144,6 +149,15 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
       await v1.register(analyticsOverviewRoutes(ctx));
       // Profiles and the Usage profile link of crash reports and submissions (AN-120 to AN-126, AN-154).
       await v1.register(analyticsProfileRoutes(ctx));
+      // Settings → Storage and data health (AN-160 to AN-169).
+      await v1.register(analyticsStorageRoutes(ctx));
+      // Saved funnels, runs and the drill-down (AN-080 to AN-089).
+      await v1.register(analyticsFunnelRoutes(ctx));
+      // Saved cohorts and runs (AN-100 to AN-109).
+      await v1.register(analyticsCohortRoutes(ctx));
+      // The event export (AN-210) and the project's erasure of an installation or user ID (FD-033, AN-183 to AN-185).
+      await v1.register(analyticsExportRoutes(ctx));
+      await v1.register(erasureRoutes(ctx));
       // And a third time for analytics databases (AN-190). Their messages announce data-health
       // incidents only, so `contentLevel` is stored like any database's and never read for them.
       await v1.register(

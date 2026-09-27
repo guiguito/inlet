@@ -64,10 +64,10 @@ pieces land; a piece that departs from one says so in its report and in that sec
 | 4 | Catalog, Lexicon and trends | Query layer (slots, limits, filters, ranges, periods, coverage, the erasure skip); catalog, event detail, filter values, hide, block, delete; trends and their export; catalog export; Events tab; tools | verified and committed (DECISIONS 33.4) |
 | 5 | Overview | Every figure of AN-140, sessions, retention D1/D7/D30, crash-free sessions; Overview tab; tool; piece 4's follow-ups (client disconnect, 1,000 periods, catalog cursor) | verified and committed (DECISIONS 33.5) |
 | 6 | Profiles and links | AN-120 to AN-126, AN-154, FR-066; the shared helper that finds crash reports and submissions carrying an ID; Users tab; Usage profile links; tools | verified and committed (DECISIONS 33.6) |
-| 7 | Funnels | AN-080 to AN-089, including the drill-down's crash and feedback flags through piece 6's helper; Funnels tab; tools | pending |
-| 8 | Cohorts | AN-100 to AN-109; Cohorts tab; tools | pending |
-| 9 | Storage, retention and data health | AN-004 removal worker, AN-160 to AN-169, AN-190 to AN-192, the orphan sweep; Settings → Storage; the Collect notice; tools | pending |
-| 10 | Erasure and event export | FD-033 across crash, feedback and analytics (CR-047, FR-064A); AN-183 to AN-185; AN-210, AN-212; project settings and profile screens; tools | pending |
+| 7 | Funnels | AN-080 to AN-089, including the drill-down's crash and feedback flags through piece 6's helper; Funnels tab; tools | verified and committed (DECISIONS 33.7) |
+| 8 | Cohorts | AN-100 to AN-109; Cohorts tab; tools | verified and committed (DECISIONS 33.8) |
+| 9 | Storage, retention and data health | AN-004 removal worker, AN-160 to AN-169, AN-190 to AN-192, the orphan sweep; Settings → Storage; the Collect notice; tools | verified and committed (DECISIONS 33.9) |
+| 10 | Erasure and event export | FD-033 across crash, feedback and analytics (CR-047, FR-064A); AN-183 to AN-185; AN-210, AN-212; project settings and profile screens; tools | verified and committed (DECISIONS 33.10) |
 | 11 | `inlet-sdk/analytics` | AN-150, AN-151, AN-220 to AN-242, AN-230; CR-111, CR-119; crash and feedback attach rules; build, size and purity checks; Metro | verified and committed (11a 6bfa07c, 11b d30ed9b; DECISIONS 33.11a, 33.11b); end-to-end against the running API left to piece 12 |
 | 12 | Full verification | Every acceptance criterion of PRD section 12 against the running product; the scaled load test; docs, PRD status, DECISIONS, Docker with the profile | pending |
 
@@ -813,6 +813,181 @@ paragraph on installations and user IDs. `get_crash_report` and `get_submission`
 identity fields they return. The remote MCP route runs the built `@inlet/mcp` (`dist`): rebuild it
 (`npm run build -w @inlet/mcp`) before an API test calls a new tool.
 
+### From piece 7: funnels
+
+**Modules.** `apps/api/src/services/analytics-funnels.ts` (saved funnels, `runFunnel`,
+`funnelUnits`, the export rows), `routes/analytics-funnels.ts` (`analyticsFunnelRoutes`, registered
+after `analyticsProfileRoutes`), `apps/web/src/components/analytics-funnels.tsx` (`FunnelsPanel`,
+the open funnel in the address's `funnel` parameter: a saved ID or `new`),
+`apps/web/src/lib/analytics-funnels.ts` (`funnelsApi`), `apps/mcp/src/analytics-funnel-tools.ts`
+(`registerAnalyticsFunnelTools`, called from `registerTools`).
+
+**What later pieces reuse.**
+
+- **The walk** (`walkSql`, internal; `aggregateSql(args, keys, top)` exported for measurement): one
+  row per unit that entered (and entry group) with `E`, `i1…in` (1 when the step was reached),
+  `s2…sn`, `total`, `entry_installation`, `v`, `b`; per unit, one sort finds the entries and one
+  `arrayReverseFill` per step the chains they are walked by (DECISIONS 33.7). Piece 8's cohorts do
+  not need it, but a "first-in-range" cohort start would follow the same array-of-tuples pattern,
+  and should likewise avoid carrying a unit's whole array into an `arrayJoin` row per period. Piece 12's load test can time `aggregateSql` directly, as
+  `DECISIONS 33.7` did with a scratch script.
+- **Piece 10 (erasure)**: funnels read `events` through `readSkip(...).events` and the drill-down's
+  rows through `summarySql` (installations skip), so a pending erasure hides a unit at once;
+  nothing funnel-specific to erase (definitions hold no identity).
+- **Piece 9 (database removal)**: `analytics_funnels` rows go by cascade with the database row;
+  nothing in the event store is funnel-specific.
+- **Piece 6's helpers are exported**: `summarySql`, `latestUserIds`, `presentSummary`, `SummaryRow`
+  from `analytics-profiles.ts`.
+- **Web**: `analytics-events.tsx` now exports `FilterList`, `SplitControl`, `LABELS`, `SELECT` and
+  `complete` (piece 8's cohort editor can reuse them for its start and return filters).
+- **Profiles**: a subject's sessions are the sessions holding one of its events (DECISIONS 33.7).
+
+**Answers.** Steps numbered from 1; `entered` per step null in a closed funnel; nulls for shares
+with a zero denominator; `splits` with `label`, `value`, `group`; the trend view's `steps`; the
+drill-down's `{ unit, installationId, userId, platform, appVersion, lastSeen, crashReports,
+feedback }` and cursor `{ r: runAtMs, u: lastUnit }` (base64url JSON).
+
+### From piece 8: cohorts
+
+**Modules.** `apps/api/src/services/analytics-cohorts.ts` (saved cohorts, `runCohort`, the one
+retention computation, the export rows), `routes/analytics-cohorts.ts` (`analyticsCohortRoutes`,
+registered after `analyticsFunnelRoutes`), `apps/web/src/components/analytics-cohorts.tsx`
+(`CohortsPanel`, the open cohort in the address's `cohort` parameter: a saved ID or `new`; `WEB_NOTE`),
+`apps/web/src/lib/analytics-cohorts.ts` (`cohortsApi`), `apps/mcp/src/analytics-cohort-tools.ts`
+(`registerAnalyticsCohortTools`, `COHORT_SEMANTICS`), `scripts/measure-cohorts.mjs` (time and peak
+memory of the cohort statements on a seed; `node scripts/analytics-seed.mjs seed` seeds without
+measuring).
+
+**What later pieces reuse.**
+
+- **`cohortCounts(store, settings, args)`** — per (cohort period, N) the members (N = 0) and those
+  that returned in period N; **`membersSql(args, p)`** — one row per unit with its start day (the
+  install, a first occurrence, or a filtered start's first matching event), population filters
+  applied; **`membersSettings(settings, startKind)`** — the settings every statement reading
+  `membersSql` passes (aggregation in order for the install start, external aggregation past a
+  quarter of the memory limit). Piece 5's D1, D7, D30 and new installations now go through them
+  (`analytics-overview.ts`); piece 12's load test can time `cohortCounts` as the script does.
+- **`cohortTable(counts, { granularity, periods, today, keptFrom })`** (pure): the rows, cells and
+  summary of AN-104 to AN-106 from the counts.
+- **`QuerySettings`** (`db/clickhouse.ts`) accepts `optimize_aggregation_in_order` and
+  `max_bytes_before_external_group_by` beside the operator's limits.
+- **Web**: `FilterList` in `analytics-events.tsx` takes an optional `fields` (the fields offered;
+  every field by default), which the cohort editor narrows to `ANALYTICS_POPULATION_FILTER_FIELDS`.
+- **Piece 10 (erasure)**: cohorts read `installations` and the first-occurrence tables through
+  `readSkip(...).installations` / `.users` and the events through `.events`, so a pending erasure
+  hides a unit at once; nothing cohort-specific to erase (definitions hold no identity).
+- **Piece 9 (database removal)**: `analytics_cohorts` rows go by cascade with the database row;
+  nothing in the event store is cohort-specific.
+
+**Answers.** Appendix E "Cohort" as amended in DECISIONS 33.8: `summary` with `members`, the
+answer's `size` and `periods`, cells only for periods begun, warnings with `in` (`start` or
+`return`). The export's columns are `row, cohortStart, cohortLabel, size, period, members,
+returned, share, incomplete, covered`.
+
+### From piece 9: storage, retention and data health
+
+**Modules.** `services/analytics-retention.ts`, `services/analytics-incidents.ts`,
+`services/analytics-storage.ts`, `services/analytics-slack-message.ts` (pure), routes in
+`routes/analytics-storage.ts` (`analyticsStorageRoutes`, registered after the profile routes):
+`GET|PATCH …/storage` (Admin), `GET …/data-health` (Viewer; PostgreSQL only). Migration
+`0004_analytics_piece9_incident_resolution` adds `notification_deliveries.analytics_resolution`.
+
+**Worker passes** (`startAnalyticsWorker`, each interval in `AnalyticsWorkerOptions`):
+`retention` (`retentionIntervalMs`, 1 h; `runAnalyticsRetention(ctx, nowMs)`), `removals`
+(`removalsIntervalMs`, 30 s; `runDatabaseRemovals(ctx)`), `incidents` (`incidentsIntervalMs`, 60 s;
+`runAnalyticsIncidents(ctx, nowMs)`), `maintenance` (`maintenanceIntervalMs`, 10 min;
+`runAnalyticsMaintenance(ctx, state, nowMs)` with `newMaintenanceState()`: once a day, and at the
+first tick after start, `pruneDroppedCounts`, `sweepOrphans` and a pruning cycle per database; at
+every tick the next step of each cycle, `pruneDatabase`). Every pass takes its time as `nowMs`.
+
+**Partition statistics.** `eventWeeks(store, key)` → `{ partition, week, first, rows, bytes }[]`
+from the active parts of `events`; `planRetention(weeks, settings, keptFrom, today)` (pure) →
+`{ drops (reason floor | age | cap), keptFrom, removedByCap, eventsKept, exceeded }`, which the
+preview of a settings change reuses. `KEYED_TABLES` (every event-store table keyed by the database
+key; a test fails when a new one is not listed) and `KEYED_PG_TABLES` (PostgreSQL tables keyed by
+it, without a foreign key): **a later piece that adds a key-scoped table adds it to the right list**,
+and removal and the orphan sweep cover it.
+
+**The mutation tracker.** `mutationRunning(store, tables, databaseKey)` → `{ running, failure }`
+(unfinished mutations on those tables naming the key, and `latest_fail_reason`). Piece 10's erasure
+worker can use it with the pattern: count what is left, submit an asynchronous lightweight `DELETE`
+(`lightweight_deletes_sync: '0', mutations_sync: '0'`) unless one runs, never wait; log a failure,
+never kill. Pruning's step 2 deletes the links and first occurrences of installations with no
+record, so piece 10 need not delete those itself after deleting records (it may, for speed).
+
+**Incident helpers** (`analytics-incidents.ts`): `claimDatabase(tx, id)` (the row lock every pass
+and the settings route take), `openIncident(tx, databaseId, kind, figures, at)` (no-op returning null
+when one is open), `resolveIncident(tx, incident, figures, at)`, `updateIncidentFigures`,
+`openIncidentOf`; opening and resolving enqueue the `analytics_data_health` delivery in the same
+transaction. Figures (`IncidentFigures` in the renderer) keep what opened the incident; `affected`
+and `lastHour`/`lastDropAt` move on. `buildAnalyticsSlackMessage`, `incidentSentence` and
+`analyticsStorageUrl(ctx, id)` (notifications.ts) render them.
+
+**Storage.** `readStorage(ctx, database, nowMs)`, `updateStorage(ctx, database, patch, nowMs)`,
+`dataHealth(ctx, database, nowMs)`, `storageBounds(limits)`, and the pure `recommendations`,
+`keptDays`, `bindingLimit`, `capForDays`, `diskText`.
+
+**Web.** `components/analytics-storage.tsx`: `StoragePanel` (Settings → Storage), `DataHealthCard`
+(`id="data-health"`, the Collect notice's link target `?tab=settings&panel=storage#data-health`),
+`EventNameNotice` (in `CollectPanel` above the live feed); `lib/analytics-storage.ts` (`storageApi`,
+`INCIDENT_LABELS`).
+
+**MCP.** `apps/mcp/src/analytics-storage-tools.ts` (`registerAnalyticsStorageTools`):
+`get_analytics_storage`, `update_analytics_storage`, `get_analytics_data_health`.
+
+**Test helpers.** `test/setup/analytics-volume.ts`: `insertVolume(h, { databaseKey, day, events,
+days?, installations?, eventNameId?, userId?, appVersion? })` generates events inside the event store
+into `events_ingest`, so every view fills; `volumeInstallation(n)`.
+
+### From piece 10: erasure and the event export
+
+**Modules.** `services/erasure.ts` (`previewErasure`, `eraseIdentity`, `ERASURE_DATABASE_TYPES` — add
+Remote Config's config databases there, RC-100 —, `ERASURE_MATCHES_NOTE`, `ERASURE_LIMITS_NOTE`),
+`services/analytics-erasure.ts` (`ERASED_TABLES`, `erasedIdsOf`, `resolveUserInstallations`,
+`analyticsErasureCounts`, `runAnalyticsErasures`), `services/analytics-export.ts` (`eventExportPage`,
+`eventExportPages`), `routes/erasures.ts` (`erasureRoutes`), `routes/analytics-export.ts`
+(`analyticsExportRoutes`), both registered after the cohort routes. Migration
+`0005_analytics_piece10_erasure` (pending erasures gain `resolved`, `states_submitted_at`, `deleted_at`).
+
+**Routes.** `POST /v1/projects/{id}/erasures/preview` `{kind, id}` and `POST /v1/projects/{id}/erasures`
+`{kind, id, confirm, databases}` (project or database Admin, or the secret key; PostgreSQL decides
+access, so both answer without the event store); `GET /v1/analytics-databases/{id}/exports/events`
+(NDJSON; `?limit&cursor` for one JSON page).
+
+**What later pieces rely on.**
+
+- **No erased ID in a statement's text**: every erasure delete, replay and file check names its
+  targets through the event-store table `analytics_erasure_targets` (migration `0003`, one partition
+  per pending erasure, dropped with it), because `system.mutations` and `mutation_N.txt` keep
+  statement texts. A later worker that deletes by ID must do the same.
+- **Pending erasures link to their record and selected crash and feedback databases** (`erasure_id`,
+  `crash_database_ids`, `feedback_database_ids`, migration `0006_analytics_piece10_erasure_links`);
+  crash and feedback deletes are in `services/erasure-deletes.ts`.
+- **A table carrying an installation or user ID must join `ERASED_TABLES`** (and its delete
+  condition in `stateConditions`); a test compares the list with the event store's columns.
+- **The read skip now ignores a pending erasure once `deleted_at` is set**: piece 4's `loadSkip`
+  filters `deleted_at IS NULL`. Reads return to the rollups within minutes of an erasure; the row
+  stays, holding the ID, until no file carries its rows.
+- **Ingest's install-time lookup applies `skip.installations`**: an erased installation that sends
+  while its erasure is pending starts over.
+- `rowsReceivedTime` is exported from `analytics-ingest.ts`; the erasure's time and the export's
+  horizon come from it.
+- `deleteSubmissionRows(tx, rows)` (`services/submissions.ts`) is the one way submissions are deleted
+  with their attachments and purge keys.
+- `analytics-profiles.ts` now exports `Dims`, `dimensions`, `CH_TIME`, `encodeCursor`, `decodeCursor`.
+- **Worker option** `erasuresIntervalMs` (30 s). **Piece 12**: the PRD 12 "Privacy and erasure"
+  criteria are in `test/integration/analytics-erasure.test.ts`; the 30-day file bound is tested with
+  merges held off by `max_bytes_to_merge_at_max_space_in_pool = 1` (mutations still run).
+
+**Web.** `components/erase-panel.tsx` (`ErasePanel`, in Project → Settings; `framed={false}` and
+`initial` for a dialog, which previews at once), `lib/erasure.ts` (`erasureApi`); `UsersPanel` takes
+`eraseIn` (the project ID when the caller is an Admin of the database), which shows Erase on a
+profile, opening `ErasePanel` in a dialog there. The analytics delete dialog offers the export
+(`data-testid="analytics-export-offer"`).
+
+**MCP.** `apps/mcp/src/analytics-erasure-tools.ts` (`registerAnalyticsErasureTools`):
+`preview_erasure`, `erase_identity`, `export_analytics_events`.
+
 ## Left out, and why
 
 Each piece appends what it did not build and the reason.
@@ -1049,3 +1224,96 @@ passed the five-experiment cap and made every later event invalid. Left:
 - **PRD amendments for the orchestrator** (not applied here): see the piece 6 report — 7.2's
   `usage-profile` routes and `limit`/`cursor` on the export, AN-120's short-`q` behaviour, and
   AN-124's matched IDs.
+
+### From piece 7
+
+- **Budgets at scale** (9.5): measured on the 22.5-million-event seed of 33.4 as an indication
+  (DECISIONS 33.7). Since the verification's per-unit walk, the trends by day over 90 days
+  extrapolate to about 5 s at the reference workload on four threads (10 s budget) and the steps
+  view over 14 days to about 1.3 s (3 s budget). **Memory is not settled:** the `GROUP BY unit`
+  arrays hold about 140 bytes per step occurrence, about 13 GB for a 90-day funnel at the
+  reference workload (8 GB limit there) and about 1.3 GB at the Small workload (768 MB default), so
+  long ranges answer `query_limit_exceeded` unless the aggregation spills
+  (`max_bytes_before_external_group_by`, measured in 33.7) — the owner's decision, with piece 12's
+  load test.
+- **No progress figure from the API** for a long trend: the interface shows a spinner with the
+  elapsed seconds (AN-089 allows it). A streaming response with ClickHouse's progress would be the
+  upgrade.
+- **The drill-down covers the steps view only**: a trend group's drop-offs, and a drill-down within
+  one split value, are not offered (AN-088 names the steps view). An agent narrows by adding a
+  filter to an inline definition, which filters every step rather than the entering event.
+- **The drill-down's run time is the API's clock**; a row whose `received_time` precedes it but
+  whose insert completes between two pages can appear on a later page's figures (never twice: the
+  keyset is by unit ID).
+- **The "See who dropped" dialog pages with "Load more"**, not numbered pages.
+- **PRD amendments for the orchestrator** (not applied here): see the piece 7 report — Appendix E
+  "Funnel" (1-based `index`, nulls, `splits`, `warnings` shape, the trend's `steps`, the answer's
+  `range`/`timezone`/`keptFrom`/`notice`, `split.descriptive`/`note`), 7.2's drill-down body
+  (`step`, `kind`, `cursor`, `limit`) and the delete's confirmation, and the median's definition.
+
+### From piece 8
+
+- **Budget at scale** (9.5, 2 s for 12 weekly cohorts): 0.82 s for the Retention cohort over
+  900,000 installations and 20 million events on this laptop, at four threads (DECISIONS 33.8);
+  the install members grow with every installation kept, so five million would be about 4 s.
+  Piece 12's load test measures it; a table of install days is the next step if needed.
+- **Columns run to the current period**, as AN-104 says, so a daily cohort of an old range can be
+  wide (60 rows × hundreds of columns); the rows are capped, the columns are not.
+- **The Overview's retention now shares the cohort computation** (piece 5's statement is gone); its
+  answer is unchanged and its tests pass as they were.
+- **The web note on browsers is always shown** on the Cohorts screen, not only for databases with
+  web events: the screen does not know the platforms without a query.
+- **Scripts**: `scripts/analytics-seed.mjs` gained a `seed` mode (seed without measuring).
+- **PRD amendments for the orchestrator** (not applied here): Appendix E "Cohort", AN-101's install
+  attribution, and 9.2's environment default for cohorts — the exact wording is at the end of
+  DECISIONS 33.8.
+
+### From piece 9
+
+- **Resolved from earlier pieces**: the Storage panel and its route (piece 2), the analytics test
+  message (piece 2: an example incident now), the Collect notice and the incidents (piece 3), and the
+  version markers (piece 5: `version_first` is never pruned and the Overview no longer drops a
+  marker on or before `kept_from`).
+- **Not measured at scale**: the passes ran at test volumes. Pruning's `NOT IN` sets (every
+  installation or link of a database) and the orphan sweep's `GROUP BY database_key, event_name_id`
+  over `events` are for piece 12's load test at the reference workload.
+- **"Within an hour" is a counted UTC hour** for the counter incidents: 1,000 rate-limited events
+  split across two clock hours open nothing (DECISIONS 33.9).
+- **The daily work runs at the first maintenance tick after every start**, since its schedule is in
+  memory; each step recounts, so a restart repeats only reads.
+- **Pruning races ingest in one instant**: a delete submitted between an insert's writes to
+  `installations` and to a first-occurrence table could remove that new first occurrence; the
+  installation's next event writes it again, with a later day.
+- **Events a day** includes the test installation's and every environment's events (it measures
+  storage, not use).
+- **PRD amendments for the orchestrator** (not applied here): see the piece 9 report — Appendix E
+  "Storage" (`removes.before` and `statement`, `notes`, `notice`) and "Data health" (the windows'
+  shape, `removedByCap`, `duplicates`, `accepted`, the incident `summary`), AN-169's "rejected as
+  invalid" and "within an hour", AN-167's (N + 14) × volume, 9.3's delivery phase, and 7.2's
+  availability of the two storage routes.
+
+### From piece 10
+
+- **No route lists erasure records.** AN-185 asks that each be recorded; nothing asks to read them,
+  so they are rows in `erasures` for an operator's audit. Add `GET /v1/projects/{id}/erasures` if a
+  screen needs them.
+- **Left after verification** (owner's call, not built): an installation's erasure leaves the
+  first occurrences of the user IDs seen on it (AN-183 erases those "of it"; pinned by
+  `analytics-erasure-edges.test.ts`); a user ID erased while the event store is unreachable, with
+  no analytics database selected, leaves the reports and submissions its installations sent before
+  sign-in (no pending erasure resolves them later); and outdated parts, the old targets partition
+  included, stay on disk for ClickHouse's `old_parts_lifetime` (8 minutes) after the pending
+  erasure is deleted.
+- **The name deletion (AN-056) still leaves its rows to merges on disk**; the erasure's file step
+  (`APPLY DELETED MASK`) could serve it too, but AN-056 is piece 4's and was not changed here.
+- **Deferred counts**: an erasure applied later in an unreachable analytics database reports no
+  analytics counts; the crash reports and submissions the worker erases then are added to the record
+  (DECISIONS 33.10).
+- **Not measured at scale**: the deletes, the replay and `APPLY DELETED MASK` ran at test volumes;
+  piece 12's load test should time an erasure of an installation active for months at the reference
+  workload (the 8.1 spike's 93 s per `DELETE` statement is the estimate).
+- **PRD amendments for the orchestrator** (not applied here): see the piece 10 report — AN-185
+  (deferred databases recorded without counts), AN-183 (the installations matched in crash and
+  feedback databases are resolved from every reachable analytics database the Admin administers;
+  an installation erasure leaves the user's first occurrences), AN-184 (the forced removal starts at
+  half the bound), and 7.2's answers of the two erasure routes and the export's `limit`/`cursor`.

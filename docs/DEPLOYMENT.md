@@ -195,7 +195,7 @@ in memory on the API process (see Health and observability).
 | `INLET_ANALYTICS_FUNNEL_TREND_TIME_S` | `120` | 1 to 3,600 | Time limit of a funnel's trend view |
 | `INLET_ANALYTICS_QUERY_MEMORY_BYTES` | `805306368` (768 MiB) | 64 MiB to 1 TiB | Memory limit of an analytics query. Sized for the Small host, whose ClickHouse is capped at about 3 GB: three slots use 2.25 GiB and leave the rest to inserts and merges. Raise it to about 8 GB on the reference host |
 | `INLET_ANALYTICS_QUERY_THREADS` | `0` | 0 to 256 | Threads per analytics query; `0` means half of what the event store reports as its own `max_threads`, its cores by default |
-| `INLET_ANALYTICS_ERASURE_BOUND_DAYS` | `30` | 1 to 30 | Days within which erased analytics events leave the event store's files. You may only shorten it |
+| `INLET_ANALYTICS_ERASURE_BOUND_DAYS` | `30` | 1 to 30 | Days within which erased analytics events leave the event store's files ([Erasure on disk](#erasure-on-disk)). The worker forces the rewrite of the partitions still carrying them once half of it has passed. You may only shorten it |
 
 Narrowing the retention bounds rewrites nobody's setting. A crash database whose stored
 cap or age now falls outside them is enforced at the nearest bound, and its retention
@@ -518,12 +518,127 @@ docker compose start inlet
 ```
 
 Events of a database the PostgreSQL backup does not know are unreadable in Inlet, and events
-missing from the ClickHouse backup are simply gone from the charts.
+missing from the ClickHouse backup are simply gone from the charts. The daily orphan sweep
+(below) then removes what ClickHouse holds for databases and event names PostgreSQL no longer
+knows, and moves PostgreSQL's key sequences past them, so a database created afterwards never
+inherits an old key's events.
+
+### Sizing storage, and how retention works on disk
+
+Each analytics database keeps at most its **maximum age** (395 days by default) and its
+**maximum events** (500 million by default) of events; its Admins may lower either, within the
+bounds you set with the `INLET_ANALYTICS_MAX_AGE_DAYS_*`, `INLET_ANALYTICS_MAX_EVENTS_*` and
+`INLET_ANALYTICS_LATENESS_DAYS_*` variables ([Operator limits](#operator-limits)). Size them to
+the disk: an event takes about 50 bytes on disk with its rollups (DECISIONS 33.1), so the
+default cap is about 25 GB per database, and 13 months at 10 million events a day needs a cap
+of about 4.1 billion events and about 205 GB. On the Small host (1 million events a day, 8 GB,
+a modest disk), the defaults keep 13 months, about 20 GB per busy database; if you host many
+databases on it, lower `INLET_ANALYTICS_MAX_EVENTS_DEFAULT` and `INLET_ANALYTICS_MAX_EVENTS_MAX`
+so that their sum fits the disk. On the reference host, raise `INLET_ANALYTICS_MAX_EVENTS_MAX`
+only as far as your SSD holds. Each database's **Settings → Storage** shows what it uses and
+recommends settings from its measured volume.
+
+What the server's analytics worker does, all in the API process, none of it on a request:
+
+- **Every hour, retention.** For each database it reads the row counts and sizes of the
+  database's weekly partitions from `system.parts`, never the events, then drops whole
+  partitions (`ALTER TABLE events DROP PARTITION ID …`): the weeks older than the maximum age,
+  then, while the events kept exceed the cap, the oldest week, never the current or previous
+  one. Dropping a partition returns its disk at once, with the rollups stored in it. Before it
+  drops anything it records the first week kept in PostgreSQL (`kept_from`) and ingest refuses
+  events before it, so a late event cannot recreate a dropped week; a week an insert racing
+  the drop recreates is dropped at the next pass. Partitions are dropped with
+  `max_partition_size_to_drop = 0`, so ClickHouse's 50 GB guard never stops a large week.
+- **Once a day, pruning, the counters and the orphan sweep.** Installations that sent nothing
+  within the maximum age lose their records, identity links and first occurrences, through
+  lightweight `DELETE`s submitted without waiting (the event store hides the rows at once and
+  removes them from its files as it merges). The worker tracks them in `system.mutations`
+  and submits nothing more for a database while one runs. The hourly refusal counters are
+  kept eight days. The orphan sweep treats database keys and event-name IDs ClickHouse holds
+  and PostgreSQL does not know as deletions.
+- **Every 30 seconds, database removal.** A deleted database (or every analytics database of a
+  deleted project) is recorded for removal in the deleting request; the worker drops its
+  partitions from every event-store table and deletes its remaining PostgreSQL rows in batches
+  of 5,000, then the record. An unreachable event store only delays the drops.
+- **Every minute, incidents** from the refusal counters (see Slack notifications below).
+- **Every 30 seconds, erasures.** See [Erasure on disk](#erasure-on-disk) below.
+
+**A deletion that keeps failing.** A lightweight `DELETE` needs memory in proportion to the
+part it rewrites; on a small memory ceiling it may fail again and again, and ClickHouse keeps
+retrying it on its own. The worker never kills it: it waits, submits nothing more for that
+database, and logs `an analytics pruning delete keeps failing in the event store` with
+ClickHouse's reason. Raise `INLET_CLICKHOUSE_MAX_SERVER_MEMORY`, or cancel it, and the next
+pass counts what is left and submits again:
+
+```bash
+docker compose exec clickhouse clickhouse-client --query \
+  "SELECT table, mutation_id, latest_fail_reason FROM system.mutations WHERE NOT is_done"
+docker compose exec clickhouse clickhouse-client --query \
+  "KILL MUTATION WHERE database = 'inlet' AND mutation_id = '<id>'"
+```
+
+### Erasure on disk
+
+A project's erasure of an installation or user ID ([USING-INLET.md](USING-INLET.md#honouring-an-erasure-request))
+deletes crash reports and submissions in PostgreSQL in its request. In an analytics database it
+records a pending erasure (`analytics_pending_erasures`: the ID, the installations erased with
+it, the time), and every read skips those rows at once. The worker then, every 30 seconds:
+
+1. deletes the events received before the erasure's time with one lightweight `DELETE` for every
+   erasure pending in that database, submitted without waiting and counted again at the next
+   pass until none is left (a lightweight delete costs per statement and per part touched, not
+   per ID, DECISIONS 33.1);
+2. deletes the installation records, identity links and first occurrences of those IDs, and the
+   records and first occurrences of the installations the erased user shared with someone else,
+   then derives them again from the events that remain (those the same IDs sent after the
+   erasure, and a shared installation's other events);
+3. waits for the rows to leave the event store's files. A lightweight `DELETE` only masks rows;
+   they stay on disk until a merge rewrites their part, and old weekly partitions rarely merge.
+   So once half of `INLET_ANALYTICS_ERASURE_BOUND_DAYS` (15 of 30 days) has passed, the worker
+   runs `ALTER TABLE … APPLY DELETED MASK IN PARTITION ID …` on each partition still carrying
+   them, which rewrites those parts. The other half leaves room for an outage or a retry.
+4. deletes the pending erasure, the only place the ID was held, once no file carries its rows.
+
+Until step 2 finishes, reads of that database skip the erased rows with a condition the rollups
+cannot answer, so its charts read the events themselves: correct, and slower, for a few minutes.
+A restart loses nothing (the pending erasures are the whole state), and an unreachable event
+store only delays the steps. An erasure made while the event store was down applies once it
+answers, the worker finding then the installations a user ID was the only user of.
+
+`APPLY DELETED MASK` rewrites whole parts, a few GB for a busy week, so erasures are batched per
+partition. A `DELETE` or a rewrite that keeps failing is left to ClickHouse's own retries (see
+above) and shows in `system.mutations`; a failing `DELETE` is also logged as `an analytics
+erasure delete keeps failing in the event store`, without the ID. Backups taken before an erasure
+still hold the erased rows: expire them within your own policy.
+
+**No erased ID in the event store's logs.** ClickHouse keeps the text of every `DELETE` in
+`system.mutations` and in a `mutation_N.txt` file beside the table's parts, long after it ran. So
+the worker never writes an ID into a statement: it inserts each erasure's targets into the small
+table `analytics_erasure_targets` and deletes `WHERE installation_id IN (SELECT … FROM
+analytics_erasure_targets WHERE erasure = 42)`, so the mutation log holds only numbers and times.
+The erasure's partition of that table is dropped with the pending erasure (its files leave the disk
+within ClickHouse's `old_parts_lifetime`, 8 minutes by default). **If you run your own ClickHouse
+with `system.query_log`, `system.query_thread_log`, `system.part_log` or other log tables on, or a
+server log at trace level**, query texts and their parameters (the erasure previews, the inserts of
+targets, profile reads) land there: keep their retention (`TTL` on the log tables, the log files'
+rotation) within `INLET_ANALYTICS_ERASURE_BOUND_DAYS`. The bundled service turns every log table off
+(`deploy/clickhouse/config.xml`), so nothing lands there.
 
 ## Slack notifications
 
-Configured per feedback database in the interface, under **Settings → Notifications**.
+Configured per database in the interface, under **Settings → Notifications**.
 Nothing is needed at deploy time beyond outbound HTTPS to `hooks.slack.com`.
+
+An analytics database announces data-health incidents only: one message when an incident
+opens and one when it resolves, never an event. The heading is the database's configured
+title or `Analytics data health`; the body is one sentence with the figures, such as
+"Checkout app is at its storage cap: the week of September 1 is removed early, and
+500,000,000 events are kept." or "Checkout app is rate limited: 12,480 events are refused in
+the last hour.", when it opened, and **Open in Inlet**, linking to the database's Settings →
+Storage (built from `INLET_PUBLIC_URL`). A resolution says how long it lasted and how many
+events it affected. No message carries an installation ID, a user ID, a session ID, an event
+name, a param, an attribution or an experiment variant. The deliveries use the same queue,
+retries and outcome display as feedback and crash messages.
 
 If your network requires an egress proxy or a relay, add its origin to
 `INLET_SLACK_WEBHOOK_ORIGINS`. Read the warning on that variable first.

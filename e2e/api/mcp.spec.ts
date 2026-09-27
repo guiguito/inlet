@@ -200,6 +200,29 @@ test.describe('the MCP server', () => {
           'find_analytics_profiles',
           'get_analytics_profile',
           'list_analytics_profile_events',
+          // Funnels, piece 7.
+          'create_analytics_funnel',
+          'delete_analytics_funnel',
+          'get_analytics_funnel',
+          'list_analytics_funnel_units',
+          'list_analytics_funnels',
+          'run_analytics_funnel',
+          'update_analytics_funnel',
+          // Cohorts, piece 8.
+          'create_analytics_cohort',
+          'delete_analytics_cohort',
+          'get_analytics_cohort',
+          'list_analytics_cohorts',
+          'run_analytics_cohort',
+          'update_analytics_cohort',
+          // Storage and data health, piece 9.
+          'get_analytics_data_health',
+          'get_analytics_storage',
+          'update_analytics_storage',
+          // Erasure and the event export, piece 10.
+          'erase_identity',
+          'export_analytics_events',
+          'preview_erasure',
         ].sort(),
       );
 
@@ -226,6 +249,7 @@ test.describe('the MCP server', () => {
         'delete_feedback_database',
         'delete_submission',
         'remove_member',
+        'erase_identity',
       ]) {
         const tool = tools.find((candidate) => candidate.name === name);
         expect(tool?.annotations?.destructiveHint, name).toBe(true);

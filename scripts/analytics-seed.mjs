@@ -7,6 +7,7 @@
  *   npm run services:up                      # the local ClickHouse on 8124
  *   node scripts/analytics-seed.mjs          # seed, then measure
  *   node scripts/analytics-seed.mjs measure  # measure what is already seeded
+ *   node scripts/analytics-seed.mjs seed     # seed only (DECISIONS 33.8 measures cohorts on it)
  *
  * Tunables (environment): SEED_DAYS (10), SEED_ACTIVE (100000 installations a day),
  * SEED_EVENTS (100 per installation a day, so 10 million a day), SEED_POOL (300000
@@ -336,4 +337,4 @@ async function measure() {
 }
 
 if (process.argv[2] !== 'measure') await seed();
-await measure();
+if (process.argv[2] !== 'seed') await measure();

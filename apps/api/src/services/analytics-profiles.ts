@@ -37,7 +37,7 @@ export const USER_INSTALLATIONS_MAX = 1_000;
 
 // --- Values as the event store answers them -----------------------------------------------------
 
-type Dims = {
+export type Dims = {
   platform: string;
   os_name: string;
   platform_version: string;
@@ -77,9 +77,9 @@ export function rfc3339(value: string | null | undefined): string | null {
   return value ? `${value.replace(' ', 'T')}Z` : null;
 }
 
-const CH_TIME = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}$/;
+export const CH_TIME = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}$/;
 
-function dimensions(dims: Dims): Dimensions {
+export function dimensions(dims: Dims): Dimensions {
   const experiments: Record<string, string> = {};
   dims.experiment_keys.forEach((key, index) => {
     experiments[key] = dims.experiment_variants[index] ?? '';
@@ -111,11 +111,11 @@ function invalidCursor() {
 }
 
 /** Appendix E: an opaque cursor carrying the next page's position and the first page's time. */
-function encodeCursor(value: Record<string, string>): string {
+export function encodeCursor(value: Record<string, string>): string {
   return Buffer.from(JSON.stringify(value), 'utf8').toString('base64url');
 }
 
-function decodeCursor<K extends string>(cursor: string, keys: readonly K[]): Record<K, string> {
+export function decodeCursor<K extends string>(cursor: string, keys: readonly K[]): Record<K, string> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
@@ -148,7 +148,7 @@ export type InstallationSummary = {
   lastEvent: string;
 };
 
-type SummaryRow = {
+export type SummaryRow = {
   installation_id: string;
   kind: 'device' | 'server';
   ephemeral: boolean;
@@ -163,9 +163,10 @@ type SummaryRow = {
 /**
  * The list columns of every installation matching `condition`, which exists (AN-031's rule) and
  * is not the test installation (AN-025). "Seen" orders the list: the last seen, or for a server
- * installation, which has only background events, its last event.
+ * installation, which has only background events, its last event. Also the funnel drill-down's
+ * rows (AN-088, piece 7).
  */
-function summarySql(database: AnalyticsDatabaseRow, skip: ReadSkip, p: SqlParams, condition: string, having = '1'): string {
+export function summarySql(database: AnalyticsDatabaseRow, skip: ReadSkip, p: SqlParams, condition: string, having = '1'): string {
   return `SELECT installation_id,
                  toString(max(installation_kind)) AS kind,
                  max(ephemeral) AS ephemeral,
@@ -181,7 +182,7 @@ function summarySql(database: AnalyticsDatabaseRow, skip: ReadSkip, p: SqlParams
 }
 
 /** AN-031: each installation's latest user ID, `argMax(user_id, (last_seen, user_id))` after grouping. */
-async function latestUserIds(store: ReadStore, settings: QuerySettings, database: AnalyticsDatabaseRow, skip: ReadSkip, ids: string[]): Promise<Map<string, string>> {
+export async function latestUserIds(store: ReadStore, settings: QuerySettings, database: AnalyticsDatabaseRow, skip: ReadSkip, ids: string[]): Promise<Map<string, string>> {
   if (ids.length === 0) return new Map();
   const p = new SqlParams();
   const rows = await store.query<{ installation_id: string; user_id: string }>(
@@ -196,7 +197,7 @@ async function latestUserIds(store: ReadStore, settings: QuerySettings, database
   return new Map(rows.map((row) => [row.installation_id, row.user_id]));
 }
 
-function presentSummary(row: SummaryRow, users: Map<string, string>): InstallationSummary {
+export function presentSummary(row: SummaryRow, users: Map<string, string>): InstallationSummary {
   return {
     installationId: row.installation_id,
     userId: users.get(row.installation_id) ?? null,
@@ -342,23 +343,40 @@ export type ActiveDay = { day: string; events: number };
 export type ProfileWindow = { from: string | null; to: string };
 
 /**
- * Counted from the subject's events (AN-121): every event; sessions as distinct session IDs with
- * an `app_started` (AN-043); active days as the local days holding an event that is not a
- * background event (AN-047), each with its events for the calendar.
+ * Counted from the subject's events (AN-121): every event; sessions as the distinct session IDs,
+ * named by an `app_started` (AN-043), of the sessions holding one of its events; active days as
+ * the local days holding an event that is not a background event (AN-047), each with its events
+ * for the calendar.
  */
 async function countsOf(ctx: AppContext, store: ReadStore, settings: QuerySettings, database: AnalyticsDatabaseRow, skip: ReadSkip, subject: (p: SqlParams) => string) {
   const started = (await resolveEventNames(ctx.db, database.key, ['app_started'])).get('app_started');
   const p = new SqlParams();
-  const base = `database_key = ${p.add(database.key, 'UInt32')} AND ${subject(p)} AND ${skip.events(p)}`;
-  const sessions = started?.status === 'current' ? `uniqExactIf(session_id, event_name_id = ${p.add(started.id, 'UInt32')} AND isNotNull(session_id))` : '0';
-  const [totals] = await store.query<{ events: string; sessions: string }>(`SELECT count() AS events, ${sessions} AS sessions FROM events WHERE ${base}`, p.values, settings);
+  const key = p.add(database.key, 'UInt32');
+  const base = `database_key = ${key} AND ${subject(p)} AND ${skip.events(p)}`;
+  const [totals] = await store.query<{ events: string }>(`SELECT count() AS events FROM events WHERE ${base}`, p.values, settings);
+  // A subject's sessions are the sessions, named by an app_started (AN-043), in which at least
+  // one of its events occurred, whatever user ID the app_started itself carried: the SDK stamps
+  // the user ID when an event is created, so a user who signs in after launch has no
+  // app_started of their own (DECISIONS 33.7). The installations bound the app_started read; a
+  // backend's app_started never makes a session (AN-047).
+  const [sessions] =
+    started?.status === 'current'
+      ? await store.query<{ sessions: string }>(
+          `SELECT uniqExact(session_id) AS sessions FROM events
+           WHERE database_key = ${key} AND event_name_id = ${p.add(started.id, 'UInt32')} AND platform != 'server' AND ${skip.events(p)}
+             AND installation_id IN (SELECT installation_id FROM events WHERE ${base} AND isNotNull(session_id))
+             AND session_id IN (SELECT session_id FROM events WHERE ${base} AND isNotNull(session_id))`,
+          p.values,
+          settings,
+        )
+      : [];
   const days = await store.query<{ day: string; events: string }>(
     `SELECT toString(local_day) AS day, count() AS events FROM events WHERE ${base} AND platform != 'server' GROUP BY local_day ORDER BY local_day`,
     p.values,
     settings,
   );
   const activeDays = days.map((row) => ({ day: row.day, events: Number(row.events) }));
-  const counts: ProfileCounts = { events: Number(totals?.events ?? 0), sessions: Number(totals?.sessions ?? 0), activeDays: activeDays.length };
+  const counts: ProfileCounts = { events: Number(totals?.events ?? 0), sessions: Number(sessions?.sessions ?? 0), activeDays: activeDays.length };
   const window: ProfileWindow = { from: await oldestKeptDay(store, database, settings), to: todayIn(database.timezone, Date.now()) };
   return { counts, activeDays, window };
 }

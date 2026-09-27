@@ -12,6 +12,7 @@ import {
 import type { OperatorLimits } from '../env.js';
 import { randomToken } from '../lib/crypto.js';
 import { ApiError, apiError } from '../lib/errors.js';
+import { SqlParams, readSkip } from './analytics-query.js';
 import { deleteNotificationRows } from './projects.js';
 
 /**
@@ -189,16 +190,20 @@ async function eventStoreCounts(ctx: AppContext, key: number): Promise<{ events:
   // the deletion dialog, or an agent's call, for the whole query timeout before it says so.
   if (!store || !(await store.reachable())) return null;
   try {
+    // AN-184: what a pending erasure hides is not counted, as no other read counts it.
+    const skip = await readSkip(ctx, key);
+    const p = new SqlParams();
+    const k = p.add(key, 'UInt32');
     // 64-bit counts arrive as strings (piece 1's reader), parsed here on purpose.
     const [row] = await store.query<{ events: string; installations: string; users: string }>(
       `SELECT
-         (SELECT count() FROM events WHERE database_key = {key:UInt32}) AS events,
+         (SELECT count() FROM events WHERE database_key = ${k} AND ${skip.events(p)}) AS events,
          (SELECT count() FROM (
-            SELECT installation_id FROM installations WHERE database_key = {key:UInt32}
+            SELECT installation_id FROM installations WHERE database_key = ${k} AND ${skip.installations(p)}
             GROUP BY installation_id
             HAVING max(has_qualifying) = 1 AND max(installation_kind) = 'device')) AS installations,
-         (SELECT uniqExact(user_id) FROM installation_users WHERE database_key = {key:UInt32} AND user_id != '') AS users`,
-      { key },
+         (SELECT uniqExact(user_id) FROM installation_users WHERE database_key = ${k} AND user_id != '' AND ${skip.users(p)} AND ${skip.installations(p)}) AS users`,
+      p.values,
     );
     return { events: Number(row?.events ?? 0), installations: Number(row?.installations ?? 0), users: Number(row?.users ?? 0) };
   } catch (error) {
