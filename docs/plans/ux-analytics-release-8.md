@@ -1,6 +1,6 @@
 # Release 8 (UX Analytics): implementation plan and handoff
 
-**Status as of 27 September 2026: built and verified on branch `release-8-ux-analytics`, not yet merged; `inlet-sdk` with the analytics module not yet published.** This file
+**Status as of 27 September 2026: built, verified, merged to `main` and published to npm as `inlet-sdk` 0.3.0.** This file
 is the working record of the build: the order of the pieces, the decisions every piece
 follows, the seams each piece leaves for the next, and what was left out. Update it in the
 same change as the code it describes.
