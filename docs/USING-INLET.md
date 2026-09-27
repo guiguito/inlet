@@ -881,15 +881,7 @@ From nothing to a value your app fetched, in a browser page:
    `true`, from version 1, as `client.getDetails('new_checkout')` confirms with
    `source: "remote"` and `version: 1`.
 
-The config module ships in `inlet-sdk` 0.4.0, which is not on npm yet (`npm install
-inlet-sdk` gives 0.3.0, without it). Until it is, pack it from a checkout of this
-repository, which builds it, and install the file it makes:
-
-```bash
-npm install
-npm pack ./packages/sdk              # builds, then writes inlet-sdk-0.4.0.tgz
-cd your-app && npm install /path/to/inlet-sdk-0.4.0.tgz
-```
+The config module ships in `inlet-sdk` 0.4.0 or later (`npm install inlet-sdk`).
 
 Now turn the default off and publish version 2. A running app does not change under its
 user: it fetches version 2 within its refresh interval (60 minutes by default) and applies it

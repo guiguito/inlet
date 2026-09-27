@@ -43,15 +43,7 @@ this is described in [docs/USING-INLET.md](../../docs/USING-INLET.md); the wire 
 npm install inlet-sdk
 ```
 
-The config module ships in 0.4.0, which is not on npm yet: until it is, `npm install
-inlet-sdk` gives 0.3.0, without `inlet-sdk/config`. Pack it from a checkout of the Inlet
-repository, which builds it, and install the file it makes:
-
-```
-npm install
-npm pack ./packages/sdk                      # builds, then writes inlet-sdk-0.4.0.tgz
-npm install /path/to/inlet-sdk-0.4.0.tgz     # in your application
-```
+The config module (`inlet-sdk/config`) arrived in 0.4.0.
 
 ---
 

@@ -1,8 +1,8 @@
 # Changelog
 
-## 0.4.0 (unreleased)
+## 0.4.0 — 2026-09-27
 
-Remote config. Prepared, not yet published to npm.
+Remote config.
 
 **What an existing application sees.** Upgrading from 0.3.0 without installing the config
 module changes one thing, a fix in the React Native entries (below): crash reports,
