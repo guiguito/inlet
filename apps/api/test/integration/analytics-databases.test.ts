@@ -5,6 +5,7 @@ import { eq, sql } from 'drizzle-orm';
 import { pino } from 'pino';
 import { ANALYTICS_NOT_ENABLED_MESSAGE, EventStore } from '../../src/db/clickhouse.js';
 import { analyticsCohorts, analyticsDatabaseRemovals, analyticsDatabases, slackNotifications } from '../../src/db/schema.js';
+import { TEST_CLICKHOUSE_DATABASE } from '../setup/config.js';
 import { createHarness, signIn, type Harness } from '../setup/harness.js';
 import { asAdmin, createCredential, createProject, errorCode, withKey } from '../setup/api.js';
 
@@ -449,7 +450,7 @@ describe('analytics databases', () => {
     const silent = net.createServer(() => {});
     await new Promise<void>((resolve) => silent.listen(0, '127.0.0.1', resolve));
     const ready = h.ctx.eventStore;
-    const hung = new EventStore({ url: `http://inlet:inlet@127.0.0.1:${(silent.address() as net.AddressInfo).port}`, database: 'inlet_test', migrate: false, log: pino({ level: 'silent' }) });
+    const hung = new EventStore({ url: `http://inlet:inlet@127.0.0.1:${(silent.address() as net.AddressInfo).port}`, database: TEST_CLICKHOUSE_DATABASE, migrate: false, log: pino({ level: 'silent' }) });
     Object.defineProperty(hung, 'readySinceStart', { value: true });
     h.ctx.eventStore = hung;
     try {
@@ -469,7 +470,7 @@ describe('analytics databases', () => {
     const silent = net.createServer(() => {});
     await new Promise<void>((resolve) => silent.listen(0, '127.0.0.1', resolve));
     const ready = h.ctx.eventStore;
-    const hung = new EventStore({ url: `http://inlet:inlet@127.0.0.1:${(silent.address() as net.AddressInfo).port}`, database: 'inlet_test', migrate: false, log: pino({ level: 'silent' }) });
+    const hung = new EventStore({ url: `http://inlet:inlet@127.0.0.1:${(silent.address() as net.AddressInfo).port}`, database: TEST_CLICKHOUSE_DATABASE, migrate: false, log: pino({ level: 'silent' }) });
     Object.defineProperty(hung, 'readySinceStart', { value: true });
     h.ctx.eventStore = hung;
     try {
@@ -489,7 +490,7 @@ describe('analytics databases', () => {
     it('answers creation with 503 analytics_unavailable, and keeps reads, renames, the impact and deletion working', async () => {
       const { id } = await createOk();
       const ready = h.ctx.eventStore;
-      const outage = new EventStore({ url: UNREACHABLE, database: 'inlet_test', migrate: false, log: pino({ level: 'silent' }) });
+      const outage = new EventStore({ url: UNREACHABLE, database: TEST_CLICKHOUSE_DATABASE, migrate: false, log: pino({ level: 'silent' }) });
       Object.defineProperty(outage, 'readySinceStart', { value: true });
       h.ctx.eventStore = outage;
       try {

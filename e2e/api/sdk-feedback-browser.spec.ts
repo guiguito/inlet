@@ -12,7 +12,7 @@ import { E2E } from '../env';
  * actual IndexedDB, actual cross-origin preflights, an actual `File` going up as multipart
  * — and everything else is unit tested in `packages/sdk/test/feedback.test.ts`.
  *
- * The page lives on `http://localhost:3100`: the same deployment as `http://127.0.0.1:3100`
+ * The page lives on `http://localhost:<port>`: the same deployment as `E2E.baseUrl`
  * reached by its other name, so the browser treats it as a different origin with its own
  * IndexedDB and issues a genuine preflight. Every request for that origin is answered from
  * disk by `page.route`, so the page survives a reload, which the persistence test needs.
@@ -29,7 +29,7 @@ test.use({ launchOptions: { args: ['--disable-features=LocalNetworkAccessChecks'
 
 const BUNDLE_FILE = join(dirname(fileURLToPath(import.meta.url)), '../../packages/sdk/dist/feedback/browser.js');
 
-const APP_ORIGIN = 'http://localhost:3100';
+const APP_ORIGIN = `http://localhost:${E2E.port}`;
 const APP_PATH = '/__feedback-e2e/app.html';
 const BUNDLE_PATH = '/__feedback-e2e/inlet-feedback.js';
 

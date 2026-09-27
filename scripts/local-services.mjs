@@ -82,6 +82,18 @@ export const DEFAULTS = {
   clickhouseReaderPassword: 'inlet_reader',
 };
 
+/**
+ * INLET_TEST_SLOT, 1 to 9: gives a test run its own databases, bucket and end-to-end port on
+ * these same services, so two runs can share one working tree. Unset, there is no slot and
+ * the suites use their unsuffixed names.
+ */
+export function testSlot(env = process.env) {
+  const raw = env.INLET_TEST_SLOT;
+  if (raw === undefined || raw === '') return undefined;
+  if (!/^[1-9]$/.test(raw)) throw new Error(`INLET_TEST_SLOT must be an integer from 1 to 9, got "${raw}"`);
+  return Number(raw);
+}
+
 export function databaseUrl(options = {}) {
   const { postgresPort, postgresUser, postgresPassword, postgresDatabase } = {
     ...DEFAULTS,

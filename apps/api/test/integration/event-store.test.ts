@@ -11,7 +11,7 @@ import {
 } from '../../src/db/clickhouse.js';
 import { ApiError } from '../../src/lib/errors.js';
 import { createHarness, type Harness } from '../setup/harness.js';
-import { TEST_ENV } from '../setup/config.js';
+import { TEST_CLICKHOUSE_DATABASE, TEST_ENV } from '../setup/config.js';
 
 /**
  * The analytics event store (UX Analytics 9.3 to 9.5, AN-005, AN-031, AN-036, FD-015)
@@ -78,7 +78,7 @@ describe('the event store, configured and ready', () => {
   });
 
   it('applies the migrations once, creating the database, and a second run is a no-op (FR-8)', async () => {
-    const database = 'inlet_test_migrations';
+    const database = `${TEST_CLICKHOUSE_DATABASE}_migrations`;
     const scratch = new EventStore({ url: TEST_ENV.INLET_CLICKHOUSE_URL, database, migrate: true, log: pino({ level: 'silent' }) });
     await store.command('DROP DATABASE IF EXISTS {database:Identifier}', { database });
     try {
@@ -98,7 +98,7 @@ describe('the event store, configured and ready', () => {
   });
 
   it('refuses readiness with migrations off while one is not applied', async () => {
-    const database = 'inlet_test_unmigrated';
+    const database = `${TEST_CLICKHOUSE_DATABASE}_unmigrated`;
     await store.command('CREATE DATABASE IF NOT EXISTS {database:Identifier}', { database });
     const scratch = new EventStore({ url: TEST_ENV.INLET_CLICKHOUSE_URL, database, migrate: false, log: pino({ level: 'silent' }) });
     try {
@@ -830,7 +830,7 @@ describe('after an outage that follows readiness', () => {
     const ready = h.ctx.eventStore!;
     // The shared ClickHouse cannot be stopped under the suite, so the outage is a store that
     // was ready since start and whose server no longer answers.
-    const outage = new EventStore({ url: UNREACHABLE, database: 'inlet_test', migrate: false, log: pino({ level: 'silent' }) });
+    const outage = new EventStore({ url: UNREACHABLE, database: TEST_CLICKHOUSE_DATABASE, migrate: false, log: pino({ level: 'silent' }) });
     Object.defineProperty(outage, 'readySinceStart', { value: true });
     h.ctx.eventStore = outage;
     try {

@@ -60,6 +60,20 @@ GitHub Actions runs the same checks on every push and pull request
 React Native entries with Metro on React Native 0.74; run that one locally when you touch an
 entry React Native imports.
 
+### Two runs at once
+
+The suites reset their databases and bucket between tests, so two runs against the same
+services, from two checkouts or two agents in one working tree, would wipe each other's data.
+Give each run its own slot, an integer from 1 to 9:
+`INLET_TEST_SLOT=1 npm run test -w @inlet/api` in one shell and `INLET_TEST_SLOT=2 npm run
+test -w @inlet/api` in the other, and the same for `npx playwright test`. A slot suffixes the
+PostgreSQL and ClickHouse databases (`inlet_test_1`, `inlet_e2e_1`) and the buckets
+(`inlet-test-1`, `inlet-e2e-1`), serves the end-to-end server on port 3100 + slot with the fake
+Slack on 3110 + slot, and writes Playwright's output to `test-results-<slot>`. The end-to-end server
+builds and serves the web app from `apps/web/dist-<slot>`, so one run's build never empties
+the files another run is serving. The services stay the ones above. Without the variable
+nothing changes.
+
 ### The live Slack test
 
 One suite is opt-in, because it posts a real message to a real Slack channel:

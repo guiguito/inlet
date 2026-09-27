@@ -9,10 +9,12 @@ import { execFileSync, spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from 'pg';
+import { E2E } from '../e2e/env.ts';
 import { clickhouseReadUrl, clickhouseUrl, startLocalServices } from './local-services.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const DATABASE = 'inlet_e2e';
+const DATABASE = E2E.database;
+const WEB_DIST = path.join(repoRoot, E2E.webDist);
 
 await startLocalServices();
 
@@ -40,7 +42,13 @@ for (const statement of [`DROP DATABASE IF EXISTS ${DATABASE}`, `CREATE DATABASE
 }
 
 // Build what the server actually serves, so the suite tests the shipped artefacts.
-execFileSync('npm', ['run', 'build'], { cwd: repoRoot, stdio: 'inherit' });
+// The web app goes to the run's own directory. The rest of the build is rewritten in place;
+// the server loads it into memory when it starts.
+execFileSync('npm', ['run', 'build'], {
+  cwd: repoRoot,
+  stdio: 'inherit',
+  env: { ...process.env, INLET_WEB_OUT_DIR: WEB_DIST },
+});
 
 const child = spawn('node', ['apps/api/dist/server.js'], {
   cwd: repoRoot,
@@ -50,18 +58,18 @@ const child = spawn('node', ['apps/api/dist/server.js'], {
     NODE_ENV: 'test',
     INLET_LOG_LEVEL: 'warn',
     INLET_HOST: '127.0.0.1',
-    INLET_PORT: '3100',
-    INLET_PUBLIC_URL: 'http://127.0.0.1:3100',
+    INLET_PORT: String(E2E.port),
+    INLET_PUBLIC_URL: E2E.baseUrl,
     INLET_DATABASE_URL: `postgresql://inlet:inlet@127.0.0.1:5433/${DATABASE}`,
     INLET_MIGRATE_ON_START: 'true',
     INLET_SESSION_SECRET: 'end-to-end-session-secret-at-least-32-chars',
-    INLET_ADMIN_EMAIL: 'operator@inlet.test',
-    INLET_ADMIN_PASSWORD: 'inlet-e2e-password',
+    INLET_ADMIN_EMAIL: E2E.adminEmail,
+    INLET_ADMIN_PASSWORD: E2E.adminPassword,
     INLET_ADMIN_NAME: 'Operator',
     INLET_TRUSTED_PROXIES: 'false',
     INLET_S3_ENDPOINT: 'http://127.0.0.1:9010',
     INLET_S3_REGION: 'us-east-1',
-    INLET_S3_BUCKET: 'inlet-e2e',
+    INLET_S3_BUCKET: E2E.bucket,
     INLET_S3_ACCESS_KEY_ID: 'inletdev',
     INLET_S3_SECRET_ACCESS_KEY: 'inletdevsecret',
     INLET_S3_FORCE_PATH_STYLE: 'true',
@@ -69,9 +77,9 @@ const child = spawn('node', ['apps/api/dist/server.js'], {
     INLET_CLICKHOUSE_READ_URL: clickhouseReadUrl(),
     INLET_CLICKHOUSE_DATABASE: DATABASE,
     INLET_INTENT_TTL_MINUTES: '30',
-    INLET_WEB_DIST: path.join(repoRoot, 'apps/web/dist'),
-    // The fake Slack the suite starts. Kept in step with e2e/env.ts by hand.
-    INLET_SLACK_WEBHOOK_ORIGINS: 'https://hooks.slack.com,http://127.0.0.1:3101',
+    INLET_WEB_DIST: WEB_DIST,
+    // The fake Slack the suite starts.
+    INLET_SLACK_WEBHOOK_ORIGINS: `https://hooks.slack.com,${E2E.slackOrigin}`,
     // The suite makes hundreds of requests in a minute; the limits themselves are
     // covered by the API integration tests.
     INLET_DISABLE_RATE_LIMITS: 'true',

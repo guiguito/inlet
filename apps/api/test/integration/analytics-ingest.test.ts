@@ -15,6 +15,7 @@ import {
   resetAnalyticsIngestState,
 } from '../../src/services/analytics-ingest.js';
 import { startAnalyticsWorker } from '../../src/services/analytics-worker.js';
+import { TEST_CLICKHOUSE_DATABASE } from '../setup/config.js';
 import { createHarness, signIn, type Harness } from '../setup/harness.js';
 import { asAdmin, createCredential, createProject, errorCode, withKey } from '../setup/api.js';
 
@@ -810,7 +811,7 @@ describe('analytics ingest', () => {
       const pending = Array.from({ length: 2 }, () => event());
 
       const ready = h.ctx.eventStore!;
-      const outage = new EventStore({ url: 'http://inlet:inlet@127.0.0.1:1', database: 'inlet_test', migrate: false, log: pino({ level: 'silent' }) });
+      const outage = new EventStore({ url: 'http://inlet:inlet@127.0.0.1:1', database: TEST_CLICKHOUSE_DATABASE, migrate: false, log: pino({ level: 'silent' }) });
       Object.defineProperty(outage, 'readySinceStart', { value: true });
       h.ctx.eventStore = outage;
       try {
@@ -887,7 +888,7 @@ describe('analytics ingest', () => {
     });
 
     it('answers 503 on a deployment whose event store never became ready', async () => {
-      const pending = new EventStore({ url: 'http://inlet:inlet@127.0.0.1:1', database: 'inlet_test', migrate: false, log: pino({ level: 'silent' }) });
+      const pending = new EventStore({ url: 'http://inlet:inlet@127.0.0.1:1', database: TEST_CLICKHOUSE_DATABASE, migrate: false, log: pino({ level: 'silent' }) });
       const ready = h.ctx.eventStore;
       h.ctx.eventStore = pending;
       try {

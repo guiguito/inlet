@@ -1,4 +1,6 @@
 import { defineConfig, devices } from '@playwright/test';
+import { E2E } from './e2e/env';
+import { testSlot } from './scripts/local-services.mjs';
 
 /**
  * Functional tests against a running Inlet.
@@ -10,11 +12,13 @@ import { defineConfig, devices } from '@playwright/test';
  * The server is built and started by Playwright, from the same artefacts the Docker
  * image ships, so what is tested is what is deployed.
  */
-const PORT = 3100;
-const BASE_URL = `http://127.0.0.1:${PORT}`;
+const BASE_URL = E2E.baseUrl;
+const SLOT = testSlot();
 
 export default defineConfig({
   testDir: './e2e',
+  // Playwright empties its output directory at start, so a slotted run keeps its own.
+  outputDir: SLOT ? `test-results-${SLOT}` : 'test-results',
   fullyParallel: false,
   workers: 1,
   retries: 0,

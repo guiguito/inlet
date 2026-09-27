@@ -13,7 +13,7 @@ import { E2E } from '../env';
  * IndexedDB, actual `window` handlers, actual cross-origin preflights — and the store's pure
  * helpers are unit-tested in `packages/sdk/test/browser.test.ts` instead.
  *
- * The page lives on `http://localhost:3100`: the same deployment as `http://127.0.0.1:3100`,
+ * The page lives on `http://localhost:<port>`: the same deployment as `E2E.baseUrl`,
  * reached by its other name, so the browser treats it as a different origin with its own
  * IndexedDB and issues a genuine preflight. A made-up host would have been tidier to read and
  * would not work: `crypto.subtle` is undefined outside a secure context, and the SDK's
@@ -37,7 +37,7 @@ test.use({ launchOptions: { args: ['--disable-features=LocalNetworkAccessChecks'
 
 const BUNDLE_FILE = join(dirname(fileURLToPath(import.meta.url)), '../../packages/sdk/dist/crash/browser.js');
 
-const APP_ORIGIN = 'http://localhost:3100';
+const APP_ORIGIN = `http://localhost:${E2E.port}`;
 const APP_PATH = '/__crash-e2e/app.html';
 const BUNDLE_PATH = '/__crash-e2e/inlet-crash.js';
 /** A third origin, so one frame in the stack is somebody else's code (CR-093). */

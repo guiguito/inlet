@@ -1,14 +1,18 @@
+import { testSlot } from '../../../../scripts/local-services.mjs';
+
 /**
  * The fixed configuration the test suite runs against.
  *
  * Deliberately constant rather than injected: the global setup and every worker
  * compute the same values independently, so nothing has to be passed between
- * processes.
+ * processes. INLET_TEST_SLOT, inherited by every worker, suffixes the database and
+ * bucket names so two runs do not truncate each other's tables.
  */
-export const TEST_DATABASE = 'inlet_test';
-export const TEST_BUCKET = 'inlet-test';
+const SLOT = testSlot();
+export const TEST_DATABASE = SLOT ? `inlet_test_${SLOT}` : 'inlet_test';
+export const TEST_BUCKET = SLOT ? `inlet-test-${SLOT}` : 'inlet-test';
 /** The ClickHouse database, on the local server scripts/local-services.mjs runs. */
-export const TEST_CLICKHOUSE_DATABASE = 'inlet_test';
+export const TEST_CLICKHOUSE_DATABASE = TEST_DATABASE;
 
 export const ADMIN_EMAIL = 'admin@inlet.test';
 export const ADMIN_PASSWORD = 'inlet-test-password';

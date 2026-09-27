@@ -141,7 +141,7 @@ test.describe('setting up Slack notifications', () => {
     await expect(page.getByText('hooks.slack.com/services')).toHaveCount(0);
     await expect(page.getByLabel(/Webhook URL/)).toHaveAttribute(
       'placeholder',
-      /127\.0\.0\.1:3101\/services\/…\/…\/••••/,
+      new RegExp(`127\\.0\\.0\\.1:${E2E.slackPort}/services/…/…/••••`),
     );
     expect(await page.content()).not.toContain('e2eSecretValue01');
 
