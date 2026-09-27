@@ -11,11 +11,22 @@ import { E2E } from './env';
  *
  * It listens on a fixed loopback port that the server under test is configured to allow,
  * which means the origin allowlist is exercised too rather than bypassed.
+ *
+ * The port is shared by the whole run, and the server retries a failed delivery with backoff,
+ * so a message another suite queued (a config database's "Config published", say) can arrive
+ * during a later test. Each test therefore posts to a webhook of its own, from `webhook()`,
+ * and reads only what reached it, with `messagesTo()`.
  */
+
+type Message = { body: Record<string, unknown>; raw: string; path: string };
 
 export type FakeSlack = {
   webhookUrl: string;
-  received: { body: Record<string, unknown>; raw: string }[];
+  /** A webhook address no other test posts to. */
+  webhook: () => string;
+  /** The messages that reached one webhook address, oldest first. */
+  messagesTo: (webhookUrl: string) => Message[];
+  received: Message[];
   /** Replaced per test to script Slack's answer. */
   reply: () => { status: number; body: string; headers?: Record<string, string> };
   reset: () => void;
@@ -39,7 +50,7 @@ export async function startFakeSlack(): Promise<FakeSlack> {
       } catch {
         // Kept as raw text either way.
       }
-      fake.received.push({ body, raw });
+      fake.received.push({ body, raw, path: request.url ?? '' });
       const answer = fake.reply();
       response.writeHead(answer.status, { 'content-type': 'text/plain', ...answer.headers });
       response.end(answer.body);
@@ -51,8 +62,11 @@ export async function startFakeSlack(): Promise<FakeSlack> {
     server.listen(E2E.slackPort, '127.0.0.1', resolve);
   });
 
+  let hooks = 0;
   return {
     webhookUrl: `${E2E.slackOrigin}/services/T01E2ETEST/B01E2ETEST/e2eSecretValue01`,
+    webhook: () => `${E2E.slackOrigin}/services/T01E2ETEST/B01E2ETEST/e2eSecretValue01x${(hooks += 1)}x${process.pid}`,
+    messagesTo: (webhookUrl) => fake.received.filter((message) => message.path === new URL(webhookUrl).pathname),
     received: fake.received,
     get reply() {
       return fake.reply;
