@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.4.0 (unreleased)
+
+Remote config, and nothing else changes.
+
+**What an existing application sees.** Upgrading from 0.3.0 without installing the config
+module changes nothing: crash reports, submissions and analytics events carry exactly what
+0.3.0 sent, and nothing new is written to the device. `SDK_VERSION` is `0.4.0` in every module.
+
+- **`inlet-sdk/config`, `inlet-sdk/config/browser` and `inlet-sdk/config/node`** (Remote Config
+  RC-110 to RC-124, RC-127, RC-128). `init` with in-app `defaults` that type `get`; synchronous
+  reads that never throw (`get`, `getBoolean`, `getNumber`, `getString`, `getJson`, `getAll`,
+  `getDetails`, `getExperiments`); `ready({ timeoutMs })`, `onUpdate`, `activate`, `refresh`,
+  `setAttributes`, `setUserId`, `setInstallationIdEnabled`, `getInstallationId`, `close`.
+  Values apply at the next launch, at once for the first fetch before any read, for live
+  parameters, for an unpublish and after a change of user. Answers are bound to the app
+  version, build and user ID they were fetched for. The Node entry's server mode evaluates per
+  context (`evaluate(context)`, 1,000 contexts cached); device mode keeps files under
+  `persistenceDir`.
+- **The browser entry is 7.8 KB minified and gzipped**; the build fails past 8 KB. Its tabs
+  share one fetch per refresh interval under a Web Lock and read the answer from
+  `localStorage`.
+- **The config module creates the shared installation ID** when none exists, under the one
+  key every module reads (`installation-id`), unless initialised with `installationId: false`.
+  The analytics module adopts it. Crash reports and feedback submissions still carry an
+  installation ID only while an analytics client is enabled.
+- **A change of user made by any module is seen by the others' watchers.** The first watcher
+  turns the shared identity's `userId` into an accessor (`watchUserId` in `identity-keys.ts`),
+  which works on an identity a 0.2.x module created too.
+- The identity's storage keys, storage type and user watcher moved to `src/identity-keys.ts`
+  (re-exported from `identity.ts`), so that the config browser entry bundles neither the
+  session machinery nor SHA-256.
+
 ## 0.3.0 — 2026-09-27
 
 UX analytics, and the identity it shares.

@@ -10,11 +10,10 @@
  * optional.
  */
 import { execFileSync } from 'node:child_process';
-import { gzipSync } from 'node:zlib';
 import { copyFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { build } from 'esbuild';
-import { browserSafe, reactNativeSafe } from './build-checks.mjs';
+import { browserSafe, browserSize, reactNativeSafe } from './build-checks.mjs';
 
 // The Electron renderer half is a crash-only entry: it has to be bundlable by Vite for a
 // renderer, which the `electron` entry never was (CR-109).
@@ -23,6 +22,8 @@ const entriesOf = {
   feedback: ['index', 'node', 'browser', 'electron', 'react', 'react-native'],
   // AN-220, AN-238, AN-239.
   analytics: ['index', 'node', 'browser', 'electron', 'electron-renderer', 'react-native'],
+  // RC-110.
+  config: ['index', 'node', 'browser'],
 };
 const platformOf = {
   index: 'neutral',
@@ -89,6 +90,8 @@ browserSafe(
     'dist/feedback/browser',
     'dist/feedback/react',
     'dist/analytics/browser',
+    'dist/config/index',
+    'dist/config/browser',
   ].flatMap((base) => [`${base}.js`, `${base}.cjs`]),
 );
 reactNativeSafe([
@@ -99,8 +102,11 @@ reactNativeSafe([
   'dist/feedback/index.js',
   'dist/feedback/react.js',
   'dist/analytics/index.js',
+  'dist/config/index.js',
 ]);
-await browserSize();
+// AN-240, RC-123: the README states each size.
+await browserSize('src/analytics/browser.ts', 20);
+await browserSize('src/config/browser.ts', 8);
 metroShims();
 versionsAgree();
 
@@ -118,7 +124,7 @@ versionsAgree();
  */
 function standAlone() {
   // `feedback-core` re-exports these two, so their declarations travel with it.
-  const shared = ['feedback-core', 'errors', 'limits'];
+  const shared = ['feedback-core', 'errors', 'limits', 'config-core'];
   mkdirSync('dist/shared', { recursive: true });
   for (const name of shared) copyFileSync(`../shared/dist/${name}.d.ts`, `dist/shared/${name}.d.ts`);
 
@@ -146,7 +152,7 @@ function standAlone() {
  * Listed in `files`; the build writes them so they can never point at a file that moved.
  */
 function metroShims() {
-  for (const entry of ['crash', 'crash/react-native', 'feedback', 'feedback/react', 'feedback/react-native', 'analytics', 'analytics/react-native']) {
+  for (const entry of ['crash', 'crash/react-native', 'feedback', 'feedback/react', 'feedback/react-native', 'analytics', 'analytics/react-native', 'config']) {
     const up = entry.split('/').map(() => '..').join('/');
     const target = entry.includes('/') ? entry : `${entry}/index`;
     mkdirSync(entry, { recursive: true });
@@ -165,36 +171,11 @@ function metroShims() {
  */
 function versionsAgree() {
   const { version } = JSON.parse(readFileSync('package.json', 'utf8'));
-  for (const file of ['src/crash/client.ts', 'src/feedback/client.ts', 'src/analytics/client.ts']) {
+  for (const file of ['src/crash/client.ts', 'src/feedback/client.ts', 'src/analytics/client.ts', 'src/config/client.ts']) {
     const declared = /export const SDK_VERSION = '([^']+)'/.exec(readFileSync(file, 'utf8'))?.[1];
     if (declared !== version) {
       throw new Error(`SDK_VERSION in ${file} is '${declared}' but package.json says '${version}'. Bump both.`);
     }
-  }
-}
-
-/**
- * AN-240: the browser analytics entry stays under 20 KB compressed, and the README states its
- * size. Measured as an integrator's bundler ships it — minified — and gzipped, because gzip is
- * what CDNs, bundle analysers and size budgets report, and brotli, a few kilobytes smaller,
- * would make the limit easier to meet than what most pages actually serve.
- */
-async function browserSize() {
-  const LIMIT = 20 * 1024;
-  const result = await build({
-    entryPoints: ['src/analytics/browser.ts'],
-    bundle: true,
-    format: 'esm',
-    platform: 'browser',
-    target: ['es2022'],
-    minify: true,
-    write: false,
-    logLevel: 'warning',
-  });
-  const bytes = gzipSync(result.outputFiles[0].contents, { level: 9 }).length;
-  console.log(`inlet-sdk/analytics/browser: ${(bytes / 1024).toFixed(1)} KB minified and gzipped (limit 20 KB).`);
-  if (bytes > LIMIT) {
-    throw new Error(`inlet-sdk/analytics/browser is ${(bytes / 1024).toFixed(1)} KB minified and gzipped, past the 20 KB AN-240 allows. Find what grew it.`);
   }
 }
 

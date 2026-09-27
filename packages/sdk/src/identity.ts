@@ -1,4 +1,7 @@
 import { sha256Hex, uuidV7 } from '@inlet/shared/crash-core';
+import { IDENTITY_KEYS, type IdentityStorage } from './identity-keys.js';
+
+export { IDENTITY_KEYS, MemoryIdentityStorage, watchUserId, type IdentityStorage } from './identity-keys.js';
 
 type RandomSource = (bytes: Uint8Array) => void;
 
@@ -35,43 +38,6 @@ export const SESSION_TIMEOUT_MS = 30 * 60_000;
 export const SESSION_MAX_AGE_MS = 24 * 60 * 60_000;
 /** AN-229: a browser writes the last activity at most this often. */
 export const SESSION_WRITE_INTERVAL_MS = 30_000;
-
-/**
- * The storage keys every module reads (FD-016). `installationId` is the ONE key of the
- * installation ID: a config module reads and writes the same one, so each adopts the ID the
- * other created. The browser adapter prefixes them (`inlet-sdk:`) in `localStorage`; on disk
- * each is a file of that name under the persistence directory.
- */
-export const IDENTITY_KEYS = {
-  installationId: 'installation-id',
-  optOut: 'analytics-opt-out',
-  /** Attribution, experiments, the stored app version and build, and the installation announced. */
-  state: 'analytics-state',
-  /** Browser only: the session every tab of the origin shares. */
-  session: 'session',
-  crashFlags: 'crash-flags',
-} as const;
-
-/**
- * Synchronous storage over what an adapter can reach synchronously: `localStorage`, a file,
- * or memory written through to an asynchronous store (React Native). `null`
- * deletes the key.
- */
-export type IdentityStorage = {
-  read(key: string): string | null;
-  write(key: string, value: string | null): void;
-};
-
-export class MemoryIdentityStorage implements IdentityStorage {
-  readonly values = new Map<string, string>();
-  read(key: string): string | null {
-    return this.values.get(key) ?? null;
-  }
-  write(key: string, value: string | null): void {
-    if (value === null) this.values.delete(key);
-    else this.values.set(key, value);
-  }
-}
 
 export type SessionRecord = { id: string; startedAt: number; lastActivityAt: number; announced?: boolean };
 export type SessionTrigger = 'launch' | 'resume' | 'reset';

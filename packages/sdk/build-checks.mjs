@@ -4,6 +4,8 @@
  * can prove each one fails on an entry that breaks its rule.
  */
 import { execFileSync } from 'node:child_process';
+import { gzipSync } from 'node:zlib';
+import { build } from 'esbuild';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -51,4 +53,21 @@ export function reactNativeSafe(files) {
       throw new Error(`${entry} cannot load in React Native: ${String(error.stderr ?? error.message).trim().split('\n').find((line) => /Error: touched \w+ at load/.test(line)) ?? error.message}`);
     }
   }
+}
+
+/**
+ * AN-240, RC-123: a browser entry stays under its limit, and the README states its size.
+ * Measured as an integrator's bundler ships it — minified — and gzipped, because gzip is what
+ * CDNs, bundle analysers and size budgets report, and brotli, a few kilobytes smaller, would
+ * make the limit easier to meet than what most pages actually serve. Returns the bytes.
+ */
+export async function browserSize(entry, limitKb) {
+  const result = await build({ entryPoints: [entry], bundle: true, format: 'esm', platform: 'browser', target: ['es2022'], minify: true, write: false, logLevel: 'warning' });
+  const bytes = gzipSync(result.outputFiles[0].contents, { level: 9 }).length;
+  const name = entry.replace(/^src\//, 'inlet-sdk/').replace(/\.ts$/, '');
+  console.log(`${name}: ${(bytes / 1024).toFixed(1)} KB minified and gzipped (limit ${limitKb} KB).`);
+  if (bytes > limitKb * 1024) {
+    throw new Error(`${name} is ${(bytes / 1024).toFixed(1)} KB minified and gzipped, past the ${limitKb} KB its requirement allows. Find what grew it.`);
+  }
+  return bytes;
 }
