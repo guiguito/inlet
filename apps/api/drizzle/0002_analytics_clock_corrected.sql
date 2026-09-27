@@ -1,0 +1,1 @@
+ALTER TABLE "analytics_dropped_counts" ADD COLUMN "clock_corrected" bigint DEFAULT 0 NOT NULL;

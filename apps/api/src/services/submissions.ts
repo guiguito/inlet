@@ -1,6 +1,7 @@
 import { and, desc, eq, gt, inArray, lt, sql } from 'drizzle-orm';
 import type { FormDefinition, StoredAnswers } from '@inlet/shared';
 import type { AppContext } from '../context.js';
+import type { Db } from '../db/index.js';
 import {
   attachments,
   formVersions,
@@ -273,28 +274,40 @@ export async function deleteSubmission(
         and(eq(submissions.id, submissionId), eq(submissions.feedbackDatabaseId, databaseId)),
       )
       .limit(1);
-    const found = rows[0];
-    if (!found) throw errors.submissionNotFound();
-
-    const files = await tx
-      .select({ storageKey: attachments.storageKey })
-      .from(attachments)
-      .where(eq(attachments.submissionId, submissionId));
-
-    await tx
-      .update(submissionIntents)
-      .set({ submissionDeletedAt: new Date() })
-      .where(eq(submissionIntents.id, found.intentId));
-
-    // Attachments cascade from the submission row.
-    await tx.delete(submissions).where(eq(submissions.id, submissionId));
-
-    const storageKeys = files.map((file) => file.storageKey);
-    await enqueuePurge(tx, storageKeys);
-    return storageKeys;
+    if (!rows[0]) throw errors.submissionNotFound();
+    return deleteSubmissionRows(tx, rows);
   });
 
   return { purgedKeys: keys.length };
+}
+
+/**
+ * FR-064A's deletion of the given submissions, inside the caller's transaction: their intents
+ * marked, their rows deleted (attachments cascade) and their screenshots' keys queued for purge.
+ * Returns the queued keys. The project's erasure (Foundations FD-033) deletes this way too.
+ */
+export async function deleteSubmissionRows(
+  tx: Db,
+  rows: readonly { id: string; intentId: string }[],
+): Promise<string[]> {
+  if (rows.length === 0) return [];
+  const ids = rows.map((row) => row.id);
+  const files = await tx
+    .select({ storageKey: attachments.storageKey })
+    .from(attachments)
+    .where(inArray(attachments.submissionId, ids));
+
+  await tx
+    .update(submissionIntents)
+    .set({ submissionDeletedAt: new Date() })
+    .where(inArray(submissionIntents.id, rows.map((row) => row.intentId)));
+
+  // Attachments cascade from the submission row.
+  await tx.delete(submissions).where(inArray(submissions.id, ids));
+
+  const storageKeys = files.map((file) => file.storageKey);
+  await enqueuePurge(tx, storageKeys);
+  return storageKeys;
 }
 
 /** Counts used by the deletion warning of FR-025. */

@@ -1,13 +1,16 @@
 import { sql } from 'drizzle-orm';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 import { pino } from 'pino';
 import { newId, type FormDefinition } from '@inlet/shared';
 import { buildApp } from '../../src/app.js';
 import type { AppContext } from '../../src/context.js';
+import { createEventStore } from '../../src/db/clickhouse.js';
 import { createDb, type DbHandle } from '../../src/db/index.js';
 import { loadEnv } from '../../src/env.js';
 import { MalwareScanner } from '../../src/lib/malware.js';
 import { Storage } from '../../src/lib/storage.js';
+import { analyticsIngestTimings, resetAnalyticsIngestState } from '../../src/services/analytics-ingest.js';
+import { resetAnalyticsQueryState } from '../../src/services/analytics-query.js';
 import { bootstrapAdmin } from '../../src/services/bootstrap.js';
 import { ADMIN_EMAIL, ADMIN_PASSWORD, TEST_ENV } from './config.js';
 
@@ -28,6 +31,19 @@ export type Harness = {
 
 const TABLES = [
   'notification_deliveries',
+  'analytics_database_removals',
+  'analytics_pending_erasures',
+  'analytics_dropped_counts',
+  'analytics_event_name_deletions',
+  'analytics_event_categories',
+  'analytics_event_params',
+  'analytics_event_names',
+  'analytics_incidents',
+  'analytics_cohorts',
+  'analytics_funnels',
+  'analytics_database_memberships',
+  'analytics_databases',
+  'erasures',
   'crash_reports',
   'crash_group_daily',
   'crash_group_users',
@@ -55,18 +71,35 @@ const TABLES = [
   'users',
 ];
 
-export async function createHarness(overrides: Record<string, string> = {}): Promise<Harness> {
+/**
+ * Every event-store table that holds data (UX Analytics 11: the harness resets the tables
+ * of a real ClickHouse). `events_ingest` stores nothing and the views hold no rows.
+ */
+const EVENT_STORE_TABLES = ['events', 'installations', 'installation_users', 'installation_first', 'user_first', 'version_first', 'analytics_erasure_targets', 'installation_index', 'session_rollup'];
+
+/**
+ * `overrides` replaces TEST_ENV's values. `{ INLET_CLICKHOUSE_URL: '' }` builds an app with
+ * no event store; an address nothing answers on builds one whose store stays pending.
+ */
+export async function createHarness(
+  overrides: Record<string, string> = {},
+  options: { log?: FastifyBaseLogger } = {},
+): Promise<Harness> {
   const env = loadEnv({ ...process.env, ...TEST_ENV, ...overrides });
   const handle = createDb(env.INLET_DATABASE_URL);
   const storage = new Storage(env);
   const scanner = new MalwareScanner(env);
-  const ctx: AppContext = {
-    env,
-    db: handle.db,
-    storage,
-    scanner,
-    log: pino({ level: 'silent' }),
-  };
+  // Silent unless a test captures what the server logs (AN-019).
+  const log = options.log ?? pino({ level: 'silent' });
+  // The store is ready the moment the harness connects it, so ingest's two-second warm-up
+  // (DECISIONS 31.3.3) would refuse every test's first batch; its own test sets it back.
+  analyticsIngestTimings.warmupMs = 0;
+  const eventStore = createEventStore(env, log);
+  const ctx: AppContext = { env, db: handle.db, eventStore, storage, scanner, log };
+
+  // The global setup has migrated the test database, so a reachable store is ready at once.
+  // One that is not keeps retrying in the background, as the server's does.
+  await eventStore?.connect().catch(() => eventStore.start());
 
   await storage.ensureBucket(true);
   await storage.ensureLifecycleRule();
@@ -81,12 +114,21 @@ export async function createHarness(overrides: Record<string, string> = {}): Pro
     cookie: '',
     reset: async () => {
       await handle.db.execute(sql.raw(`truncate table ${TABLES.join(', ')} cascade`));
+      if (eventStore?.readySinceStart) {
+        for (const table of EVENT_STORE_TABLES) await eventStore.command(`TRUNCATE TABLE ${table}`);
+      }
+      // The analytics in-memory state (caches, keys in flight, rate limits, floors, live feed,
+      // counters), so no test inherits another's (UX Analytics 11).
+      resetAnalyticsIngestState();
+      // The query layer's (slots, the erasure and deletion skip cache).
+      resetAnalyticsQueryState();
       await bootstrapAdmin(ctx);
       harness.cookie = await signIn(app, ADMIN_EMAIL, ADMIN_PASSWORD);
     },
     close: async () => {
       await app.close();
       storage.destroy();
+      await eventStore?.close();
       await handle.pool.end();
     },
   };

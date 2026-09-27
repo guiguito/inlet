@@ -1,0 +1,1 @@
+ALTER TABLE "analytics_event_name_deletions" ADD COLUMN "files_cleared_at" timestamp with time zone;

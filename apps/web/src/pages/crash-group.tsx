@@ -4,6 +4,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeftIcon, TrashIcon } from 'lucide-react';
 import { toast } from 'sonner';
 import { api, ApiError, type CrashReport, type CrashStateChange, type CurrentUser } from '@/lib/api';
+import { profilesApi } from '@/lib/analytics-profiles';
+import { UsageProfileLinks } from '@/components/usage-profile-link';
 import { AppShell } from '@/components/app-shell';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { CrashTimelineChart, type TimelineRange } from '@/components/crash-timeline';
@@ -352,7 +354,7 @@ function ReportView({ report }: { report: CrashReport }) {
                     ['installation', report.installationId],
                   ]}
                 />
-                {/* CR-040: the other crashes of the same session or installation, one click away. */}
+                {/* CR-040: the other crashes of the same session or installation, one click away; AN-154: its usage profile. */}
                 <div className="flex flex-wrap gap-3 text-xs">
                   {report.sessionId ? (
                     <Link className="underline underline-offset-4" to={`/crash-databases/${databaseId}?tab=groups&sessionId=${report.sessionId}`}>
@@ -363,6 +365,9 @@ function ReportView({ report }: { report: CrashReport }) {
                     <Link className="underline underline-offset-4" to={`/crash-databases/${databaseId}?tab=groups&installationId=${report.installationId}`}>
                       Groups on this installation
                     </Link>
+                  ) : null}
+                  {report.installationId ? (
+                    <UsageProfileLinks queryKey={['crash-report', databaseId, report.id]} load={() => profilesApi.crashReportLink(databaseId ?? '', report.id)} />
                   ) : null}
                 </div>
               </div>

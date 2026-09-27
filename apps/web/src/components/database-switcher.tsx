@@ -47,6 +47,12 @@ export function DatabaseSwitcher({
     queryFn: () => api.listCrashDatabases(projectId),
     enabled: open,
   });
+  const analyticsSiblings = useQuery({
+    queryKey: ['analytics-databases', projectId],
+    queryFn: () => api.listAnalyticsDatabases(projectId),
+    enabled: open,
+  });
+  const typesShown = [siblings, crashSiblings, analyticsSiblings].filter((query) => (query.data?.length ?? 0) > 0).length;
 
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
@@ -67,7 +73,7 @@ export function DatabaseSwitcher({
 
       <DropdownMenuContent align="start" className="min-w-56">
         <DropdownMenuLabel className="truncate">{projectName}</DropdownMenuLabel>
-        {(siblings.data?.length ?? 0) > 0 && (crashSiblings.data?.length ?? 0) > 0 ? (
+        {(siblings.data?.length ?? 0) > 0 && typesShown > 1 ? (
           <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">Feedback</DropdownMenuLabel>
         ) : null}
         {siblings.data?.map((sibling) => (
@@ -97,7 +103,18 @@ export function DatabaseSwitcher({
             </Link>
           </DropdownMenuItem>
         ))}
-        {siblings.isLoading || crashSiblings.isLoading ? (
+        {(analyticsSiblings.data?.length ?? 0) > 0 ? (
+          <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">Analytics</DropdownMenuLabel>
+        ) : null}
+        {analyticsSiblings.data?.map((sibling) => (
+          <DropdownMenuItem key={sibling.id} asChild>
+            <Link to={`/analytics-databases/${sibling.id}`}>
+              {sibling.id === databaseId ? <CheckIcon /> : <span aria-hidden="true" className="size-4" />}
+              <span className="truncate">{sibling.name}</span>
+            </Link>
+          </DropdownMenuItem>
+        ))}
+        {siblings.isLoading || crashSiblings.isLoading || analyticsSiblings.isLoading ? (
           <DropdownMenuItem disabled>Loading</DropdownMenuItem>
         ) : null}
         <DropdownMenuSeparator />

@@ -17,8 +17,12 @@ const cache = new WeakMap<typeof fetch, Map<string, Promise<string[] | null>>>()
 /** The one default fetch, so the modules of one application share one probe. */
 export const defaultFetch: typeof fetch = (input, init) => fetch(input, init);
 
-/** The capability list, or null when the probe failed. */
-export function capabilities(baseUrl: string, impl: typeof fetch, timeoutMs = 20_000): Promise<string[] | null> {
+/**
+ * The capability list, or null when the probe failed. `refresh` asks again even after an
+ * answer, for the analytics module's re-read every ten minutes while `analytics` is not
+ * listed (AN-241); the new answer replaces the cached one for every module.
+ */
+export function capabilities(baseUrl: string, impl: typeof fetch, timeoutMs = 20_000, refresh = false): Promise<string[] | null> {
   let byOrigin = cache.get(impl);
   if (!byOrigin) {
     byOrigin = new Map();
@@ -26,7 +30,7 @@ export function capabilities(baseUrl: string, impl: typeof fetch, timeoutMs = 20
   }
   const key = baseUrl.replace(/\/$/, '');
   const known = byOrigin.get(key);
-  if (known) return known;
+  if (known && !refresh) return known;
   const probe = (async () => {
     const timeout = timeoutSignal(timeoutMs);
     try {
@@ -58,4 +62,18 @@ export function timeoutSignal(ms: number): { signal?: AbortSignal; clear: () => 
   const timer = setTimeout(() => controller.abort(), ms);
   (timer as { unref?: () => void }).unref?.();
   return { signal: controller.signal, clear: () => clearTimeout(timer) };
+}
+
+/**
+ * `work`, or `ms` milliseconds, whichever ends first: the bound of `flush(timeoutMs)`. The timer
+ * is cleared once `work` settles, so a process that awaited a flush exits as soon as the queue is
+ * sent rather than when the timeout would have run out (a command-line tool calling
+ * `flush(10_000)` waited the whole ten seconds before; found by the release 8 end-to-end tests).
+ */
+export function settleWithin(work: Promise<void>, ms: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, ms);
+  });
+  return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
 }

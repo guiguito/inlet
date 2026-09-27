@@ -1,5 +1,79 @@
 # Changelog
 
+## 0.3.0 — 2026-09-27
+
+UX analytics, and the identity it shares.
+
+**What an existing application sees.** Upgrading from 0.2.0 without installing the analytics
+module changes one thing: a Node process that awaits `flush(timeoutMs)` exits as soon as its
+queue is sent instead of when the timeout runs out (below). Its crash reports and submissions
+carry exactly what 0.2.0 sent, and nothing new is written to the device. Everything else below
+applies once you initialise `inlet-sdk/analytics`, and most of it only while analytics is
+enabled.
+
+- **`flush(timeoutMs)` no longer holds a Node process open**, in every module. The timeout's
+  timer used to outlive the flush, so a script or command-line tool that ended with
+  `await flush(10_000)` lived the full ten seconds after its queue was sent; the timer now ends
+  with the flush. Found by the release's end-to-end tests of the Node entry in device mode.
+
+- **`inlet-sdk/analytics`**, with `/browser`, `/node`, `/electron`, `/electron-renderer`
+  and `/react-native` entries (UX Analytics AN-220 to AN-242): `init`, `track`, `screen`, `setUserId`, `setAttribution`, `setExperiment`,
+  `setEnabled` (with `forget`), `reset`, `getInstallationId`, `getSessionId`, `flush`,
+  `close`. Consent first: initialise with `enabled: false` and call `setEnabled(true)` in your
+  consent callback. Events are checked with the server's own rules before they are queued.
+  Standard events (`app_installed`, `app_updated`, `app_started`, `session_crashed`,
+  `screen_viewed`), sessions shared by the tabs of an origin, a persistent queue in IndexedDB
+  or on disk, `keepalive` delivery when a page closes. The browser entry is 15.5 KB minified
+  and gzipped. Needs a deployment whose `/v1/health` lists `analytics`; until then events
+  wait, and the SDK asks again every ten minutes. `setExperiment` refuses the keys
+  `__proto__`, `constructor` and `prototype` through `debug`, as the server refuses them as
+  param and experiment keys on every event.
+- **Electron** (AN-238): `installElectronMain` from `inlet-sdk/analytics/electron` keeps the
+  identity, the queue and the key in the main process under `<userData>/inlet`, defaults the
+  app version and ID to the application's own, and reports the operating system's version
+  (`process.getSystemVersion()`), not the kernel's. `createElectronRenderer` from
+  `inlet-sdk/analytics/electron-renderer` is browser-safe, holds no key and makes no
+  request: a window's `track`, `screen`, `setUserId`, `setAttribution`, `setExperiment`,
+  `setEnabled` and `reset` go to main over `inlet:analytics` through a preload bridge
+  (`window.inletAnalytics`), and main pushes the installation and session IDs back. Main
+  reads only an event's name, category, params and timestamp; `acceptRendererIdentity: false`
+  refuses a window's identity and consent calls. A window's `setUserId` sets the user ID crash
+  reports carry (CR-111).
+- **React Native** (AN-239): `inlet-sdk/analytics/react-native` takes `Platform`, `AppState`
+  and your store (`store: AsyncStorage`, or MMKV behind the same methods) and imports nothing.
+  Platform `ios` or `android` with the system version, a flush when the application goes to
+  the background, a new session on return after the timeout and at every process start, and
+  at most 1 MB in the store (`maxStoreBytes`). The app version is required. Metro shims for
+  `inlet-sdk/analytics` and `inlet-sdk/analytics/react-native`.
+- **Crash flags on React Native** (AN-151): the crash module writes a crash flag to its own
+  store on its fatal path — synchronously only when that store is synchronous — and the
+  analytics module sends it as `session_crashed` at the next start. With AsyncStorage,
+  crash-free sessions are best effort; give the crash module a synchronous store to rely on
+  them.
+- **The installation ID only while analytics is enabled.** Crash reports and submissions
+  carry `installationId` while an analytics client of the application is enabled, decided by
+  that state, never by an ID being present (Foundations FD-016). Disable analytics and they
+  stop carrying it; `setEnabled(false, { forget: true })` also removes it from reports and
+  submissions still queued.
+- **Crash-free sessions.** With analytics enabled, the crash module flags the session of a
+  crashing report (an unhandled exception or rejection, a native crash, an unclean exit, a
+  renderer that died) after `beforeSendSync` and before dedupe and sampling, so the analytics
+  module sends `session_crashed`; in a browser only errors with a frame in your own code
+  count. Nothing is flagged without analytics. See "Crash-free sessions" in the README for
+  `appRoots` when your scripts come from a CDN.
+- **The unclean-exit sentinel records the session and installation** of the run it watches,
+  only while analytics is enabled, and the previous-run report carries them. Without
+  analytics it holds what 0.2.0's did.
+- **`app_started` asks the crash module** whether it is enabled and, in a browser, whether a
+  page script lies within its `appRoots`.
+- With analytics enabled in a browser, the session ID lives in `localStorage` and every tab
+  of the origin shares it; crash reports from those tabs carry that shared session.
+- **A crashing report too large to send still flags its session.** A crash whose context or
+  envelope fails the size check is dropped as before, but with analytics enabled
+  `beforeSendSync` runs on it and, unless it returns `null`, its session counts as crashed.
+- **The React Native store's byte ceiling counts the queue's index too**, so what a queue
+  keeps is a little under its ceiling rather than a little over.
+
 ## 0.2.0 — September 24, 2026
 
 The shared identity, and React Native. Needs nothing from your server to upgrade: against a

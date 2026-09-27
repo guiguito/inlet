@@ -1,12 +1,15 @@
 import { eq, sql } from 'drizzle-orm';
 import {
   NOTIFICATION_LIMITS,
+  escapeSlackText,
   isAllowedWebhookOrigin,
   type SlackContentLevel,
 } from '@inlet/shared';
 import type { AppContext } from '../context.js';
 import type { Db } from '../db/index.js';
 import {
+  analyticsDatabases,
+  analyticsIncidents,
   formVersions,
   notificationDeliveries,
   crashGroups,
@@ -17,6 +20,7 @@ import {
 import { apiError, errors } from '../lib/errors.js';
 import { submissionUrl } from './export.js';
 import { buildCrashSlackMessage, buildSlackMessage, type SlackMessage } from './slack-message.js';
+import { buildAnalyticsSlackMessage, type IncidentFigures } from './analytics-slack-message.js';
 
 /**
  * Slack notifications (FR-155 to FR-172).
@@ -337,7 +341,7 @@ export async function runNotificationBatch(
         limit ${BATCH_SIZE}
         for update skip locked
      )
-    returning id, kind, submission_id, crash_group_id, feedback_database_id, attempts
+    returning id, kind, submission_id, crash_group_id, analytics_incident_id, analytics_resolution, feedback_database_id, attempts
   `);
 
   const rows = (claimed as unknown as { rows: DeliveryClaim[] }).rows ?? [];
@@ -354,9 +358,11 @@ export async function runNotificationBatch(
 
 type DeliveryClaim = {
   id: number;
-  kind: 'submission_received' | 'crash_group_opened' | 'crash_group_regressed';
+  kind: 'submission_received' | 'crash_group_opened' | 'crash_group_regressed' | 'analytics_data_health';
   submission_id: string | null;
   crash_group_id: string | null;
+  analytics_incident_id: number | null;
+  analytics_resolution: boolean;
   feedback_database_id: string;
   attempts: number;
 };
@@ -444,6 +450,7 @@ async function render(
   if (claim.kind === 'crash_group_opened' || claim.kind === 'crash_group_regressed') {
     return renderCrash(ctx, claim, claim.kind);
   }
+  if (claim.kind === 'analytics_data_health') return renderAnalytics(ctx, claim);
   if (!claim.submission_id) return 'nothing';
   const rows = await ctx.db
     .select({
@@ -538,6 +545,40 @@ async function renderCrash(
   };
 }
 
+/** AN-191: the analytics database's Storage panel, where every incident's figures are. */
+export function analyticsStorageUrl(ctx: AppContext, databaseId: string): string {
+  return `${ctx.env.INLET_PUBLIC_URL.replace(/\/$/, '')}/analytics-databases/${databaseId}?tab=settings&panel=storage`;
+}
+
+/**
+ * AN-190 to AN-192: rendered from the incident as it stands at send time (FD-006). The
+ * delivery says whether it announces the opening or the resolution; a deleted database took
+ * its incidents and their deliveries with it, and notifications switched off send nothing.
+ */
+async function renderAnalytics(ctx: AppContext, claim: DeliveryClaim): Promise<'nothing' | { url: string; message: SlackMessage }> {
+  if (claim.analytics_incident_id === null) return 'nothing';
+  const rows = await ctx.db
+    .select({ incident: analyticsIncidents, settings: slackNotifications, databaseName: analyticsDatabases.name })
+    .from(analyticsIncidents)
+    .innerJoin(analyticsDatabases, eq(analyticsDatabases.id, analyticsIncidents.analyticsDatabaseId))
+    .innerJoin(slackNotifications, eq(slackNotifications.feedbackDatabaseId, analyticsIncidents.analyticsDatabaseId))
+    .where(eq(analyticsIncidents.id, claim.analytics_incident_id))
+    .limit(1);
+  const found = rows[0];
+  if (!found) return 'nothing';
+  if (!found.settings.enabled || !found.settings.webhookUrl) return 'nothing';
+  return {
+    url: found.settings.webhookUrl,
+    message: buildAnalyticsSlackMessage({
+      databaseName: found.databaseName,
+      storageUrl: analyticsStorageUrl(ctx, found.incident.analyticsDatabaseId),
+      incident: { ...found.incident, figures: found.incident.figures as IncidentFigures },
+      resolution: claim.analytics_resolution,
+      settings: found.settings,
+    }),
+  };
+}
+
 /** How the submission arrived, for the metadata line. Never respondent-authored. */
 function arrivalPath(clientContext: unknown): string | null {
   if (clientContext === null || typeof clientContext !== 'object') return null;
@@ -611,6 +652,45 @@ export async function sendTestMessage(
     ]);
   }
 
+  // Foundations §23: an analytics database announces data-health incidents only, so its test
+  // is one of those, with example figures, rather than the feedback sample.
+  const message = databaseId.startsWith('adb_')
+    ? buildAnalyticsSlackMessage({
+        databaseName,
+        storageUrl: analyticsStorageUrl(ctx, databaseId),
+        incident: { kind: 'rate_limited', openedAt: new Date(), resolvedAt: null, figures: { events: 12_480 } },
+        resolution: false,
+        // The heading is not escaped (it is the operator's), so the database name in the default one is.
+        settings: { ...settings, messageTitle: settings.messageTitle ?? `Test message from Inlet · ${escapeSlackText(databaseName)}` },
+      })
+    : feedbackTestMessage(ctx, databaseId, databaseName, settings);
+
+  const result = await sendSlackWebhook(
+    settings.webhookUrl,
+    message,
+    ctx.env.slackWebhookOrigins,
+  );
+
+  if (result.kind === 'ok') {
+    await ctx.db
+      .update(slackNotifications)
+      .set({ lastDeliveryAt: new Date(), lastError: null, lastErrorAt: null })
+      .where(eq(slackNotifications.feedbackDatabaseId, databaseId));
+    return { delivered: true };
+  }
+
+  await ctx.db
+    .update(slackNotifications)
+    .set({ lastError: result.reason.slice(0, 500), lastErrorAt: new Date() })
+    .where(eq(slackNotifications.feedbackDatabaseId, databaseId));
+
+  throw apiError('slack_delivery_failed', `Slack did not accept the message (${result.reason}).`, [
+    { path: 'webhookUrl', code: result.reason, message: slackAdvice(result.reason) },
+  ]);
+}
+
+/** FR-168: the feedback sample, placeholder text and never a real submission. */
+function feedbackTestMessage(ctx: AppContext, databaseId: string, databaseName: string, settings: SlackNotificationRow): SlackMessage {
   const note =
     settings.contentLevel === 'link_only'
       ? 'Real notifications will carry no answer content.'
@@ -618,7 +698,7 @@ export async function sendTestMessage(
         ? 'Real notifications will include answer content.'
         : 'Real notifications will include answer content and collected email addresses.';
 
-  const message = buildSlackMessage({
+  return buildSlackMessage({
     databaseName,
     databaseId,
     submissionId: 'sub_example',
@@ -648,33 +728,11 @@ export async function sendTestMessage(
     via: 'a test message',
     settings: {
       ...settings,
-      messageTitle: settings.messageTitle ?? `Test message from Inlet · ${databaseName}`,
+      // The operator's title is not escaped; the database name in the default one is.
+      messageTitle: settings.messageTitle ?? `Test message from Inlet · ${escapeSlackText(databaseName)}`,
       contentLevel: settings.contentLevel === 'link_only' ? 'answers' : settings.contentLevel,
     },
   });
-
-  const result = await sendSlackWebhook(
-    settings.webhookUrl,
-    message,
-    ctx.env.slackWebhookOrigins,
-  );
-
-  if (result.kind === 'ok') {
-    await ctx.db
-      .update(slackNotifications)
-      .set({ lastDeliveryAt: new Date(), lastError: null, lastErrorAt: null })
-      .where(eq(slackNotifications.feedbackDatabaseId, databaseId));
-    return { delivered: true };
-  }
-
-  await ctx.db
-    .update(slackNotifications)
-    .set({ lastError: result.reason.slice(0, 500), lastErrorAt: new Date() })
-    .where(eq(slackNotifications.feedbackDatabaseId, databaseId));
-
-  throw apiError('slack_delivery_failed', `Slack did not accept the message (${result.reason}).`, [
-    { path: 'webhookUrl', code: result.reason, message: slackAdvice(result.reason) },
-  ]);
 }
 
 /** Turns a Slack error string into something an operator can act on. */

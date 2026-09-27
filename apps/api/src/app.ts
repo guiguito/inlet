@@ -36,7 +36,16 @@ import { hostedRoutes } from './routes/hosted.js';
 import { memberRoutes } from './routes/members.js';
 import { crashRoutes } from './routes/crashes.js';
 import { crashReadRoutes } from './routes/crash-reads.js';
-import { requireCrashDatabase } from './services/access.js';
+import { analyticsRoutes } from './routes/analytics.js';
+import { analyticsEventRoutes } from './routes/analytics-events.js';
+import { analyticsOverviewRoutes } from './routes/analytics-overview.js';
+import { analyticsStorageRoutes } from './routes/analytics-storage.js';
+import { analyticsProfileRoutes } from './routes/analytics-profiles.js';
+import { analyticsFunnelRoutes } from './routes/analytics-funnels.js';
+import { analyticsCohortRoutes } from './routes/analytics-cohorts.js';
+import { analyticsExportRoutes } from './routes/analytics-export.js';
+import { erasureRoutes } from './routes/erasures.js';
+import { requireAnalyticsDatabase, requireCrashDatabase } from './services/access.js';
 import { mcpRoutes } from './routes/mcp.js';
 import { projectRoutes } from './routes/projects.js';
 import { attachmentRoutes, submissionRoutes } from './routes/submissions.js';
@@ -103,7 +112,12 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
         // can tell a deployment that serves MCP from one that only ships the binary.
         // 'identity' says this deployment accepts the SDK identity fields of FD-016 on crash
         // reports and submissions; an SDK leaves them out for a deployment that does not.
-        return { status: 'ok', capabilities: ['feedback', 'crash', CROSS_ORIGIN_FEEDBACK, 'mcp', 'identity'] };
+        // 'analytics' once the event store has been ready since start (FD-015, UX Analytics
+        // 9.4), and still through a later outage: failing or shrinking the probe then would
+        // restart the container, or make an SDK think the deployment lost the capability.
+        const capabilities = ['feedback', 'crash', CROSS_ORIGIN_FEEDBACK, 'mcp', 'identity'];
+        if (ctx.eventStore?.readySinceStart) capabilities.push('analytics');
+        return { status: 'ok', capabilities };
       });
 
       await v1.register(authRoutes(ctx), { prefix: '/auth' });
@@ -126,6 +140,32 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
           return { name: database.name };
         }),
         { prefix: '/crash-databases' },
+      );
+      // UX Analytics, Release 8: analytics databases (AN-001 to AN-005).
+      await v1.register(analyticsRoutes(ctx));
+      // The catalog, the Lexicon, filter values and trends (AN-050 to AN-069).
+      await v1.register(analyticsEventRoutes(ctx));
+      // The Overview (AN-140 to AN-144).
+      await v1.register(analyticsOverviewRoutes(ctx));
+      // Profiles and the Usage profile link of crash reports and submissions (AN-120 to AN-126, AN-154).
+      await v1.register(analyticsProfileRoutes(ctx));
+      // Settings → Storage and data health (AN-160 to AN-169).
+      await v1.register(analyticsStorageRoutes(ctx));
+      // Saved funnels, runs and the drill-down (AN-080 to AN-089).
+      await v1.register(analyticsFunnelRoutes(ctx));
+      // Saved cohorts and runs (AN-100 to AN-109).
+      await v1.register(analyticsCohortRoutes(ctx));
+      // The event export (AN-210) and the project's erasure of an installation or user ID (FD-033, AN-183 to AN-185).
+      await v1.register(analyticsExportRoutes(ctx));
+      await v1.register(erasureRoutes(ctx));
+      // And a third time for analytics databases (AN-190). Their messages announce data-health
+      // incidents only, so `contentLevel` is stored like any database's and never read for them.
+      await v1.register(
+        slackNotificationRoutes(ctx, async (principal, databaseId) => {
+          const { database } = await requireAnalyticsDatabase(ctx.db, principal, databaseId, 'creator');
+          return { name: database.name };
+        }),
+        { prefix: '/analytics-databases' },
       );
     },
     { prefix: '/v1' },
@@ -177,10 +217,11 @@ async function registerDocs(app: FastifyInstance, ctx: AppContext): Promise<void
  *
  * Everything else in Inlet stays same-origin, which is what section 13 of DECISIONS.md
  * describes and why there is no CORS plugin here. This is the one exception, and FD-015
- * enumerates it in this one place: the health probe, crash ingest, and the four feedback
- * collection routes. Both browser adapters of `inlet-sdk` run on the integrator's own
- * origin by definition, and both send an `authorization` header, which forces a
- * preflight. Without this the preflight 404s and the browser never sends anything at all.
+ * enumerates it in this one place: the health probe, crash ingest, the four feedback
+ * collection routes, and analytics ingest for `POST` only (`CROSS_ORIGIN_BY_METHOD`). The
+ * browser adapters of `inlet-sdk` run on the integrator's own origin by definition, and send
+ * an `authorization` header, which forces a preflight. Without this the preflight 404s and
+ * the browser never sends anything at all.
  *
  * Widening this set is a change to the Foundations PRD first, and
  * `apps/api/test/integration/cors.test.ts` pins both halves of the boundary.
@@ -214,9 +255,30 @@ const CROSS_ORIGIN_COLLECTION = new RegExp(
   ].join(''),
 );
 
+/**
+ * Routes open for one method only, as FD-015 asks of analytics ingest (and, with Release 9,
+ * the config fetch): the path alone would also open whatever another method does there.
+ * A preflight is matched by the method it asks about.
+ */
+const CROSS_ORIGIN_BY_METHOD: { path: RegExp; method: string }[] = [
+  // UX Analytics AN-010, section 7.1: the batch route, and nothing else under /analytics-databases.
+  { path: /^\/v1\/analytics-databases\/[^/]+\/batch$/, method: 'POST' },
+];
+
+/** The methods a preflight may be told, or null when the request is not cross-origin at all. */
+function crossOriginMethods(request: { url: string; method: string; headers: Record<string, string | string[] | undefined> }): string | null {
+  const path = request.url.split('?')[0] ?? '';
+  // DELETE is here for one route only: releasing a screenshot before submitting.
+  if (CROSS_ORIGIN_COLLECTION.test(path)) return 'POST, GET, DELETE, OPTIONS';
+  const asked = request.method === 'OPTIONS' ? String(request.headers['access-control-request-method'] ?? '').toUpperCase() : request.method;
+  const open = CROSS_ORIGIN_BY_METHOD.find((entry) => entry.method === asked && entry.path.test(path));
+  return open ? `${open.method}, OPTIONS` : null;
+}
+
 function registerCrossOriginCollection(app: FastifyInstance): void {
   app.addHook('onRequest', (request, reply, done) => {
-    if (!CROSS_ORIGIN_COLLECTION.test(request.url.split('?')[0] ?? '')) return done();
+    const methods = crossOriginMethods(request);
+    if (methods === null) return done();
 
     /*
      * No `access-control-allow-credentials`, ever. That absence is the security property:
@@ -238,8 +300,7 @@ function registerCrossOriginCollection(app: FastifyInstance): void {
     if (request.method !== 'OPTIONS') return done();
 
     reply
-      // DELETE is here for one route only: releasing a screenshot before submitting.
-      .header('access-control-allow-methods', 'POST, GET, DELETE, OPTIONS')
+      .header('access-control-allow-methods', methods)
       // Exactly what the two modules send, and no more. A static list rather than an
       // echo of `access-control-request-headers`, so a client that adds a header gets a
       // clean preflight failure instead of a silently widened surface. The intent token
@@ -257,8 +318,19 @@ function registerCrossOriginCollection(app: FastifyInstance): void {
  */
 function registerErrorHandler(app: FastifyInstance): void {
   app.setErrorHandler((error, request, reply) => {
+    // An analytics query whose client went away (AN-205, `clientGoneSignal`): nobody reads the
+    // answer, and it is not a failure worth an error in the log.
+    if ((error as Error).name === 'AbortError' && reply.raw.destroyed) {
+      request.log.info('client closed the connection before its analytics query answered');
+      return reply.code(499).send();
+    }
     if (error instanceof ApiError) {
-      if (error.status >= 500) request.log.error({ err: error }, 'request failed');
+      // The event store down, warming up, or a query past its limit is an expected answer
+      // (AN-005, AN-205), not a fault: at warn, without a stack, so an outage does not fill
+      // the log with errors (release 8 hardening). Every other 5xx stays an error.
+      if (EXPECTED_UNAVAILABILITY.has(error.code)) request.log.warn({ code: error.code }, error.message);
+      else if (error.status >= 500) request.log.error({ err: error }, 'request failed');
+      if (error.retryAfterSeconds !== undefined) reply.header('retry-after', String(error.retryAfterSeconds));
       return reply.code(error.status).send(error.toBody());
     }
 
@@ -293,6 +365,9 @@ function registerErrorHandler(app: FastifyInstance): void {
     });
   });
 }
+
+/** The 503s the analytics routes answer by design; logged at warn by the error handler. */
+const EXPECTED_UNAVAILABILITY: ReadonlySet<string> = new Set(['analytics_unavailable', 'analytics_busy', 'query_limit_exceeded']);
 
 /**
  * Fastify and plugin errors carry their own codes and statuses; map them into the

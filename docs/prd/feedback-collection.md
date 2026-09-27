@@ -1,13 +1,13 @@
 # Inlet — Feedback Collection PRD
 
 ## Document Status
-**Status:** Shipped through Release 5, and Release 7 — SDK; requirements baseline for maintenance. Release 8 adds the shared SDK identity on submissions and a React Native adapter (FR-204 amended, FR-211 added): built on September 24, 2026 and published to npm as `inlet-sdk` 0.2.0; the installation ID arrives with the analytics module. Technical choices: `docs/DECISIONS.md` section 29.
+**Status:** Shipped through Release 5, and Release 7 — SDK; requirements baseline for maintenance. Release 8 adds the shared SDK identity on submissions and a React Native adapter (FR-204 amended, FR-211 added): built on September 24, 2026 and published to npm as `inlet-sdk` 0.2.0; the installation ID is attached while an analytics client is enabled, built with the analytics module (Release 8, September 27, 2026, not yet published). Technical choices: `docs/DECISIONS.md` section 29.
 **Product:** Inlet — Feedback Collection capability
 **Language:** English
 **Foundations:** Every shared rule (accounts, roles, keys, notifications plumbing, export, deletion, deployment, brand, SDK and MCP conventions) is on the Foundations PRD and is not repeated here.
 **Notion page:** https://app.notion.com/p/3ddd33dfffca81c98977df8dac6975b0
 **Repository mirror:** `docs/prd/feedback-collection.md`
-**Last revised:** September 24, 2026 (Release 8: FR-211 added; FR-062, FR-062B, FR-066, FR-111, FR-190, FR-191, FR-198, FR-201, FR-204 and sections 9.2, 10.10, 25.5, 25.6 and 25.7 amended for the shared SDK identity and React Native)
+**Last revised:** September 27, 2026 (Release 8 build: FR-062A amended, a `clientContext`'s nesting is bounded). Earlier, on September 24, 2026 (Release 8: FR-211 added; FR-062, FR-062B, FR-066, FR-111, FR-190, FR-191, FR-198, FR-201, FR-204 and sections 9.2, 10.10, 25.5, 25.6 and 25.7 amended for the shared SDK identity and React Native)
 
 > **Provenance.** This page absorbs sections 7.1–7.3, 8.4, 8.5, 8.6, 8.9, 8.10, 9.1–9.4, 10.5, 10.7–10.11, 10.13, 12.4, 13, 15, 21, 22 and 24 of the unified PRD, plus the feedback-specific lines of sections 3, 4, 6, 9.6, 11, 12.2, 12.3, 14, 16 and 17. Section 23 (notifications) moved to Foundations as a shared mechanism; what a response notification contains is still defined there (FR-159 to FR-161, FR-171).
 
@@ -133,7 +133,7 @@ Sections 8.1, 8.2, 8.3, 8.7, 8.8 and 8.11 are on the Foundations PRD. Deleting a
 - **FR-060:** No respondent account or identity is required. A submission becomes contactable only when the form contains an email question and the respondent provides an address. The observed request IP address is recorded as operational metadata.
 - **FR-061:** The service shall store submitted answers in JSON or an equivalent flexible structured representation.
 - **FR-062:** Each submission shall record its feedback database, form version, submission intent, server-side submission timestamp, observed request IP address, answers, optional client context, and, when supplied, the installation, session and user IDs of the SDK identity (FR-204), the installation and session IDs stored as lowercase dashed text whatever form the client sends (UX Analytics §9.1).
-- **FR-062A:** Client applications may provide an arbitrary JSON `clientContext` object of up to 16 KiB when serialized as UTF-8, for values such as their own user ID, browser information, respondent IP as observed by the integrator, or application metadata.
+- **FR-062A:** Client applications may provide an arbitrary JSON `clientContext` object of up to 16 KiB when serialized as UTF-8, for values such as their own user ID, browser information, respondent IP as observed by the integrator, or application metadata. A `clientContext` nested more than 64 levels deep, the object itself being the first level, shall be refused with `validation_failed` and a detail naming the path at which the bound is passed; the intent stays usable.
 - **FR-062B:** The platform shall preserve `clientContext` as supplied, except that in it and in the answers every string has its lone surrogates replaced with U+FFFD and its U+0000 characters removed, as crash reports do (Crash Reports CR-011), because PostgreSQL refuses both in `jsonb`; and it shall make clear that the integrating platform user is responsible for its contents and lawful use.
 - **FR-062C:** The observed request IP shall be resolved after applying the deployment's trusted-proxy configuration. For server-to-server submissions it identifies the integrating server, not the respondent; the platform shall not present it as respondent location.
 - **FR-063:** Authorized users shall be able to list submissions for a feedback database. How that list presents a response, and what it records about who has read what, is specified in section 24.

@@ -24,7 +24,7 @@ import type {
 } from './types.js';
 
 export const SDK_NAME = 'inlet-sdk';
-export const SDK_VERSION = '0.2.0';
+export const SDK_VERSION = '0.3.0';
 
 const DEDUPE_KEY = 'dedupe';
 type DedupeState = { byFingerprint: Record<string, number>; recent: number[] };
@@ -116,6 +116,11 @@ export class CrashClient {
         : {}),
     });
     this.transport.setPaused(!this.enabled);
+    // CR-119, AN-150: the analytics module asks whether crashes are being reported when it
+    // sends `app_started`. The last client created answers, as `getClient` does.
+    this.identity.crashReporting = () => this.reportsCrashes();
+    // AN-225: `forget` removes the installation ID from reports still queued.
+    this.identity.onForget((installationId) => this.transport.forgetInstallation(installationId));
     // CR-098: replay whatever a previous run left behind, without blocking `init`.
     void this.transport.load().then(() => this.scheduleFlush());
   }
@@ -151,17 +156,17 @@ export class CrashClient {
 
   /** CR-092: an Error becomes a kind `exception` envelope with frames from its stack. */
   captureException(error: unknown, options: CaptureOptions = {}): Promise<string | null> {
-    return this.capture(this.envelopeFromError(error, options), { sync: false });
+    return this.capture(this.envelopeFromError(error, options));
   }
 
   /** CR-092: a message becomes a kind `message` envelope with no frames. */
   captureMessage(message: string, options: CaptureOptions = {}): Promise<string | null> {
-    return this.capture(this.envelopeFromMessage(message, options), { sync: false });
+    return this.capture(this.envelopeFromMessage(message, options));
   }
 
   /** CR-092: a complete envelope the integrator built, for what the SDK cannot observe itself. */
   captureReport(report: CrashReportInput): Promise<string | null> {
-    return this.capture(this.completeEnvelope(report), { sync: false });
+    return this.capture(this.completeEnvelope(report), report.previousRun === true);
   }
 
   /**
@@ -176,7 +181,7 @@ export class CrashClient {
   }
 
   captureReportSync(report: CrashReportInput): string | null {
-    return this.captureSync(this.completeEnvelope(report));
+    return this.captureSync(this.completeEnvelope(report), report.previousRun === true);
   }
 
   /** CR-098: sends what is queued; resolves when the queue is empty, paused or the timeout passes. */
@@ -254,15 +259,108 @@ export class CrashClient {
 
   /**
    * CR-118: the session ID, and the installation ID while an analytics client of the
-   * application has one, unless `identity: false`. A capture is activity and extends the
+   * application is enabled, unless `identity: false`. A capture is activity and extends the
    * session. CR-119: a report about the previous run carries that run's IDs as its
-   * sentinel recorded them, and only an enabled analytics client records any, so without
-   * one it carries none rather than the current run's.
+   * sentinel recorded them (`identity.previousRun`), and only an enabled analytics client
+   * records any, so without one it carries none rather than the current run's.
    */
   private identityFields(previousRun: boolean): { sessionId?: string; installationId?: string } {
-    if (this.options.identity === false || previousRun) return {};
-    const installationId = this.identity.installationId;
+    if (this.options.identity === false) return {};
+    if (previousRun) {
+      const recorded = this.identity.previousRun;
+      return { ...(recorded?.sessionId ? { sessionId: recorded.sessionId } : {}), ...(recorded?.installationId ? { installationId: recorded.installationId } : {}) };
+    }
+    // FD-016, RC-119: decided by the analytics client's state, never by an ID being present.
+    const installationId = this.identity.analyticsEnabled ? this.identity.installationId : null;
     return { sessionId: this.identity.sessionId(this.now()), ...(installationId ? { installationId } : {}) };
+  }
+
+  /** AN-150, AN-151: an analytics client is enabled, or this report names a session the sentinel recorded. */
+  private flagging(previousRun: boolean): boolean {
+    return this.identity.analyticsEnabled || (previousRun && Boolean(this.identity.previousRun?.sessionId));
+  }
+
+  /**
+   * CR-119, AN-150: whether this report ends a session. The crashing kinds; in a browser only
+   * an unhandled exception or rejection with an in-app frame, so an extension's error does
+   * not count and a rejection without a stack never does.
+   */
+  private isCrash(envelope: CrashEnvelope): boolean {
+    const unhandled = envelope.kind === 'unhandled-rejection' || (envelope.kind === 'exception' && envelope.exception?.handled === false);
+    if (this.options.platform === 'browser') return unhandled && (envelope.exception?.frames ?? []).some((frame) => frame.inApp);
+    return unhandled || envelope.kind === 'native' || envelope.kind === 'unclean-exit' || envelope.kind === 'renderer-gone';
+  }
+
+  /**
+   * AN-150, AN-151: flags the report's session in the shared identity, whatever `identity`
+   * says. A report about the previous run flags the session the sentinel recorded for it,
+   * or nothing.
+   */
+  private flag(envelope: CrashEnvelope, previousRun: boolean): void {
+    const identity = this.identity;
+    const now = this.now();
+    if (previousRun) {
+      const recorded = identity.previousRun;
+      if (!recorded?.sessionId) return;
+      // AN-230: `crashedAt` is when the run was last seen alive, as the sentinel's last touch
+      // says; without one, the report's time, since when it died is not known.
+      identity.flagCrash(
+        {
+          sessionId: recorded.sessionId,
+          ...(recorded.installationId ? { installationId: recorded.installationId } : {}),
+          appVersion: recorded.appVersion ?? envelope.release.version,
+          ...(!recorded.appVersion && envelope.release.build ? { appBuild: envelope.release.build } : {}),
+          kind: envelope.kind,
+          at: recorded.lastSeenAt ?? (Date.parse(envelope.timestamp) || now),
+        },
+        true,
+      );
+      return;
+    }
+    const app = identity.analyticsApp;
+    identity.flagCrash({
+      sessionId: envelope.sessionId ?? identity.sessionId(now),
+      ...(identity.installationId ? { installationId: identity.installationId } : {}),
+      ...(app ? { appVersion: app.version, ...(app.build ? { appBuild: app.build } : {}) } : {}),
+      kind: envelope.kind,
+      at: now,
+    });
+  }
+
+  /**
+   * AN-150: a crashing report dropped by the bounds check still ends its session, because
+   * only the integrator's synchronous hook decides that a report is not a crash. The hook
+   * runs on it for that decision alone; the report stays unsent, and `onDrop` has already
+   * said why.
+   */
+  private flagUnsent(envelope: CrashEnvelope, previousRun: boolean): void {
+    if (!this.flagging(previousRun) || !this.isCrash(envelope)) return;
+    let kept: CrashEnvelope | null = envelope;
+    if (this.options.beforeSendSync) {
+      try {
+        kept = this.options.beforeSendSync(envelope);
+      } catch (error) {
+        this.debug('beforeSendSync threw on a report dropped for its size; its session is not flagged.', error);
+        kept = null;
+      }
+    }
+    if (kept && this.isCrash(kept)) this.flag(kept, previousRun);
+  }
+
+  /**
+   * CR-119, AN-150: a crash module is enabled and, in a browser, at least one of the page's
+   * scripts lies within its app roots — a page served wholly from a CDN the roots miss would
+   * never flag a session, and must read as unmeasured rather than crash-free.
+   */
+  private reportsCrashes(): boolean {
+    if (!this.isEnabled) return false;
+    if (this.options.platform !== 'browser' || typeof document === 'undefined') return true;
+    const here = typeof location === 'undefined' ? '' : location.href;
+    // An inline script runs on the page's own address; one that is data (JSON-LD, an import
+    // map) runs nothing, and never puts a frame in a stack.
+    const runs = (type: string | undefined) => !type || /^(module|(text|application)\/(java|ecma)script)$/i.test(type.trim());
+    const scripts = Array.from(document.scripts ?? [], (script) => script.src || (runs(script.type) ? here : ''));
+    return markFrames(scripts.filter(Boolean).map((file) => ({ file: file.replace(/^file:\/\//, '') })), this.appRoots).some((frame) => frame.inApp);
   }
 
   private envelopeFromError(error: unknown, options: CaptureOptions): CrashEnvelope {
@@ -365,12 +463,15 @@ export class CrashClient {
     }
   }
 
-  private async capture(envelope: CrashEnvelope, _mode: { sync: false }): Promise<string | null> {
+  private async capture(envelope: CrashEnvelope, previousRun = false): Promise<string | null> {
     if (this.closed || !this.enabled) {
       this.onDrop('disabled');
       return null;
     }
-    if (!this.sampled()) {
+    // AN-150: with an analytics client enabled a crash is flagged before sampling, so the
+    // sampling decision waits until the synchronous hook has had its say.
+    const flagging = this.flagging(previousRun);
+    if (!flagging && !this.sampled()) {
       this.onDrop('sampled');
       return null;
     }
@@ -378,10 +479,18 @@ export class CrashClient {
     if (problem) {
       this.debug(`Crash report dropped: ${problem}.`);
       this.onDrop('bounds', problem);
+      this.flagUnsent(envelope, previousRun);
       return null;
     }
     let final: CrashEnvelope | null = this.runBeforeSendSync(envelope);
     if (!final) return null;
+    if (flagging) {
+      if (this.isCrash(final)) this.flag(final, previousRun);
+      if (!this.sampled()) {
+        this.onDrop('sampled');
+        return null;
+      }
+    }
     if (this.options.beforeSend) {
       try {
         final = await this.options.beforeSend(final);
@@ -414,12 +523,13 @@ export class CrashClient {
     return final.eventId;
   }
 
-  private captureSync(envelope: CrashEnvelope): string | null {
+  private captureSync(envelope: CrashEnvelope, previousRun = false): string | null {
     if (this.closed || !this.enabled) {
       this.onDrop('disabled');
       return null;
     }
-    if (!this.sampled()) {
+    const flagging = this.flagging(previousRun);
+    if (!flagging && !this.sampled()) {
       this.onDrop('sampled');
       return null;
     }
@@ -427,12 +537,22 @@ export class CrashClient {
     if (problem) {
       this.debug(`Crash report dropped: ${problem}.`);
       this.onDrop('bounds', problem);
+      this.flagUnsent(envelope, previousRun);
       return null;
     }
     // CR-107: only the synchronous hook can run here. `beforeSend` is asynchronous by
     // contract and the process may not survive a microtask. Redaction has already applied.
     const final = this.runBeforeSendSync(envelope);
     if (!final) return null;
+    // AN-150, AN-151: flagged, and written synchronously where the store allows, before the
+    // process can die and before dedupe and sampling can drop the report.
+    if (flagging) {
+      if (this.isCrash(final)) this.flag(final, previousRun);
+      if (!this.sampled()) {
+        this.onDrop('sampled');
+        return null;
+      }
+    }
     problem = this.checkBounds(final);
     if (problem) {
       this.debug(`Crash report dropped after beforeSendSync: ${problem}.`);

@@ -756,6 +756,17 @@ describe('slack notifications', () => {
     expect((await settings())?.lastDeliveryAt).not.toBeNull();
   });
 
+  it('escapes the database name in the test message’s default heading (release 8 hardening)', async () => {
+    await enable();
+    const renamed = await asAdmin(h, 'PATCH', `/v1/feedback-databases/${ctx.databaseId}`, { name: 'Beta <!channel>' });
+    expect(renamed.statusCode, renamed.body).toBe(200);
+    const response = await asAdmin(h, 'POST', `/v1/feedback-databases/${ctx.databaseId}/slack-notifications/test`);
+    expect(response.statusCode).toBe(200);
+    const posted = slack.received[0]!;
+    expect(posted.body.text).toBe('Test message from Inlet · Beta &lt;!channel&gt;');
+    expect(posted.raw).not.toContain('<!channel>');
+  });
+
   it('reports what Slack said when a test message is refused', async () => {
     await enable();
     slack.reply = () => ({ status: 404, body: 'no_service' });

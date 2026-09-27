@@ -161,6 +161,8 @@ export function registerCrashTools(server: McpServer, client: InletClient): void
     'get_crash_report',
     {
       title: 'Read one crash report',
+      description:
+        'The report with its envelope, release, OS and environment, and the SDK identity it carried (CR-118): `userId`, `installationId` and `sessionId` (the two IDs as UUIDs, lowercase and dashed), null when absent. Pass the installation ID to get_analytics_profile to see that installation’s usage, or to list_crash_groups as `installationId` (or the session ID as `sessionId`) for its other crashes.',
       inputSchema: { crashDatabaseId, reportId },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },

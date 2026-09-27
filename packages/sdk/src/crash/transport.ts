@@ -1,7 +1,7 @@
 import { CRASH_LIMITS } from '@inlet/shared/crash-core';
 export { MemoryStore } from '../store.js';
 import type { QueueStore } from '../store.js';
-import { capabilities, timeoutSignal } from '../health.js';
+import { capabilities, settleWithin, timeoutSignal } from '../health.js';
 import type { CrashEnvelope, DropReason, SentReport } from './types.js';
 
 /**
@@ -173,7 +173,7 @@ export class Transport {
       });
     }
     if (timeoutMs === undefined) return this.flushing;
-    return Promise.race([this.flushing, this.sleep(timeoutMs)]);
+    return settleWithin(this.flushing, timeoutMs);
   }
 
   close(): void {
@@ -193,6 +193,22 @@ export class Transport {
     await this.load();
     this.items = [];
     await this.persist();
+  }
+
+  /**
+   * AN-225, FD-016: `forget` in the analytics module removes the installation ID from
+   * reports still queued, those left on disk by a previous run included. Null removes any.
+   */
+  async forgetInstallation(installationId: string | null): Promise<void> {
+    await this.load();
+    let changed = false;
+    this.items = this.items.map((item) => {
+      if (item.envelope.installationId === undefined || (installationId !== null && item.envelope.installationId !== installationId)) return item;
+      changed = true;
+      const { installationId: _removed, ...envelope } = item.envelope;
+      return { ...item, envelope };
+    });
+    if (changed) await this.persist();
   }
 
   private async run(): Promise<void> {

@@ -13,7 +13,7 @@
 
 import { sha256Hex, truncateText } from './text.js';
 
-export { normalizeUuid, sanitizeDeep, sanitizeText, sha256Hex, truncateText, uuidV4, uuidV7, randomBytes, type RandomSource } from './text.js';
+export { JSON_NESTING_MAX, NestingTooDeepError, normalizeUuid, sanitizeDeep, sanitizeText, sha256Hex, truncateText, uuidV4, uuidV7, randomBytes, type RandomSource } from './text.js';
 
 export const CRASH_LIMITS = {
   /** CR-011: the serialized envelope, UTF-8. */

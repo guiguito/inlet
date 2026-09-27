@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { DEFAULT_SLACK_WEBHOOK_ORIGIN } from '@inlet/shared';
+import { ANALYTICS_DEFAULTS as A, DEFAULT_SLACK_WEBHOOK_ORIGIN } from '@inlet/shared';
 
 /**
  * Deployment configuration (PRD section 12.6).
@@ -17,6 +17,23 @@ import { DEFAULT_SLACK_WEBHOOK_ORIGIN } from '@inlet/shared';
 const bool = z
   .string()
   .transform((value) => ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase()));
+
+/**
+ * A ClickHouse address (UX Analytics 9.4, Foundations FD-009): unset or empty means none.
+ * The database is INLET_CLICKHOUSE_DATABASE, never the URL's path, so one address can serve
+ * the test and end-to-end databases and there is one place that names it.
+ */
+// URL.parse, not `new URL`: the refinements run even when `.url()` has already failed, and
+// the TypeError `new URL` throws would crash startup printing the whole URL, password included.
+const clickhouseUrl = z.preprocess(
+  (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+  z
+    .string()
+    .url()
+    .refine((value) => ['http:', 'https:'].includes(URL.parse(value)?.protocol ?? ''), 'must be an http or https URL')
+    .refine((value) => ['', '/'].includes(URL.parse(value)?.pathname ?? ''), 'must not name a database; set INLET_CLICKHOUSE_DATABASE instead')
+    .optional(),
+);
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -100,6 +117,39 @@ const envSchema = z.object({
    */
   INLET_SLACK_WEBHOOK_ORIGINS: z.string().default(DEFAULT_SLACK_WEBHOOK_ORIGIN),
 
+  /**
+   * The analytics event store (UX Analytics 9.4). Unset means none: analytics is off and
+   * everything else runs unchanged (FD-009). The URL carries the credentials of the user
+   * that writes — inserts, deletes and the migrations' DDL — as
+   * `http://user:password@host:8123`.
+   */
+  INLET_CLICKHOUSE_URL: clickhouseUrl,
+  /**
+   * A read-only user for analytics queries (UX Analytics 9.5, "reading as a read-only user
+   * and writing as another"). Unset, reads use the writer's credentials with `readonly = 2`
+   * sent on every read, which the server enforces just the same, and startup says so.
+   */
+  INLET_CLICKHOUSE_READ_URL: clickhouseUrl,
+  /** Created by the migrations when missing. */
+  INLET_CLICKHOUSE_DATABASE: z
+    .string()
+    .regex(/^[A-Za-z_][A-Za-z0-9_]{0,63}$/, 'must be a plain identifier')
+    .default('inlet'),
+
+  /**
+   * UX Analytics AN-033, Foundations §12.1, FD-032: the header in which a trusted reverse
+   * proxy reports the client's country, such as Cloudflare's `CF-IPCountry`. Honoured only
+   * for a request whose address was resolved through a proxy INLET_TRUSTED_PROXIES names.
+   * Empty: the bundled IP-to-country database alone.
+   */
+  INLET_COUNTRY_HEADER: z.string().default(''),
+  /**
+   * AN-033: a DB-IP Lite (or MaxMind-format) country database. Empty means the one bundled
+   * with the platform, `apps/api/ip-country/dbip-country-lite.mmdb`, which the Docker image
+   * fetches at build and `npm run services:up` fetches for development.
+   */
+  INLET_IP_COUNTRY_DB: z.string().default(''),
+
   /** Directory holding the built management interface. Empty disables SPA serving. */
   INLET_WEB_DIST: z.string().default(''),
 
@@ -134,6 +184,49 @@ export const OPERATOR_LIMITS = {
   crashRetentionDaysMin: { env: 'INLET_CRASH_RETENTION_DAYS_MIN', default: 7, min: 1, max: 3_650 },
   crashRetentionDaysMax: { env: 'INLET_CRASH_RETENTION_DAYS_MAX', default: 365, min: 1, max: 3_650 },
   crashRetentionDaysDefault: { env: 'INLET_CRASH_RETENTION_DAYS_DEFAULT', default: 90, min: 1, max: 3_650 },
+
+  // --- UX Analytics (section 14's defaults; DECISIONS 33.2 justifies each hard limit) ---
+  /** AN-001: each database adds about 57 weekly partitions at 13 months; 175 keeps a deployment near 10,000. */
+  analyticsDatabasesMax: { env: 'INLET_ANALYTICS_DATABASES_MAX', default: A.databasesPerDeployment, min: 1, max: 175 },
+  /** AN-021: distinct event names per database, at most 5,000 by the PRD. */
+  analyticsEventNamesMax: { env: 'INLET_ANALYTICS_EVENT_NAMES_MAX', default: A.eventNameLimit, min: 10, max: A.eventNameLimitMax },
+  analyticsNewEventNamesPerHour: { env: 'INLET_ANALYTICS_NEW_EVENT_NAMES_PER_HOUR', default: A.newEventNamesPerHour, min: 1, max: A.eventNameLimitMax },
+  /** AN-022. */
+  analyticsParamKeysPerEvent: { env: 'INLET_ANALYTICS_PARAM_KEYS_PER_EVENT', default: A.paramKeysPerEventName, min: 1, max: 1_000 },
+  analyticsCategoriesPerEvent: { env: 'INLET_ANALYTICS_CATEGORIES_PER_EVENT', default: A.categoriesPerEventName, min: 1, max: 100 },
+  /** AN-160: the storage settings' defaults and bounds. The operator sets the defaults too. */
+  analyticsMaxAgeDaysMin: { env: 'INLET_ANALYTICS_MAX_AGE_DAYS_MIN', default: A.maxAgeDaysMin, min: 7, max: 3_650 },
+  analyticsMaxAgeDaysMax: { env: 'INLET_ANALYTICS_MAX_AGE_DAYS_MAX', default: A.maxAgeDaysMax, min: 7, max: 3_650 },
+  analyticsMaxAgeDaysDefault: { env: 'INLET_ANALYTICS_MAX_AGE_DAYS_DEFAULT', default: A.maxAgeDays, min: 7, max: 3_650 },
+  // Above 2^31, below 2^53: parsed exactly as a JavaScript number and stored as a bigint.
+  analyticsMaxEventsMin: { env: 'INLET_ANALYTICS_MAX_EVENTS_MIN', default: A.maxEventsMin, min: 10_000, max: 1_000_000_000_000 },
+  analyticsMaxEventsMax: { env: 'INLET_ANALYTICS_MAX_EVENTS_MAX', default: A.maxEventsMax, min: 10_000, max: 1_000_000_000_000 },
+  analyticsMaxEventsDefault: { env: 'INLET_ANALYTICS_MAX_EVENTS_DEFAULT', default: A.maxEvents, min: 10_000, max: 1_000_000_000_000 },
+  analyticsLatenessDaysMin: { env: 'INLET_ANALYTICS_LATENESS_DAYS_MIN', default: A.latenessDaysMin, min: 1, max: 365 },
+  analyticsLatenessDaysMax: { env: 'INLET_ANALYTICS_LATENESS_DAYS_MAX', default: A.latenessDaysMax, min: 1, max: 365 },
+  analyticsLatenessDaysDefault: { env: 'INLET_ANALYTICS_LATENESS_DAYS_DEFAULT', default: A.latenessDays, min: 1, max: 365 },
+  /** AN-020: ingest, counted in events. */
+  analyticsPerKeyFiveMinutes: { env: 'INLET_LIMIT_ANALYTICS_PER_KEY_5M', default: A.perCredentialPerFiveMinutes, min: 1_000, max: 100_000_000 },
+  analyticsPerKeyHour: { env: 'INLET_LIMIT_ANALYTICS_PER_KEY_HOUR', default: A.perCredentialPerHour, min: 1_000, max: 1_000_000_000 },
+  analyticsPerInstallationFiveMinutes: { env: 'INLET_LIMIT_ANALYTICS_PER_INSTALLATION_5M', default: A.perInstallationPerFiveMinutes, min: 10, max: 1_000_000 },
+  analyticsPerAddressPerMinute: { env: 'INLET_LIMIT_ANALYTICS_PER_ADDRESS_PER_MINUTE', default: A.perAddressRequestsPerMinute, min: 60, max: 1_000_000 },
+  /** AN-205, section 9.5. At least two, because one is kept for signed-in users. */
+  analyticsQuerySlots: { env: 'INLET_ANALYTICS_QUERY_SLOTS', default: A.querySlots, min: 2, max: 64 },
+  analyticsQueryTimeSeconds: { env: 'INLET_ANALYTICS_QUERY_TIME_S', default: A.queryTimeSeconds, min: 1, max: 600 },
+  analyticsFunnelTrendTimeSeconds: { env: 'INLET_ANALYTICS_FUNNEL_TREND_TIME_S', default: A.funnelTrendTimeSeconds, min: 1, max: 3_600 },
+  /**
+   * Section 9.5: sized for the Small host, whose ClickHouse is capped at about 3 GB. Three
+   * slots at 768 MiB hold 2.25 GiB, leaving the rest to inserts and merges.
+   */
+  analyticsQueryMemoryBytes: { env: 'INLET_ANALYTICS_QUERY_MEMORY_BYTES', default: 805_306_368, min: 67_108_864, max: 1_099_511_627_776 },
+  /**
+   * Section 9.5: half the cores per query. 0, the default, means exactly that: half of what
+   * the event store reports as its own `max_threads`, resolved by the query layer, since the
+   * API cannot know the cores of a ClickHouse on another host.
+   */
+  analyticsQueryThreads: { env: 'INLET_ANALYTICS_QUERY_THREADS', default: 0, min: 0, max: 256 },
+  /** AN-184: the bound within which erased events leave the event store's files. The operator may only shorten it. */
+  analyticsErasureFileRemovalDays: { env: 'INLET_ANALYTICS_ERASURE_BOUND_DAYS', default: A.erasureFileRemovalDays, min: 1, max: A.erasureFileRemovalDays },
 } as const;
 
 export type OperatorLimits = { -readonly [K in keyof typeof OPERATOR_LIMITS]: number };
@@ -155,13 +248,22 @@ export function parseOperatorLimits(source: NodeJS.ProcessEnv): OperatorLimits {
     }
     out[key] = value;
   }
-  for (const [unit, min, def, max] of [
-    ['REPORTS', out.crashRetentionReportsMin, out.crashRetentionReportsDefault, out.crashRetentionReportsMax],
-    ['DAYS', out.crashRetentionDaysMin, out.crashRetentionDaysDefault, out.crashRetentionDaysMax],
+  for (const [prefix, min, def, max] of [
+    ['INLET_CRASH_RETENTION_REPORTS', out.crashRetentionReportsMin, out.crashRetentionReportsDefault, out.crashRetentionReportsMax],
+    ['INLET_CRASH_RETENTION_DAYS', out.crashRetentionDaysMin, out.crashRetentionDaysDefault, out.crashRetentionDaysMax],
+    ['INLET_ANALYTICS_MAX_AGE_DAYS', out.analyticsMaxAgeDaysMin, out.analyticsMaxAgeDaysDefault, out.analyticsMaxAgeDaysMax],
+    ['INLET_ANALYTICS_MAX_EVENTS', out.analyticsMaxEventsMin, out.analyticsMaxEventsDefault, out.analyticsMaxEventsMax],
+    ['INLET_ANALYTICS_LATENESS_DAYS', out.analyticsLatenessDaysMin, out.analyticsLatenessDaysDefault, out.analyticsLatenessDaysMax],
   ] as const) {
     if (problems.length === 0 && !(min <= def && def <= max)) {
-      problems.push(`  INLET_CRASH_RETENTION_${unit}_*: MIN ≤ DEFAULT ≤ MAX must hold; got ${min}, ${def}, ${max}`);
+      problems.push(`  ${prefix}_*: MIN ≤ DEFAULT ≤ MAX must hold; got ${min}, ${def}, ${max}`);
     }
+  }
+  // AN-160: the lateness window is never longer than the maximum age.
+  if (problems.length === 0 && out.analyticsLatenessDaysDefault > out.analyticsMaxAgeDaysDefault) {
+    problems.push(
+      `  INLET_ANALYTICS_LATENESS_DAYS_DEFAULT: must not exceed INLET_ANALYTICS_MAX_AGE_DAYS_DEFAULT; got ${out.analyticsLatenessDaysDefault} and ${out.analyticsMaxAgeDaysDefault}`,
+    );
   }
   if (problems.length > 0) throw new Error(`Invalid Inlet configuration:\n${problems.join('\n')}`);
   return out;

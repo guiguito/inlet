@@ -22,6 +22,9 @@ export const ID_PREFIXES = {
   crashGroup: 'cgr',
   crashReport: 'crp',
   crashRelease: 'crl',
+  analyticsDatabase: 'adb',
+  analyticsFunnel: 'afn',
+  analyticsCohort: 'aco',
 } as const;
 
 export type IdKind = keyof typeof ID_PREFIXES;

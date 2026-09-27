@@ -49,7 +49,9 @@ export type SlackMessageInput = {
 };
 
 export function buildSlackMessage(input: SlackMessageInput): SlackMessage {
-  const heading = input.settings.messageTitle?.trim() || `New response in ${input.databaseName}`;
+  // The operator's title may carry Slack markup on purpose; the database name in the default
+  // one is escaped, as the analytics renderer does, so a name cannot carry `<!channel>`.
+  const heading = input.settings.messageTitle?.trim() || `New response in ${escapeSlackText(input.databaseName)}`;
 
   const blocks: unknown[] = [
     {
@@ -244,11 +246,13 @@ export type CrashSlackMessageInput = {
  * CR-051: `kind · exception type or native fault · top in-app frame or faulting module ·
  * release`, then count, first seen and affected users, then the link. The message text
  * from the envelope is never sent: it may contain content. Every envelope-derived field
- * is escaped; the heading is operator-authored and is not, as for feedback.
+ * is escaped; the heading is operator-authored and is not, as for feedback (the database
+ * name in the default heading is).
  */
 export function buildCrashSlackMessage(input: CrashSlackMessageInput): SlackMessage {
   const regression = input.kind === 'crash_group_regressed';
-  const heading = input.settings.messageTitle?.trim() || (regression ? `Crash regression in ${input.databaseName}` : `New crash group in ${input.databaseName}`);
+  const name = escapeSlackText(input.databaseName);
+  const heading = input.settings.messageTitle?.trim() || (regression ? `Crash regression in ${name}` : `New crash group in ${name}`);
   const headline = [
     input.group.kind,
     input.group.exceptionType,

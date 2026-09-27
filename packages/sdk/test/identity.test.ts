@@ -97,13 +97,17 @@ describe('crash reports (CR-118)', () => {
     expect(server.sent[0]).not.toHaveProperty('installationId');
   });
 
-  it('carry the installation ID only while an analytics client holds one', async () => {
+  it('carry the installation ID only while an analytics client is enabled, never because one is present (RC-119)', async () => {
     const server = crashServer();
     const c = crash(server.fetch);
-    sharedIdentity().installationId = '0190a1b2-c3d4-4e5f-8a6b-7c8d9e0f1a2b';
+    const identity = sharedIdentity();
+    identity.installationId = '0190a1b2-c3d4-4e5f-8a6b-7c8d9e0f1a2b';
+    await c.captureMessage('an ID present, analytics not enabled');
+    identity.analyticsEnabled = true;
     await c.captureMessage('with analytics');
     await c.flush();
-    expect(server.sent[0]!.installationId).toBe('0190a1b2-c3d4-4e5f-8a6b-7c8d9e0f1a2b');
+    expect(server.sent[0]).not.toHaveProperty('installationId');
+    expect(server.sent[1]!.installationId).toBe('0190a1b2-c3d4-4e5f-8a6b-7c8d9e0f1a2b');
   });
 
   it('with identity: false carry exactly the 0.1.5 fields, the user ID included', async () => {

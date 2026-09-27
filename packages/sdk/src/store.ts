@@ -34,3 +34,58 @@ export class MemoryStore implements QueueStore {
     this.values.set(key, value);
   }
 }
+
+/**
+ * The identity's synchronous storage (FD-016) over a `QueueStore`. A store with `getSync`
+ * and `setSync` (a `FileStore`) is read and written directly, so a crash flag raised while
+ * the process dies is on disk before it goes. Any other store is read once into memory,
+ * `ready` resolving when it is, and written through asynchronously — the React Native shape.
+ * `QueueStore` has no delete; an empty value is an absent one to every reader.
+ */
+export function identityStorageOver(store: QueueStore, keys: readonly string[]): { storage: { read(key: string): string | null; write(key: string, value: string | null): void }; ready: Promise<void> | null } {
+  if (store.getSync && store.setSync) {
+    const getSync = store.getSync.bind(store);
+    const setSync = store.setSync.bind(store);
+    return {
+      storage: {
+        read: (key) => getSync(key) || null,
+        // A refused write (a full disk, a runtime permission) leaves the identity in memory
+        // for this run rather than throwing into the application or a crash handler.
+        write: (key, value) => {
+          try {
+            // Deleting what is not there writes nothing: `forget` while disabled must not leave
+            // empty files behind, since the opt-out is the one value written then (AN-225).
+            if (value === null && !getSync(key)) return;
+            setSync(key, value ?? '');
+          } catch {
+            // See above.
+          }
+        },
+      },
+      ready: null,
+    };
+  }
+  const cache = new Map<string, string>();
+  const ready = Promise.all(
+    keys.map(async (key) => {
+      try {
+        const value = await store.get(key);
+        if (value) cache.set(key, value);
+      } catch {
+        // Unreadable: that key starts empty.
+      }
+    }),
+  ).then(() => undefined);
+  return {
+    storage: {
+      read: (key) => cache.get(key) ?? null,
+      write: (key, value) => {
+        if (value === null && !cache.has(key)) return;
+        if (value === null) cache.delete(key);
+        else cache.set(key, value);
+        void Promise.resolve(store.set(key, value ?? '')).catch(() => {});
+      },
+    },
+    ready,
+  };
+}

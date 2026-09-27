@@ -12,7 +12,7 @@ import type {
 } from './types.js';
 
 export const SDK_NAME = 'inlet-sdk';
-export const SDK_VERSION = '0.2.0';
+export const SDK_VERSION = '0.3.0';
 
 /**
  * The feedback client (FR-190 to FR-192).
@@ -59,7 +59,7 @@ export class FeedbackClient {
       /*
        * FR-204, FD-016: the session ID (a submission is activity and extends it), the user
        * ID when one is set, and the installation ID only while an analytics client of this
-       * application holds one. Read when `submit` is called.
+       * application is enabled. Read when `submit` is called.
        */
       ...(options.identity === false
         ? {}
@@ -67,11 +67,14 @@ export class FeedbackClient {
             identity: () => ({
               sessionId: identity.sessionId(this.now()),
               ...(identity.userId ? { userId: identity.userId } : {}),
-              ...(identity.installationId ? { installationId: identity.installationId } : {}),
+              // FD-016, RC-119: decided by the analytics client's state, never by an ID being present.
+              ...(identity.analyticsEnabled && identity.installationId ? { installationId: identity.installationId } : {}),
             }),
           }),
       ...(deps.upload ? { upload: deps.upload } : {}),
     });
+    // AN-225: `forget` in the analytics module removes the installation ID from what is queued.
+    identity.onForget((installationId) => this.gateway.queue.forgetInstallation(installationId));
     // FR-201: a submission a previous run could not deliver is delivered now.
     this.gateway.start();
   }

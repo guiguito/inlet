@@ -18,18 +18,34 @@ Node.js 22 or newer.
 
 ```bash
 npm install
-npm run services:up      # local PostgreSQL and RustFS binaries, no Docker needed
+npm run services:up      # local PostgreSQL, RustFS and ClickHouse binaries, no Docker needed
 cp .env.example .env
 npm run dev              # API on :3000, web on :5173
 ```
 
 `npm run services:down` stops them again.
 
-The first run downloads PostgreSQL (through `embedded-postgres`) and the RustFS release
-binary, which is checked against a SHA-256 pinned in `scripts/local-services.mjs`, into
-`.dev/`. On an Intel Mac, which RustFS publishes no binary for, run the Docker services
-instead: `docker compose -f docker-compose.dev.yml up -d` uses the same ports and
-credentials, and the scripts reuse whatever already listens on them.
+The first run downloads PostgreSQL (through `embedded-postgres`) and the RustFS and
+ClickHouse release binaries, each checked against a SHA-256 pinned in
+`scripts/local-services.mjs`, into `.dev/`. ClickHouse is the large one: about 180 MB on
+macOS and 220 to 240 MB on Linux, downloaded once, and 800 to 900 MB on disk once unpacked
+(the macOS binary unpacks itself on its first start). On an Intel Mac, which RustFS publishes
+no binary for, run the Docker services instead: `docker compose -f docker-compose.dev.yml
+up -d` uses the same ports and credentials, and the scripts reuse whatever already listens
+on them.
+
+What runs where, all on 127.0.0.1 only:
+
+| Service | Port | Credentials | Data |
+| --- | --- | --- | --- |
+| PostgreSQL | 5433 | `inlet` / `inlet` | `.dev/pgdata` |
+| RustFS | 9010 | `inletdev` / `inletdevsecret` | `.dev/storage` |
+| ClickHouse | 8124 (HTTP), 9124 (native, for `.dev/bin/clickhouse client --port 9124 --user inlet --password inlet`) | writer `inlet` / `inlet`, read-only `inlet_reader` / `inlet_reader` | `.dev/clickhouse` |
+
+ClickHouse, the analytics event store, is sized for a laptop (a 4 GB ceiling, small caches,
+no system log tables). The tests use its `inlet_test` database and the end-to-end server
+`inlet_e2e`. To use analytics with `npm run dev`, uncomment the `INLET_CLICKHOUSE_*` lines
+in `.env`.
 
 ## What is expected of a change
 
@@ -43,6 +59,20 @@ GitHub Actions runs the same checks on every push and pull request
 (`.github/workflows/ci.yml`), plus `npm run test:metro -w inlet-sdk`, which bundles the SDK's
 React Native entries with Metro on React Native 0.74; run that one locally when you touch an
 entry React Native imports.
+
+### Two runs at once
+
+The suites reset their databases and bucket between tests, so two runs against the same
+services, from two checkouts or two agents in one working tree, would wipe each other's data.
+Give each run its own slot, an integer from 1 to 9:
+`INLET_TEST_SLOT=1 npm run test -w @inlet/api` in one shell and `INLET_TEST_SLOT=2 npm run
+test -w @inlet/api` in the other, and the same for `npx playwright test`. A slot suffixes the
+PostgreSQL and ClickHouse databases (`inlet_test_1`, `inlet_e2e_1`) and the buckets
+(`inlet-test-1`, `inlet-e2e-1`), serves the end-to-end server on port 3100 + slot with the fake
+Slack on 3110 + slot, and writes Playwright's output to `test-results-<slot>`. The end-to-end server
+builds and serves the web app from `apps/web/dist-<slot>`, so one run's build never empties
+the files another run is serving. The services stay the ones above. Without the variable
+nothing changes.
 
 ### The live Slack test
 
@@ -64,8 +94,8 @@ live URL, so an all-alphanumeric one blocks pushes from this repository *and fro
 fork of it*. If you add a fixture shaped like a credential, break the shape somewhere
 the code under test does not care about.
 
-**Tests are not optional for logic.** The existing suite is 544 unit and integration
-tests plus 69 end-to-end, and it is the reason the project can be changed confidently.
+**Tests are not optional for logic.** The existing suite is 1,443 unit and integration
+tests plus 119 end-to-end, and it is the reason the project can be changed confidently.
 A behavioural change without a test that fails before it and passes after is not
 finished. Conversely, do not add a test that cannot fail.
 
@@ -78,6 +108,13 @@ the PRD can catch up.
 then rename the file to something a human can read (`0005_saved_filters.sql`) and
 update the tag in `apps/api/drizzle/meta/_journal.json` to match. Migrations are
 additive: adding tables and columns, not rewriting or dropping data.
+
+**ClickHouse migrations are written by hand.** Drizzle manages PostgreSQL only. The event
+store's schema is numbered SQL files in `apps/api/clickhouse/` (`0002_something.sql`), applied
+in order at start and recorded in its `inlet_migrations` table. A file may hold several
+statements separated by `;`; each must be idempotent (`IF NOT EXISTS`), because a file
+interrupted part-way is applied again from the start. Every value in a query is a bound
+parameter (`{name:Type}`), never text pasted into the SQL.
 
 **Match the surrounding code.** This codebase comments the *why*, not the *what*, and
 it is fairly consistent about it. A comment explaining that a loop iterates is noise; a

@@ -8,6 +8,8 @@ import {
   users,
   crashDatabaseMemberships,
   crashDatabases,
+  analyticsDatabaseMemberships,
+  analyticsDatabases,
 } from '../db/schema.js';
 import { apiError, errors } from '../lib/errors.js';
 import { countProjectAdmins } from './access.js';
@@ -269,7 +271,56 @@ export async function clearCrashDatabaseRole(ctx: AppContext, databaseId: string
   if (!deleted[0]) throw apiError('not_found', 'That person has no assignment on this crash database.');
 }
 
-/** FR-071A and "has an account", shared by both database types. */
+// --- Analytics-database memberships (FD-007, Release 8) -------------------------------
+
+async function analyticsProjectId(ctx: AppContext, databaseId: string): Promise<string> {
+  const rows = await ctx.db.select({ projectId: analyticsDatabases.projectId }).from(analyticsDatabases).where(eq(analyticsDatabases.id, databaseId)).limit(1);
+  const projectId = rows[0]?.projectId;
+  if (!projectId) throw apiError('analytics_database_not_found', 'That analytics database does not exist.');
+  return projectId;
+}
+
+export async function listAnalyticsDatabaseMembers(ctx: AppContext, databaseId: string): Promise<MemberView[]> {
+  const projectId = await analyticsProjectId(ctx, databaseId);
+  const projectRoles = new Map((await listProjectMembers(ctx, projectId)).map((member) => [member.userId, member]));
+  const overrides = await ctx.db
+    .select({
+      userId: users.id,
+      email: users.email,
+      displayName: users.displayName,
+      role: analyticsDatabaseMemberships.role,
+      createdAt: analyticsDatabaseMemberships.createdAt,
+    })
+    .from(analyticsDatabaseMemberships)
+    .innerJoin(users, eq(users.id, analyticsDatabaseMemberships.userId))
+    .where(eq(analyticsDatabaseMemberships.analyticsDatabaseId, databaseId));
+  return mergeMembers(projectRoles, overrides);
+}
+
+export async function setAnalyticsDatabaseRole(ctx: AppContext, databaseId: string, userId: string, role: Role): Promise<MemberView> {
+  const projectId = await analyticsProjectId(ctx, databaseId);
+  await assertOverridable(ctx, projectId, userId);
+  await ctx.db
+    .insert(analyticsDatabaseMemberships)
+    .values({ analyticsDatabaseId: databaseId, userId, role })
+    .onConflictDoUpdate({
+      target: [analyticsDatabaseMemberships.analyticsDatabaseId, analyticsDatabaseMemberships.userId],
+      set: { role, updatedAt: new Date() },
+    });
+  const updated = (await listAnalyticsDatabaseMembers(ctx, databaseId)).find((member) => member.userId === userId);
+  if (!updated) throw apiError('internal_error', 'The assignment could not be read back.');
+  return updated;
+}
+
+export async function clearAnalyticsDatabaseRole(ctx: AppContext, databaseId: string, userId: string): Promise<void> {
+  const deleted = await ctx.db
+    .delete(analyticsDatabaseMemberships)
+    .where(and(eq(analyticsDatabaseMemberships.analyticsDatabaseId, databaseId), eq(analyticsDatabaseMemberships.userId, userId)))
+    .returning({ userId: analyticsDatabaseMemberships.userId });
+  if (!deleted[0]) throw apiError('not_found', 'That person has no assignment on this analytics database.');
+}
+
+/** FR-071A and "has an account", shared by every database type. */
 async function assertOverridable(ctx: AppContext, projectId: string, userId: string): Promise<void> {
   const projectRole = await ctx.db
     .select({ role: projectMemberships.role })
@@ -390,5 +441,10 @@ async function clearDatabaseOverrides(
   await ctx.db.execute(
     sql`delete from crash_database_memberships where user_id = ${userId}
         and crash_database_id in (select id from crash_databases where project_id = ${projectId})`,
+  );
+  // FD-007: and its analytics databases.
+  await ctx.db.execute(
+    sql`delete from analytics_database_memberships where user_id = ${userId}
+        and analytics_database_id in (select id from analytics_databases where project_id = ${projectId})`,
   );
 }

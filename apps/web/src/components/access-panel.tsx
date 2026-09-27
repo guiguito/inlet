@@ -44,7 +44,16 @@ export type AccessScope =
   | { kind: 'project'; projectId: string; name: string }
   | { kind: 'feedbackDatabase'; databaseId: string; name: string }
   /** FD-007: a crash database; the API calls route on the `cdb_` prefix. */
-  | { kind: 'crashDatabase'; databaseId: string; name: string };
+  | { kind: 'crashDatabase'; databaseId: string; name: string }
+  /** FD-007: an analytics database; the API calls route on the `adb_` prefix. */
+  | { kind: 'analyticsDatabase'; databaseId: string; name: string };
+
+const SCOPE_NOUN: Record<AccessScope['kind'], string> = {
+  project: 'project',
+  feedbackDatabase: 'feedback database',
+  crashDatabase: 'crash database',
+  analyticsDatabase: 'analytics database',
+};
 
 const ROLE_HELP: Record<Role, string> = {
   admin: 'Manages access, credentials and deletion, and everything a Creator can do.',
@@ -309,7 +318,7 @@ export function AccessPanel({
       </Card>
       ) : (
         <p className="text-sm text-muted-foreground">
-          Access here is managed by an Admin of this {isProject ? 'project' : 'feedback database'}.
+          Access here is managed by an Admin of this {SCOPE_NOUN[scope.kind]}.
         </p>
       )}
 

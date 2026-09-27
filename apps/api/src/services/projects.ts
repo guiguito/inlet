@@ -127,9 +127,23 @@ export async function deleteProject(
     ...(await logoKeysForProject(ctx, projectId)),
   ];
   await ctx.db.transaction(async (tx) => {
+    // The project row first, FOR UPDATE: an analytics database being created holds a key-share
+    // lock on it until it commits, so this waits for that creation and the removals below then
+    // see its row; a creation that starts after waits here and finds no project (release 8
+    // hardening: a database created in that instant went by cascade with no removal record).
+    const locked = await tx.execute(sql`select id from projects where id = ${projectId} for update`);
+    if (locked.rows.length === 0) throw errors.projectNotFound();
     await deleteNotificationRows(tx, sql`
       select id from feedback_databases where project_id = ${projectId}
       union all select id from crash_databases where project_id = ${projectId}
+      union all select id from analytics_databases where project_id = ${projectId}
+    `);
+    // UX Analytics AN-004, FD-005: the project's analytics databases leave rows in the event
+    // store and the key-scoped tables, which the removal worker deletes from these records.
+    await tx.execute(sql`
+      insert into analytics_database_removals (database_key)
+      select key from analytics_databases where project_id = ${projectId}
+      on conflict do nothing
     `);
     const deleted = await tx
       .delete(projects)
@@ -272,8 +286,8 @@ export async function deleteFeedbackDatabase(
 }
 
 /**
- * Slack settings and queued deliveries are keyed on a database ID of either type
- * (`fdb_` or `cdb_`) and so carry no foreign key since Release 6; they are removed here,
+ * Slack settings and queued deliveries are keyed on a database ID of any type
+ * (`fdb_`, `cdb_` or `adb_`) and so carry no foreign key since Release 6; they are removed here,
  * in the deleting transaction, instead of by cascade. `databaseIds` is a subquery
  * yielding the IDs about to disappear.
  */

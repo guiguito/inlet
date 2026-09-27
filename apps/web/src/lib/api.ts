@@ -1,4 +1,9 @@
 import type {
+  AnalyticsFilter,
+  AnalyticsInterval,
+  AnalyticsMetric,
+  AnalyticsRange,
+  AnalyticsSplit,
   ColorScheme,
   CornerRadius,
   EmbeddingMode,
@@ -46,7 +51,7 @@ type RequestOptions = {
   credentials?: RequestCredentials;
 };
 
-async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { method = 'GET', body, headers = {}, signal, credentials = 'same-origin' } = options;
 
   const response = await fetch(path, {
@@ -199,9 +204,11 @@ export type Member = {
 export type Invitation = {
   id: string;
   role: Role;
-  scope: 'project' | 'feedback_database';
+  scope: 'project' | 'feedback_database' | 'crash_database' | 'analytics_database';
   projectId: string | null;
   feedbackDatabaseId: string | null;
+  crashDatabaseId: string | null;
+  analyticsDatabaseId: string | null;
   scopeName: string;
   status: 'pending' | 'redeemed' | 'revoked' | 'expired';
   createdAt: string;
@@ -215,7 +222,7 @@ export type InvitationWithLink = Invitation & { token: string; url: string };
 
 export type InvitationPreview = {
   role: Role;
-  scope: 'project' | 'feedback_database';
+  scope: 'project' | 'feedback_database' | 'crash_database' | 'analytics_database';
   scopeName: string;
   projectName: string;
   expiresAt: string;
@@ -358,8 +365,139 @@ export type SlackNotificationsPatch = {
  * live under each type's own routes. The ID prefix says which.
  */
 function databaseBase(databaseId: string): string {
-  return databaseId.startsWith('cdb_') ? `/v1/crash-databases/${databaseId}` : `/v1/feedback-databases/${databaseId}`;
+  if (databaseId.startsWith('cdb_')) return `/v1/crash-databases/${databaseId}`;
+  if (databaseId.startsWith('adb_')) return `/v1/analytics-databases/${databaseId}`;
+  return `/v1/feedback-databases/${databaseId}`;
 }
+
+// --- UX Analytics (Release 8) ----------------------------------------------------
+
+export type AnalyticsDatabase = {
+  id: string;
+  projectId: string;
+  name: string;
+  type: 'analytics';
+  timezone: string;
+  countryDerivation: boolean;
+  storage: { maxAgeDays: number; maxEvents: number; latenessDays: number };
+  limits: { eventNames: number; newEventNamesPerHour: number; paramKeysPerEventName: number; categoriesPerEventName: number };
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** The single read also says whether the event store answers now (UX Analytics 8.1). */
+export type AnalyticsDatabaseRead = AnalyticsDatabase & { eventStore: 'available' | 'unavailable' };
+
+export type AnalyticsDeletionImpact = {
+  events: number | null;
+  installations: number | null;
+  users: number | null;
+  eventStore: 'available' | 'unavailable';
+  funnels: number;
+  cohorts: number;
+  notice: string;
+};
+
+/** AN-018, Appendix E: what a batch, or the test event, was answered. */
+export type AnalyticsBatchAnswer = {
+  accepted: number;
+  duplicates: number;
+  rejected: { index: number; code: string; field?: string }[];
+  warnings: { index: number; code: string; field?: string }[];
+};
+
+/** AN-058: one event of the live feed. */
+export type AnalyticsLiveEvent = { name: string; time: string; installationId: string; platform: string; appVersion: string };
+
+/** AN-050, Appendix E "Catalog entry". */
+export type AnalyticsCatalogEntry = {
+  name: string;
+  category: string | null;
+  description: string | null;
+  hidden: boolean;
+  blocked: boolean;
+  standard: boolean;
+  firstSeen: string;
+  lastSeen: string | null;
+  last24h: { events: number; installations: number; users: number };
+  computedAt: string | null;
+};
+
+export type AnalyticsEventParam = { key: string; types: string[]; description: string | null; firstSeen: string };
+
+/** AN-052: an event with its params and their top values over the last seven days. */
+export type AnalyticsEventDetail = AnalyticsCatalogEntry & {
+  categories: string[];
+  params: (AnalyticsEventParam & { topValues: { value: string; events: number }[] })[];
+  topValuesFrom: string;
+  topValuesTo: string;
+};
+
+/** Section 9.2: a trend definition as the interface sends it. */
+export type AnalyticsTrendDefinition = {
+  range: AnalyticsRange;
+  interval: AnalyticsInterval;
+  series: { event: string; metric: AnalyticsMetric; label?: string; filters: AnalyticsFilter[] }[];
+  filters: AnalyticsFilter[];
+  split?: AnalyticsSplit;
+};
+
+/** AN-060 to AN-067, Appendix E "Trend". */
+export type AnalyticsTrendPoint = { start: string; label: string; value: number; incomplete: boolean };
+export type AnalyticsTrendAnswer = {
+  range: { from: string; to: string };
+  interval: AnalyticsInterval;
+  timezone: string;
+  keptFrom: string | null;
+  series: {
+    label: string;
+    event: string;
+    metric: AnalyticsMetric;
+    value?: string | null;
+    group?: 'value' | 'other' | 'none';
+    covered: { from: string; to: string } | null;
+    notice: 'range_outside_retention' | null;
+    points: AnalyticsTrendPoint[];
+  }[];
+};
+
+/** AN-140 to AN-144, Appendix E "Overview". */
+export type AnalyticsOverviewQuery = {
+  range: AnalyticsRange;
+  apps: string[];
+  platforms: string[];
+  environments: string[];
+  unit: 'installation' | 'user';
+};
+export type AnalyticsFigure = { value: number | null; previous: number | null; covered: { from: string; to: string } | null };
+export type AnalyticsCrashFree = { rate: number | null; sessions: number; measured: boolean; lowConfidence: boolean };
+export type AnalyticsShare = { value: string; share: number; installations: number; other?: true };
+export type AnalyticsOverview = {
+  range: { from: string; to: string };
+  unit: 'installation' | 'user';
+  timezone: string;
+  keptFrom: string | null;
+  filters: { apps: string[]; platforms: string[]; environments: string[] };
+  figures: {
+    activeLastHour: AnalyticsFigure;
+    dailyActiveLastDay: AnalyticsFigure;
+    dailyActiveToday: AnalyticsFigure;
+    weeklyActive: AnalyticsFigure;
+    monthlyActive: AnalyticsFigure;
+    stickiness: AnalyticsFigure;
+    newInstallations: AnalyticsFigure & { perDay: { day: string; value: number }[] };
+    sessions: AnalyticsFigure & { perDay: { day: string; value: number }[] };
+    d1: AnalyticsFigure & { installations: number };
+    d7: AnalyticsFigure & { installations: number };
+    d30: AnalyticsFigure & { installations: number };
+  };
+  crashFree: { covered: { from: string; to: string } | null; overall: AnalyticsCrashFree & { previous: number | null }; versions: (AnalyticsCrashFree & { version: string })[] };
+  shares: { covered: { from: string; to: string } | null; appVersion: AnalyticsShare[]; platform: AnalyticsShare[]; country: AnalyticsShare[] };
+  topEvents: { computedAt: string | null; events: { name: string; events: number }[] };
+  dailyActive: { covered: { from: string; to: string } | null; points: AnalyticsTrendPoint[] };
+  versionsFirstSeen: { version: string; day: string }[];
+  notices: { code: 'no_events' | 'no_app_started'; message: string }[];
+};
 
 // --- Crash Reports (Release 6) -------------------------------------------------
 
@@ -507,6 +645,96 @@ function crashQuery(params: Record<string, string | number | undefined>): string
 }
 
 export const api = {
+  // --- Analytics databases (AN-001 to AN-005) ---
+  listAnalyticsDatabases: (projectId: string) =>
+    request<AnalyticsDatabase[]>(`/v1/projects/${projectId}/analytics-databases`),
+  createAnalyticsDatabase: (projectId: string, name: string, timezone: string) =>
+    request<AnalyticsDatabase>(`/v1/projects/${projectId}/analytics-databases`, { method: 'POST', body: { name, timezone } }),
+  getAnalyticsDatabase: (databaseId: string) => request<AnalyticsDatabaseRead>(`/v1/analytics-databases/${databaseId}`),
+  updateAnalyticsDatabase: (databaseId: string, patch: { name?: string; countryDerivation?: boolean }) =>
+    request<AnalyticsDatabase>(`/v1/analytics-databases/${databaseId}`, { method: 'PATCH', body: patch }),
+  deleteAnalyticsDatabase: (databaseId: string) =>
+    request<{ deleted: true }>(`/v1/analytics-databases/${databaseId}`, { method: 'DELETE' }),
+  analyticsDeletionImpact: (databaseId: string) =>
+    request<AnalyticsDeletionImpact>(`/v1/analytics-databases/${databaseId}/deletion-impact`),
+  // --- Collect (AN-025, AN-058) ---
+  sendAnalyticsTestEvent: (databaseId: string) =>
+    request<AnalyticsBatchAnswer & { eventId: string }>(`/v1/analytics-databases/${databaseId}/test-event`, { method: 'POST' }),
+  analyticsLiveFeed: (databaseId: string, after?: string) =>
+    request<{ events: AnalyticsLiveEvent[]; cursor: string }>(
+      `/v1/analytics-databases/${databaseId}/live${after ? `?after=${encodeURIComponent(after)}` : ''}`,
+    ),
+  // --- Catalog, Lexicon and trends (AN-050 to AN-069) ---
+  /**
+   * The whole catalog, every page: the API answers 1,000 names a page (AN-204) and an operator
+   * may allow 5,000 names, so this follows `nextCursor` until the last page.
+   */
+  listAnalyticsEvents: async (databaseId: string, query: { q?: string; category?: string; includeHidden?: boolean; sort?: 'name' | 'lastSeen' | 'events24h' } = {}) => {
+    const events: AnalyticsCatalogEntry[] = [];
+    let cursor: string | undefined;
+    let total = 0;
+    do {
+      const page = await request<{ events: AnalyticsCatalogEntry[]; nextCursor: string | null; total: number }>(
+        `/v1/analytics-databases/${databaseId}/events${crashQuery({ q: query.q, category: query.category, includeHidden: query.includeHidden ? 'true' : undefined, sort: query.sort, cursor })}`,
+      );
+      events.push(...page.events);
+      total = page.total;
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor);
+    return { events, total };
+  },
+  getAnalyticsEvent: (databaseId: string, name: string) =>
+    request<AnalyticsEventDetail>(`/v1/analytics-databases/${databaseId}/events/${encodeURIComponent(name)}`),
+  updateAnalyticsEvent: (databaseId: string, name: string, patch: { description?: string | null; hidden?: boolean }) =>
+    request<AnalyticsCatalogEntry>(`/v1/analytics-databases/${databaseId}/events/${encodeURIComponent(name)}`, { method: 'PATCH', body: patch }),
+  updateAnalyticsEventParam: (databaseId: string, name: string, key: string, description: string | null) =>
+    request<AnalyticsEventParam>(`/v1/analytics-databases/${databaseId}/events/${encodeURIComponent(name)}/params/${encodeURIComponent(key)}`, { method: 'PATCH', body: { description } }),
+  blockAnalyticsEvent: (databaseId: string, name: string, blocked: boolean) =>
+    request<AnalyticsCatalogEntry>(`/v1/analytics-databases/${databaseId}/events/${encodeURIComponent(name)}/blocked`, { method: 'PUT', body: { blocked } }),
+  deleteAnalyticsEvent: (databaseId: string, name: string, confirm: string) =>
+    request<{ deleted: true }>(`/v1/analytics-databases/${databaseId}/events/${encodeURIComponent(name)}?confirm=${encodeURIComponent(confirm)}`, { method: 'DELETE' }),
+  analyticsFilterValues: (databaseId: string, query: { dimension?: string; key?: string; param?: string; event?: string }) =>
+    request<{ values: string[]; truncated: boolean }>(`/v1/analytics-databases/${databaseId}/filters${crashQuery(query)}`),
+  analyticsTrend: (databaseId: string, definition: AnalyticsTrendDefinition, signal?: AbortSignal) =>
+    request<AnalyticsTrendAnswer>(`/v1/analytics-databases/${databaseId}/queries/trends`, { method: 'POST', body: definition, ...(signal ? { signal } : {}) }),
+  /** AN-140 to AN-144: the Overview; a filter with several values repeats its parameter. */
+  analyticsOverview: (databaseId: string, query: AnalyticsOverviewQuery, signal?: AbortSignal) => {
+    const search = new URLSearchParams();
+    if ('preset' in query.range) search.set('preset', query.range.preset);
+    else {
+      search.set('from', query.range.from);
+      search.set('to', query.range.to);
+    }
+    for (const app of query.apps) search.append('app', app);
+    for (const platform of query.platforms) search.append('platform', platform);
+    for (const environment of query.environments) search.append('environment', environment);
+    search.set('unit', query.unit);
+    return request<AnalyticsOverview>(`/v1/analytics-databases/${databaseId}/overview?${search.toString()}`, signal ? { signal } : {});
+  },
+  /** AN-069: the export is a POST (the definition does not fit an address), so it is fetched and saved as a file. */
+  downloadAnalyticsTrend: async (databaseId: string, definition: AnalyticsTrendDefinition, format: 'csv' | 'json') => {
+    const response = await fetch(`/v1/analytics-databases/${databaseId}/queries/trends?format=${format}`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(definition),
+    });
+    if (!response.ok) {
+      const body = safeJson(await response.text()) as { error?: { code?: string; message?: string } } | null;
+      throw new ApiError(response.status, body?.error?.code ?? 'internal_error', body?.error?.message ?? 'The export failed.');
+    }
+    const name = /filename="([^"]+)"/.exec(response.headers.get('content-disposition') ?? '')?.[1] ?? `trend.${format}`;
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = name;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  },
+  analyticsCatalogExportUrl: (databaseId: string, format: 'csv' | 'json') => `/v1/analytics-databases/${databaseId}/exports/catalog?format=${format}`,
+
   // --- Crash databases ---
   listCrashDatabases: (projectId: string) =>
     request<CrashDatabase[]>(`/v1/projects/${projectId}/crash-databases`),

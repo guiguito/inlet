@@ -8,13 +8,16 @@ export class ApiError extends Error {
   readonly code: ErrorCode;
   readonly status: number;
   readonly details?: ErrorDetail[];
+  /** Sent as `Retry-After` by the error handler, so a route never sets the header itself. */
+  readonly retryAfterSeconds?: number;
 
-  constructor(code: ErrorCode, message: string, details?: ErrorDetail[]) {
+  constructor(code: ErrorCode, message: string, details?: ErrorDetail[], options: { retryAfterSeconds?: number } = {}) {
     super(message);
     this.name = 'ApiError';
     this.code = code;
     this.status = statusForErrorCode(code);
     if (details && details.length > 0) this.details = details;
+    if (options.retryAfterSeconds !== undefined) this.retryAfterSeconds = options.retryAfterSeconds;
   }
 
   toBody(): ApiErrorBody {

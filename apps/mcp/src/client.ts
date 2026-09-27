@@ -8,6 +8,19 @@
  * FR-123 holds by construction rather than by discipline.
  */
 
+import { ANALYTICS_DEFAULTS } from '@inlet/shared';
+
+/**
+ * How long an analytics call may take (UX Analytics AN-205, 9.5): a funnel trend may run for the
+ * operator's funnel-trend limit (120 s by default) and the API waits that plus ten seconds before
+ * answering `query_limit_exceeded`, so the ordinary 30 s would cut a query the API still answers.
+ * Every analytics database path, and the erasure and its preview (both count the events in the
+ * event store before they answer), waits the longer of this and `timeoutMs`; an operator who raises
+ * the funnel-trend limit past it raises `INLET_TIMEOUT_MS` too. Everything else keeps `timeoutMs`.
+ */
+export const ANALYTICS_TIMEOUT_MS = (ANALYTICS_DEFAULTS.funnelTrendTimeSeconds + 30) * 1000;
+const ANALYTICS_PATH = /^\/v1\/(analytics-databases\/|projects\/[^/]+\/erasures(\/preview)?$)/;
+
 export class InletError extends Error {
   readonly code: string;
   readonly status: number;
@@ -134,7 +147,8 @@ export class InletClient {
     extraHeaders: Record<string, string> = {},
   ): Promise<Response> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const timeoutMs = ANALYTICS_PATH.test(path) ? Math.max(this.timeoutMs, ANALYTICS_TIMEOUT_MS) : this.timeoutMs;
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       return await this.fetch(`${this.baseUrl}${path}`, {
         method,
@@ -148,7 +162,7 @@ export class InletClient {
       });
     } catch (error) {
       if (controller.signal.aborted) {
-        throw new InletError(504, 'internal_error', `Inlet did not answer within ${this.timeoutMs}ms.`);
+        throw new InletError(504, 'internal_error', `Inlet did not answer within ${timeoutMs}ms.`);
       }
       throw new InletError(
         502,

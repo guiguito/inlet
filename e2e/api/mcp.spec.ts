@@ -175,6 +175,54 @@ test.describe('the MCP server', () => {
           'send_crash_test_report',
           'update_crash_group_state',
           'update_crash_retention',
+          // UX Analytics (UX Analytics PRD section 8.3): the database tools of Release 8's piece 2,
+          // the test event and the live feed of piece 3, the catalog, Lexicon and trends of piece 4.
+          'block_analytics_event',
+          'delete_analytics_event',
+          'export_analytics_catalog',
+          'get_analytics_event',
+          'list_analytics_events',
+          'list_analytics_filter_values',
+          'query_analytics_trends',
+          'update_analytics_event',
+          'update_analytics_event_param',
+          'create_analytics_database',
+          'delete_analytics_database',
+          'get_analytics_database',
+          'get_analytics_live_events',
+          'list_analytics_databases',
+          'send_analytics_test_event',
+          'update_analytics_database',
+          // The Overview, piece 5.
+          'get_analytics_overview',
+          // Profiles, piece 6.
+          'export_analytics_profile',
+          'find_analytics_profiles',
+          'get_analytics_profile',
+          'list_analytics_profile_events',
+          // Funnels, piece 7.
+          'create_analytics_funnel',
+          'delete_analytics_funnel',
+          'get_analytics_funnel',
+          'list_analytics_funnel_units',
+          'list_analytics_funnels',
+          'run_analytics_funnel',
+          'update_analytics_funnel',
+          // Cohorts, piece 8.
+          'create_analytics_cohort',
+          'delete_analytics_cohort',
+          'get_analytics_cohort',
+          'list_analytics_cohorts',
+          'run_analytics_cohort',
+          'update_analytics_cohort',
+          // Storage and data health, piece 9.
+          'get_analytics_data_health',
+          'get_analytics_storage',
+          'update_analytics_storage',
+          // Erasure and the event export, piece 10.
+          'erase_identity',
+          'export_analytics_events',
+          'preview_erasure',
         ].sort(),
       );
 
@@ -201,6 +249,7 @@ test.describe('the MCP server', () => {
         'delete_feedback_database',
         'delete_submission',
         'remove_member',
+        'erase_identity',
       ]) {
         const tool = tools.find((candidate) => candidate.name === name);
         expect(tool?.annotations?.destructiveHint, name).toBe(true);

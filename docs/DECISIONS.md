@@ -2677,7 +2677,8 @@ from them.
   qualifying events — not background, or a server installation — so it is the effective
   time of the first event *received*, which never moves, as AN-031 requires; a naive
   `min(effective time)` would move it when a late event arrives. The latest user ID is the
-  one last seen, derived at read time, so an erasure corrects it for free.
+  one last seen, derived at read time, so an erasure corrects it for free. (Built as `minIf` of a
+  tuple led by the ordering times rather than `argMinIf` keyed on the event ID: 33.1.)
 - **Partitions per database and ISO week.** About 57 per database at 13 months: 2,850 at
   the default 50 databases, inside ClickHouse's guidance of partition-key cardinality
   below 1,000 to 10,000. Age, cap and database deletion are `DROP PARTITION`, and
@@ -2847,6 +2848,10 @@ budget; a funnel's steps over 14 days 1 to 2 s and its trend by day over 90 days
 - **A session table.** With one window, the events answer every question it served, and
   it would be one more table to erase and delete. A lifetime session count is what is
   lost.
+  *Reversed by measurement (33.12d):* at the reference density, grouping every `app_started` of
+  the Overview's range by session took 6.3 s and 4.7 GiB, and one grouped scan of the events 3.5 s,
+  against a 1 s budget for the whole Overview; `session_rollup` (an internal rollup, AN-035, not
+  AN-038's withdrawn session record) answers the same statement in about 0.3 s.
 - **The Small tier on 4 GB with analytics.** Against ClickHouse's own guidance; the
   deployment without the profile keeps it.
 - **ClickHouse started by the API inside the Inlet image.** About 150 MB more for every
@@ -2943,3 +2948,2290 @@ measured yet: the 9.1 load test must confirm the fetch budget of PRD section 9.4
 - **A lenient fetch context.** Ingest envelopes are strict because they store what they
   accept; a fetch stores nothing, and refusing one would leave an application on stale
   values because a newer SDK added a field.
+
+## 33. Release 8: how it was built
+
+Section 31 is the design written before any code; this section records what building it
+decided and found, piece by piece (`docs/plans/ux-analytics-release-8.md`). Where it
+departs from 31, it says so.
+
+### 33.1 The event store, and the 8.1 spike (piece 1, September 26, 2026)
+
+**Version.** ClickHouse `v26.8.12.53-lts`, published September 26, 2026, a patch later
+than the `v26.8.11.7-lts` section 31 names. It is pinned in four places that move together:
+`CLICKHOUSE_VERSION` in `scripts/local-services.mjs`, the image tag in `docker-compose.yml`
+and `docker-compose.dev.yml`, and the CI cache key. The local binary is checked against a
+SHA-256 pinned per platform, computed from the downloads themselves: ClickHouse publishes
+no checksum for its macOS binaries and only `.sha512` files for the Linux archives. All four
+matched the digest GitHub reports for each release asset, and the two Linux archives their
+`.sha512` files.
+
+**Client.** `@clickhouse/client` 1.23, a dependency of `@inlet/api` alone, over HTTP. It is
+ClickHouse's own client, has no dependency, types `ClickHouseError` with the server's code,
+and binds server-side query parameters. Rejected: the native TCP protocol (the Node clients
+for it are community-maintained, and HTTP is what a managed ClickHouse and a reverse proxy
+expose), and a query builder (nothing it would build is not a plain parameterised string).
+
+**What `apps/api/src/db/clickhouse.ts` does.**
+
+- Two clients: a writer, and a reader that is a separate read-only user where the operator
+  names one, and otherwise the writer with `readonly=2` sent on every read. `2` rather than
+  `1`, because `1` also forbids a query from setting its own `max_execution_time`,
+  `max_memory_usage` and `max_threads`, which the query layer must (31.4). Both behaviours
+  are tested against the real server.
+- A read waits for its own `max_execution_time` plus 10 seconds before the client gives up,
+  so ClickHouse answers TIMEOUT_EXCEEDED first. The client's default, 30 seconds without a
+  byte, cut a read under a 120 s limit at 30 s and reported it as an outage (found in
+  verification). The reader also sets `output_format_json_quote_64bit_integers = 1`: 26.8
+  sends 64-bit integers as bare JSON numbers by default, which `JSON.parse` rounds above 2^53.
+- Readiness in the background, as 31.6 designed: the first failure logs one warning with the
+  fix, retries run 5 s doubling to a minute, quietly, for ever; the state becomes `ready`
+  once the migrations are applied and never reverts. So adding the `analytics` profile to a
+  running deployment turns analytics on within a minute, without a restart.
+- Errors map in one place, applied by every helper: TIMEOUT_EXCEEDED and
+  MEMORY_LIMIT_EXCEEDED are `query_limit_exceeded`; no answer, a proxy's error page, or a
+  ClickHouse code that means "not now" (too many parts, no space, unknown database,
+  authentication failed, …) is `503 analytics_unavailable` with `Retry-After: 30`; anything
+  else — a syntax error, an unknown column — stays an internal error, because it is a defect
+  a client must not retry for ever. `ApiError` gained `retryAfterSeconds`, sent as the
+  header by the error handler, so no route sets it by hand as the crash route still does.
+- The migration runner: numbered files, split on `;` outside quotes and comments, applied in
+  order and recorded in `inlet_migrations`. With `INLET_MIGRATE_ON_START=false` the store
+  becomes ready only once every file is recorded, so a deployment that migrates by hand
+  never lists `analytics` over a missing table.
+- The database is created only when `system.databases` lacks it, so a managed ClickHouse
+  whose writer may not create databases works once its operator has made one. The URLs must
+  not carry a path; `INLET_CLICKHOUSE_DATABASE` names the database, one identifier.
+
+**Found on the way.** A MergeTree table *with a projection* is checked at `CREATE` against
+the built-in `number_of_free_entries_in_pool_to_execute_mutation` (20) and
+`…_to_execute_optimize_entire_partition` (25), ignoring any `<merge_tree>` override in the
+server configuration, against `background_pool_size × background_merges_mutations_concurrency_ratio`.
+A background pool of 4, as a small host wants, therefore refuses `CREATE TABLE events`.
+Both configurations raise the ratio to 8 instead (4 × 8 = 32).
+
+**The installation-scoped states changed from 31.2.** 31.2 planned `argMinIf(value,
+(received time, effective time, event ID))`. Measured, that stored a random 16-byte event ID
+in every state, and `installations` came to 142 bytes a row against a budget of 100.
+Dropping the event ID from the key made an exact tie (two qualifying events of one
+installation received in the same batch with the same millisecond) resolve by whichever
+part a read met first, which can differ between two reads until the parts merge. The
+schema instead keeps `minIf`/`maxIf` (and `min`, as a `SimpleAggregateFunction`) of a named
+tuple that starts with the ordering times and carries the values after them: `install` is
+`min((received, time, day, dimensions…))` over qualifying events, `latest` is `max((time,
+received, dimensions…))`, a first occurrence `min((day, received, time, dimensions…))`. A
+tie then falls to the values themselves, deterministically; a replay is the same tuple and
+changes nothing; and the times are stored once instead of in a key beside the value. On the
+seeded data it derived exactly the values the `argMin` form did for all 279,995
+installations, at 79 bytes a row, and 35 for a first occurrence where `argMin` took 63.
+The state columns are `ZSTD(3)`, since they are mostly dimension strings that repeat. The
+latest dimensions come from the latest *qualifying* event, which for a device installation
+is the latest non-background event and for a server installation, all of whose events are
+background, its latest event (AN-031 does not say "non-background" for them).
+
+**The spike: method.** `scripts/analytics-seed.mjs` creates a scratch database with the
+migration, then inserts into `events_ingest` with `INSERT … SELECT FROM numbers()`, a million
+events per statement, so every row passes through the same views and projections the API's
+inserts will. The shape follows the reference workload of PRD 9.5: 100,000 active
+installations a day out of 300,000 (a fifteenth replaced daily), 100 events per installation
+a day, so 10 million a day; about 15 distinct names per installation per day out of 60,
+weighted towards the low IDs; 2% background events; UUIDv7 event IDs whose time is the
+event's; 60% of installations with a user ID; realistic dimension cardinalities (5
+platforms, 15 platform versions, 6 to 9 app versions over the month, 12 locales, 40
+countries, 10 attributions, two experiments on half the installations); one or two params on
+two thirds of the events; about three sessions per installation a day. After seeding it
+merges every partition (`OPTIMIZE … FINAL`, the state a long-lived deployment's parts
+reach), then measures from `system.parts` and `system.projection_parts`, times each query as
+the median of five runs at `max_threads = 4` (half the reference node's cores, as 9.5
+assumes), reads each plan with `EXPLAIN`, and runs the deletes.
+
+**Machine.** A laptop: Apple M5, 10 cores, 24 GB, macOS, ClickHouse from the local services.
+Its 4 GB memory ceiling was raised to 12 GB for the measurement run, for the reason under
+"Erasure" below. **The reference node (8 vCPU, 32 GB, 4.1 billion events) and the Small host
+were not measured**; PRD 15 "8.1" asks for both before the migration merges, and they need
+those machines.
+
+**Storage**, at 300 million events over 30 days (the first run, at 100 million over 10 days,
+gave 45.3 bytes an event and the same per-row figures to within a byte):
+
+| Table | Rows | Bytes on disk a row | Budget |
+| --- | --- | --- | --- |
+| `events`, projections and skipping indexes included | 300,000,000 | **44.4** | 50 |
+| of which projection `by_event_day` | 42,502,193 | 5.0 an event | |
+| of which projection `by_day` | 5,601,096 | 0.5 an event | |
+| `installations` | 300,000 | **79.3** | 100 |
+| `installation_users` | 179,564 | 33.4 | 100 |
+| `installation_first` | 15,489,433 | 36.0 | 100 |
+| `user_first` | 8,480,646 | 24.2 | 100 |
+
+The event ID is the largest column at 15 bytes an event (ZSTD saves one byte of sixteen;
+the 74 random bits of a UUIDv7 are the floor), then the session ID (6), the two times (3.5
+each) and the installation ID (2.3); every dimension column is under half a byte.
+Extrapolated to the reference workload: 4.1 billion events × 44.4 bytes is about 180 GB
+(PRD 9.5 planned 205 GB at 50 bytes). The installation-scoped tables grow with installations
+and with the names each sends, not with events: at 300,000 installations and 60 names they
+hold 0.8 GB here; five million installations over 13 months, each sending most of 60 names,
+would hold about 13 GB, somewhat above the 5 to 10 GB PRD 9.5 states, which depends on how
+many installations a reference product accumulates.
+
+**Queries**, at 300 million events and 30 days (the funnel over its last 14), the two-level
+shapes reading the rollups:
+
+| Query | Time | Reads | Without projections |
+| --- | --- | --- | --- |
+| Trend, one event, by day, unique installations (two levels) | 85 ms | `by_event_day` | 168 ms |
+| The same with `uniqExact(installation_id)` in one level | 109 ms | `events` | |
+| Trend, one event, by day, events | 10 ms | `by_event_day` | |
+| Trend, one event, by week, unique installations | 47 ms | `by_event_day` | 152 ms |
+| Trend split by app version, by day | 135 ms | `by_event_day` | 303 ms |
+| Active installations a day, any event (DAU) | 89 ms | `by_day` | 1,540 ms |
+| Trend with a param filter (`params['plan'] = 'pro'`) | 368 ms | `events` | |
+| Funnel of three steps over 14 days, steps view | 884 ms | `events` | |
+| Weekly cohorts from `installations`, returns from the rollup | 197 ms | `by_event_day` + `installations` | |
+
+Scaled by the rows each reads to 90 days and 13 months at the reference workload, on four
+threads: a one-series trend over 90 days by day about 0.3 s (budget 0.5 s), by week over 13
+months about 0.6 s (2 s), split by app version about 0.4 s (1.5 s), a param filter over 13
+months about 5 s (20 s), the funnel's steps over 14 days about 1 s (3 s), 12 weekly cohorts
+about 0.5 s (2 s). A laptop core is faster than a typical server vCPU, so these are
+optimistic by a factor the reference node must measure. The same queries run at the
+laptop's 4 GB ceiling, straight after seeding, took 1.1 to 3.9 times as long (the funnel
+2.1 s, the cohorts 0.8 s).
+
+**Whether the optimizer uses the rollups.** Yes, for the shapes 31.4 needs, and only
+when written for them: an aggregate projection answers a query only with the aggregates it
+stores, so `uniqExact(installation_id)` in one level reads the events, whereas the same
+count written as an inner `SELECT …, installation_id, count() … GROUP BY …, installation_id`
+and an outer `count()` reads `by_event_day`. Filters and splits on any dimension, the
+install ages, `toMonday(local_day)` periods and the `platform`/`installation_kind` conditions
+of "active" all stay on the projection. Its answers equal the events' exactly
+(`optimize_use_projections = 0` gives identical output), before and after the deletes.
+
+**Erasure.** A lightweight `DELETE` of one installation from `events`, with
+`lightweight_mutation_projection_mode = 'rebuild'`, took 93 s, and of one user ID 73 s, each
+rewriting the projections of every part holding one of its rows (five weekly parts here;
+parts without a match are left alone). The installation-scoped tables took 9 to 110 ms. At
+the laptop's 4 GB ceiling the rebuild of one 70-million-row part ran out of memory and the
+mutation retried until killed: rebuilding a projection aggregates the whole part at once,
+where inserts and merges build it incrementally. With `drop` instead, the same delete took
+2.0 s, the touched parts answer from their events meanwhile (still exactly), and
+`MATERIALIZE PROJECTION` of both afterwards took 81 s — the same work, deferred.
+`APPLY DELETED MASK` over the whole table took 115 s.
+
+Extrapolated: rebuilding costs about 0.3 s per million rows touched on this machine, so an
+installation active over all 13 months of a reference database (4.1 billion events) costs
+about 20 minutes of background merging per `DELETE` statement, and one active for a month
+about 1.5 minutes; the cost is per statement and per part, not per ID. Memory: a reference
+week is a 70-million-row part, whose rebuild fits the reference node's 24 GB but not 4 GB;
+a Small-host week is 7 million rows, a tenth of it.
+
+**Decision.** Projections as the internal rollups, as 31.2 planned: they keep 13-month
+trends and the Overview inside their budgets for 12% more disk, cannot drift from the
+events, and survive erasure exactly. Not the fallback of view-fed rollup tables, which would
+need the reconciliation this avoids; and not "no rollups", which AN-035 allows but which the
+DAU figure (1.5 s at 30 days, so seconds at 90) rules out for the Overview. The mode stays
+`rebuild`, as 31.5 decided, so that no read ever pays for a projection a delete dropped.
+What the measurement adds for the erasure worker (piece 10): delete many IDs in one
+statement, `WHERE installation_id IN (…)`, since the cost is per statement and part; run
+the deletes where the memory allows, the reference node's settings having room and the
+Small host's parts being small; and if either proves too slow on the reference node, switch
+to `drop` followed by a scheduled `MATERIALIZE PROJECTION … IN PARTITION`, which the spike
+showed answers correctly in between.
+
+**Not measured here**, and owed before the migration merges (PRD 15 "8.1"): the reference
+node at 4.1 billion events, the Small host at its workload, the ingest path (it does not
+exist yet: the seed inserts a million rows per statement, where ingest inserts at most a
+hundred), and query concurrency.
+
+### 33.2 The contract and analytics databases (piece 2, September 26, 2026)
+
+**The envelope is a function, not a schema.** `validateEvent` in
+`@inlet/shared/analytics-core` implements section 9.1 with no Zod, so the SDK bundles the
+very code the API runs (AN-222) and the subpath stays free of Node imports. It never throws:
+it answers the normalised event and its warnings, or one rejection with its field. Its order
+is fixed and tested: sanitise every string, keys included, down to the two levels an event
+has and never deeper, so a nested or circular value is refused at its field rather than walked
+(recursing into 20,000 nested arrays, a 40 KB body, overflowed the stack and would have made
+ingest answer a condition of the data with a 5xx), with objects rebuilt by `Object.fromEntries`
+so that a `__proto__` key is a field (`unknown_field`, or a param key the pattern allows) and
+never a prototype that could smuggle in a `name`; refuse a field
+section 9.1 does not name, nested ones included (`app.channel` is `unknown_field`), before
+any bound, so a typo is reported first as crash ingest does; then each field in the table's
+order; then `missing_identity` after placeholder user IDs are dropped; then the 8 KiB check
+on the normalised event as it would be stored. Rejected: Zod with `strictObject`, as the crash
+envelope does, which would put Zod in the analytics bundle against FD-013 and makes the
+"truncate with a warning" rule awkward to express.
+Two readings of the table recorded here: an empty category or attribution is no value
+rather than an error (the event store stores `''` for none), and an experiment variant may be
+empty, since the table bounds it at 40 characters and says nothing else. A `country` is
+accepted in either case and stored upper case. A timestamp must be a real calendar day:
+`Date.parse` alone turns February 30 into March 2.
+
+**Query definitions are Zod, with flat filters.** A filter is one object, `field`, `key`,
+`op`, `values`, checked by a `superRefine` that reports each broken rule at its own path
+(`key`, `op`, `values`) and follows AN-062: standard fields take is, isNot, isSet, isNotSet;
+app and platform versions add startsWith; install ages take between only, two whole numbers
+in order; a param takes is, isNot, contains, isSet, isNotSet, and gt and lt with one number;
+experiments behave as standard fields with a key. Rejected: a discriminated union per field
+and operator, whose failures come back as "no union member matched" at the filter's path,
+which `invalid_query` could not turn into a useful message. Defaults are applied by the
+schemas (last 30 days by day; closed, seven days, installations), so the declared types
+in `analytics-core.ts` are the normalised definitions, and `Assert<Exact<…>>` in `analytics.ts`
+proves at compile time that each `z.infer` equals them. `Exact` answers `false`, not `never`:
+the tuple of `never` that `form.ts` and `answers.ts` use compiles whatever the types, since
+`never` satisfies every constraint, so their check has never been able to fail. Choices the PRD leaves open: a saved funnel's
+default range and view are `defaultRange` and `defaultView` in its definition, and a cohort's
+absent `defaultRange` means the last 12 periods; splits take the standard dimensions, an
+experiment or a param, not user or installation IDs (a line per ID is not a split) nor
+category; population filters are the standard dimensions, experiments and install
+attribution; a cohort run by ID may override granularity, range and population filters for
+every cohort, not only Retention; bounds the PRD does not set are 20 filters per list, 100
+values per filter, 256 characters per value and 80 per label. The hour interval's seven-day
+limit stays a run-time check, since a preset's length depends on today.
+
+**Limits are the deployment's, not a database's.** The event-name, param-key and category
+limits are not columns of `analytics_databases`; every read returns the operator's current
+values as the database's `limits`, and ingest (piece 3) applies those. PRD 9.3 listed them as
+columns, and a column would have frozen the value an operator had at creation: raising
+`INLET_ANALYTICS_EVENT_NAMES_MAX` would then help no existing database, which is the opposite
+of why FD-032 lets an operator change it. The storage settings do stay per database, because
+AN-161 lets an Admin change them; like crash retention (29.6), a read applies the stored value
+at the operator's current bounds without rewriting it, and the lateness window never exceeds
+the maximum age in force. The lateness window is stored at creation from the operator's
+default (AN-160), so a later change of that default moves only new databases.
+
+**The timezone check asks both timezone databases.** A zone is accepted when Node's ICU
+accepts it and ClickHouse's `system.time_zones` lists it verbatim (AN-002, 9.4). ICU alone
+is not enough twice over: it accepts `+02:00` and `GMT+0` as zones, and it matches names
+regardless of case and resolves aliases, so `europe/paris` would pass and then be stored in a
+form ClickHouse refuses. An explicit pattern refuses anything that starts with an optional
+`UTC`, `GMT`, `UT` or `Z` and then a sign and a digit, before either lookup, so offsets are
+refused even when an event store is unreachable. `Etc/GMT+2`, which is a real IANA name with
+POSIX's inverted sign, is accepted because both databases list it and AN-002 accepts every
+listed name. The ClickHouse lookup runs through the reader, so
+once the store has been ready an outage answers `503 analytics_unavailable`, never
+`analytics_not_enabled` (AN-005); on a deployment without a store, creation answers
+`analytics_not_enabled` before looking at the zone, since that is the step the caller must
+take first. The interface's table of renamed zones (`apps/web/src/lib/timezones.ts`) was
+checked against the IANA `backward` file on September 26, 2026: its "Alternate names" section
+and Pacific/Enderbury's link to Pacific/Kanton. Rejected: carrying a zone list in the API,
+which would drift from both ICU and ClickHouse.
+
+**The database limit is counted under a lock.** Creation takes
+`pg_advisory_xact_lock(hashtext('inlet.analytics_databases'))`, counts, and inserts the
+database and its Retention cohort in the same transaction, so two concurrent creations
+cannot both take the fiftieth place. A hard ceiling of 175 databases keeps a deployment near
+10,000 weekly partitions at 13 months, the upper end of ClickHouse's guidance (31.2).
+
+**Keys are identities; key-scoped tables have no foreign key.** `analytics_databases.key` is
+`GENERATED ALWAYS AS IDENTITY`, so a key is never reused even after its database is deleted
+while the event store still holds its rows (AN-004). The catalog, params, categories,
+dropped counts, pending erasures and removal records are keyed by it with no foreign key, so a
+deletion never cascades through them inside the request; funnels, cohorts, incidents,
+memberships and invitations are few and go by cascade. Deleting a database, or its project,
+inserts `analytics_database_removals (database_key)` in the deleting transaction; piece 9's
+worker drops the partitions and the key-scoped rows. The event-name ID is a bigint identity,
+where the event store carries a `UInt32`, and ClickHouse reads 2^32 into a `UInt32` as 0, the
+"any event" ID, without an error. The identity's sequence therefore stops at 2^32 - 1
+(`MAXVALUE 4294967295`), so an ID past the bound fails loudly in PostgreSQL instead of merging
+two names in the event store. The sequence is shared by every database and an
+`INSERT … ON CONFLICT DO NOTHING` spends a value even when it inserts nothing, so ingest
+(piece 3) looks a name up, in its cache and then in the table, before inserting it.
+
+**The deletion impact counts device installation records.** "Installations" is the number
+of installation records (`HAVING max(has_qualifying) = 1`) whose kind is `device`. A server
+installation is counted by its user ID, which the impact lists separately, and the test
+installation is a fixture a team never thinks of as one of its installations; counting either
+would make "3 installations" wrong for a backend-only product or after a test event. User IDs
+are the distinct non-empty user IDs of `installation_users`. Events are `count()` of `events`,
+which honours lightweight deletes. While the event store is unreachable, or a count exceeds
+its limit, the three are `null` with `eventStore: "unavailable"`, and deletion proceeds. The
+impact asks `EventStore.reachable()` (two seconds) before counting, so a store that hangs
+rather than refuses answers within seconds instead of after the 40-second query timeout.
+
+**Whether the event store answers is part of the database read.** `GET
+/v1/analytics-databases/{id}` adds `eventStore`, from `EventStore.reachable()`, a `SELECT 1`
+through the reader with a two-second cap, so the page can say in one sentence that the store
+is unreachable (8.1) even on panels that make no analytics call yet. Rejected: a status route
+of its own, which the PRD does not list, and reading `/v1/health`, which by design keeps
+listing `analytics` through an outage. The list route does not ask, so listing never waits.
+
+**`contentLevel` is ignored for an analytics database** (AN-190): the shared Slack settings
+route accepts and stores it, as it does for a crash database, and piece 9's renderer never
+reads it. Rejected: refusing it, which would need the shared plugin to know database types
+for one field.
+
+**Operator limits.** Every analytics row of section 14 is in `OPERATOR_LIMITS`, with defaults
+from `ANALYTICS_DEFAULTS` in the shared contract. The hard limits: databases 1 to 175 (above);
+event names 10 to 5,000 (AN-021's own ceiling); param keys to 1,000 and categories to 100 per
+name; maximum age 7 to 3,650 days, event cap 10,000 to 10^12, lateness 1 to 365 days, each
+triple checked MIN ≤ DEFAULT ≤ MAX and the default lateness within the default maximum age;
+ingest rate limits from 1,000 events per key and 10 per installation; query slots 2 to 64,
+since one slot is always kept for signed-in users (AN-205); query time to 600 s and the
+funnel trend to 3,600 s; query memory 64 MiB to 1 TiB, defaulting to 768 MiB, so that three
+concurrent queries use 2.25 GiB of the Small host's 3 GB ClickHouse and leave the rest to
+inserts and merges; the erasure bound 1 to 30 days, since the operator may only shorten it.
+Query threads default to `0`, meaning half of the event store's own `max_threads` (its cores
+by default), which the query layer of piece 4 reads from ClickHouse: the API cannot know the
+cores of a ClickHouse on another host, and a fixed number would be wrong on every host but
+one. The existing parser already handles values beyond 32 bits, as JavaScript integers up to
+2^53; the cap column is a PostgreSQL `bigint`.
+
+**The shared MCP tools route by prefix for every type.** `databasePath` sends `adb_` to
+`/analytics-databases`. `set_member_role` with a `databaseId` had always addressed
+`/feedback-databases`, so it failed for a crash database; it now uses `databasePath` too.
+
+### 33.11a The analytics SDK core, browser and Node (piece 11a, September 27, 2026)
+
+Numbered after its piece rather than in sequence, because piece 3 is being written at the same
+time; renumber when both are committed. The seams are in `docs/plans/ux-analytics-release-8.md`
+under "From piece 11a".
+
+**Two installation IDs, on purpose.** The persisted ID lives only in storage, under
+`installation-id`, the one key a config module reads and writes too. `Identity.installationId`,
+the field the crash and feedback modules attach, is filled by an enabled analytics client and
+nothing else, and the modules of this version decide by `Identity.analyticsEnabled` rather than
+by that field being set (RC-119). A published 0.2.x crash module, which attaches the field
+whenever it is set, therefore never sees a config-created ID. Rejected: one slot with a flag
+beside it, which is exactly what 0.2.x would misread.
+
+**Storage keys rather than one identity record.** Separate keys — installation, opt-out,
+state, session, crash flags — so that the browser's session, rewritten at most every 30
+seconds by every tab, never races a write of the installation or a crash flag, and so that a
+config module touches one key and nothing else. Identity storage is synchronous
+(`localStorage`, a `FileStore`'s `getSync`/`setSync`), because the crash module writes its flag
+from the fatal path; an asynchronous store (React Native) is read into memory before `init`
+finishes and written through.
+
+**The cross-tab session is decided synchronously and confirmed under the lock.** The crash
+module needs a session ID now, on a fatal path that cannot await a Web Lock. So a tab that
+finds the stored session expired writes a new one at once and returns it; its `app_started`
+is built then — keeping its place ahead of the event that caused the rotation — and committed
+only inside `navigator.locks.request('inlet-sdk.analytics.session')` if the stored session is
+still that one and not yet announced. A tab that lost the race adopts the winner's session and
+sends nothing. The residual window (two tabs reading the same expired record within the same
+microseconds) can orphan a handful of events on a session no `app_started` names, which
+AN-043 counts nowhere. Without Web Locks the derived ID converges instead, and a duplicate
+`app_started` for one session ID counts once. Rejected: rotating inside the lock, which makes
+the session ID asynchronous for every module.
+
+**Sampling moves after `beforeSendSync` only while analytics is enabled.** AN-150 raises the
+flag after the synchronous hook and before sampling; for an application without analytics the
+crash module keeps its order exactly, so its hooks see what they saw in 0.2.0.
+
+**A flag is removed once its `session_crashed` is written to the queue**, not when it is sent,
+so a process that dies in between finds it again; a flag and its already-queued event can then
+both be sent, which AN-044 counts once per session.
+
+**The keepalive send does not wait for the flush lock**, since a page being hidden cannot await
+one; nothing is removed until the server answers, so a page that dies first leaves its events
+for the next page and the server's idempotency absorbs the second send. What does not fit in
+60 KiB stays queued.
+
+**The health probe gained `refresh`.** An answer is cached per origin for the page (FD-016), so
+the ten-minute re-read while `analytics` is not listed (AN-241) has to bypass the cache; the new
+answer replaces it for every module.
+
+**Size: 15.1 KB minified and gzipped** for `inlet-sdk/analytics/browser`, the shared envelope
+validator included. The build measures a minified bundle with gzip, as CDNs and bundle
+analysers report; brotli would be smaller and so a laxer limit.
+
+**Server mode keeps no identity at all**, not even in memory beyond the call: the shared user ID
+is still attached if the application set one, and every event must name an installation or a
+user ID. Its events carry `platform: 'server'`, which the server treats as background events.
+
+**From the verification of piece 11a.** Six changes, each with a test in
+`packages/sdk/test/analytics-verify.test.ts` that fails without it:
+
+- *Keepalive sends only after a health answer listed `analytics`*, and an event is in at most
+  one keepalive request at a time. A page closed before the first probe answered would
+  otherwise post to a deployment without the batch route, whose `404` drops every event as
+  refused; and a close fires both `visibilitychange` and `pagehide`, whose second call resent
+  the first one's events and spent the 60 KiB on duplicates. The queue is written first on
+  every hide, sent or not, because no debounce timer runs after an unload.
+- *An identity an older version left on `globalThis` is upgraded in place.* An application can
+  bundle two versions of the package; a 0.2.x crash module initialised first left an
+  `Identity` without this version's methods, and `init` of the analytics module threw a
+  `TypeError` into the application. Upgraded rather than replaced, so the older module keeps
+  sharing the session, the user ID and the attached installation ID.
+- *A previous-run flag's `crashedAt` is when the run was last seen*: the sentinel's last touch
+  (its mtime, within a minute of the death), no longer the next launch's time, which could be
+  weeks later (AN-230). Without a sentinel time, the report's time as before.
+- *Deleting a key that holds nothing writes nothing.* `FileStore` has no delete, so `forget`
+  wrote an empty file for each of the installation, state, session and flags keys, and the
+  first enable an empty opt-out file, even on a device where analytics was never enabled.
+- *An inline script counts toward `crashReporting` only when it runs.* A CDN-served page with
+  an inline JSON-LD block or an import map reported `crashReporting: true` although no frame
+  of it can ever be in-app (AN-150).
+- *A tab being hidden never overwrites the shared session with a stale record.* A background
+  tab closed after another tab rotated wrote its own, expired session back, and the active
+  tab's next event started a third session (AN-229). It now writes only later activity of the
+  session that is stored.
+
+### 33.11b The analytics SDK for Electron and React Native (piece 11b, September 27, 2026)
+
+The seams are in `docs/plans/ux-analytics-release-8.md` under "From piece 11b".
+
+**Electron: one client in main, windows send messages.** `installElectronMain`
+(`inlet-sdk/analytics/electron`) initialises the one analytics client with a `FileStore` under
+`<userData>/inlet`, the app version and ID from `app.getVersion()` and `app.getName()`, and the
+operating system version from `process.getSystemVersion()` passed to `nodeContext` as the
+release, so macOS reports 15.1 rather than the kernel's 24.1.0. It returns that client with an
+`uninstall()` added, because the Collect snippet writes `const analytics = await
+installElectronMain(…)` and calls `setEnabled` on the result; the crash and feedback
+installers return `{ client, uninstall }`, and that shape was rejected here to keep the
+snippet true. `createElectronRenderer` (`/electron-renderer`, browser-safe) sends one-way
+messages over `ipcRenderer.send('inlet:analytics')` through a preload bridge
+`window.inletAnalytics`, as the crash renderer does, rather than `ipcMain.handle`: nothing a
+window calls needs an answer, and `track` must not be asynchronous. Main pushes
+`{ installationId, sessionId }` on `inlet:analytics:ids` to every `webContents` whenever the
+identity's `watch` fires and the pair changed, and answers a window's `hello` at creation, so
+a window opened later has the IDs at once.
+
+**The IPC channel is a trust boundary (CR-111).** Main reads a window's event name, category,
+params (primitives only, at most 25, keys and values truncated) and timestamp, and nothing
+else; the installation and session IDs, user ID, context and app version are main's. A
+window's `track` of a standard event name is ignored — `app_started` or `session_crashed`
+from a window would forge sessions and crash-free rates — and `screen` has its own message.
+Identity and consent calls are applied unless `acceptRendererIdentity: false`; they are one
+switch because the PRD names them together.
+
+**React Native: the identity under `inlet-sdk:` keys, the queue under `inlet-analytics:`.**
+Two `ReactNativeStore`s over the injected store: the identity keys match the browser's
+`localStorage` names, so a config module finds the installation ID under the same key on
+every platform (FD-016), and the queue is one event per key. The budget (`maxStoreBytes`,
+1 MB) is the queue's ceiling plus a fixed 8 KiB reserve for the identity keys, and the store's
+ceiling now counts each item's entry in the index, which the crash and feedback queues
+inherit (a queue keeps a little under its ceiling rather than a little over). Standard events
+are dropped from the store last, as AN-231 drops them from the queue. The `AppState` listener
+calls `flush` on `background` and `foreground` on `active`, on whichever client is current.
+
+**Crash flags on React Native live in the crash module's store (AN-151).** The crash adapter
+hands the identity a flag storage over its own store (`useFlagStorage`), synchronous when the
+store is, so the flag raised on the fatal path is on the device before the previous handler
+runs. The analytics module reads flags from there at its next start, whichever module
+initialises first: if analytics attached first, `useFlagStorage` sends them. Elsewhere flags
+stay in the identity storage. Rejected: writing the flag through the analytics identity
+storage, which is an asynchronous write-through whenever the analytics store is AsyncStorage,
+even with an MMKV crash store.
+
+**From piece 11a's review, as decided.**
+
+- *`ephemeral` means the identity could not persist.* A browser without IndexedDB keeps the
+  queue in memory and says so, without marking events.
+- *A refused installation-ID write marks events `ephemeral`* on Node device mode and in the
+  Electron main process: the ID is read back after it is written at the first enable, so no
+  write happens while disabled.
+- *A crashing report dropped by the bounds check still flags its session*, after
+  `beforeSendSync` runs on it for that decision alone; `onDrop` still says `bounds` and the
+  report is not sent.
+- *`close` marks the client closed before awaiting its store* and `detach` takes off only the
+  hooks this client installed, so two quick `init` calls leave the second client owning the
+  identity. Reproduced with a first store slower than the second.
+- *`forget` where analytics never ran* checks `indexedDB.databases()` first and creates no
+  `inlet-analytics` database.
+- *`setAttribution` and `setExperiment` before an asynchronous store loads* wait with `track`
+  and apply after the stored values.
+
+**A defect of piece 11a found on the way.** With an asynchronous store, any call made before
+it loaded (`track` included) queued itself again while the queue was being drained, because
+`ready` was cleared after the drain: an infinite loop that exhausted the heap. `ready` is now
+cleared first. It never showed in 11a's suite, which used synchronous stores only.
+
+**The build checks moved to `build-checks.mjs`** so `test/build-checks.test.ts` proves each
+fires on an entry that breaks it; the React Native load check's message now quotes the error
+rather than the trap's own source line.
+
+**Size: 15.4 KB minified and gzipped** for `inlet-sdk/analytics/browser` (15.1 KB in 11a; this
+piece's changes to the client, the identity and the IndexedDB queue).
+
+**From the verification (September 27, 2026).** Four defects, fixed where every caller goes
+through, each with a test in `packages/sdk/test/analytics-native-verify.test.ts` that failed
+first:
+
+- *Main checks a window's event name as it will be queued.* The event rules strip U+0000
+  before they read a name, so `session_crashed\u0000` passed the standard-name check and was
+  queued as `session_crashed`, letting a window mark the live session crashed. The name is
+  sanitised before the check. A denylist has to see what the allowlist downstream sees.
+- *`setEnabled` waits in its place.* Before an asynchronous store loads it now joins the calls
+  that wait, instead of awaiting the load beside them, so `setEnabled(true); track(…)` in a
+  consent callback at startup keeps the event and `setEnabled(false); track(…)` drops it.
+- *A closed client writes nothing.* Its `track` drops as `disabled` and its sticky setters no
+  longer write the state: its queue and state are whole documents in the store the next client
+  uses, and its write dropped what that client had stored.
+- *The five-experiment cap counts own keys only.* `key in experiments` read `constructor` and
+  `toString` as already set, so a sixth passed and every later event failed the rules.
+
+Proven besides: the build fails on a Node import in the renderer entry or in a module the
+browser-safe entries share, and on a React Native entry reading `window` or `localStorage` at
+load (a copy of the package with the fault injected); Metro 0.80.12 on React Native 0.74.7,
+with package `exports` off, bundles every React Native-facing entry from the packed tarball
+for iOS and Android; the declarations of the three new entries compile in a consumer with
+`skipLibCheck` false, under NodeNext with Node's types and under bundler resolution without
+them, and through the Metro directory shim's `types`.
+
+### 33.3 Ingest and Collect (piece 3, September 27, 2026)
+
+**One pass per batch, in this order**, in `apps/api/src/services/analytics-ingest.ts`: the
+event store's readiness and the two-second warm-up; the credential's limits on the whole
+batch; per event the envelope (`validateEvent`), the effective time, the acceptance floor, the
+installation (a server installation for a user ID alone) and the installation's limit; the
+catalog in PostgreSQL; local days and each event's key; install records; duplicates; install
+ages; one insert. The pure arithmetic is `analytics-derive.ts`, the timers `analytics-worker.ts`.
+Section 31.3's order, with the rate limits split around validation: the per-credential limit
+needs only the batch's length, the per-installation one needs the installation, which only a
+valid event names.
+
+**Duplicates: a map of keys in flight, then one read.** An event's key is its whole sort key
+(database, name ID, local day, installation, effective time, event ID). A batch waits for any
+key another batch holds, then registers its own with no `await` between the last check and
+the registration, so two batches never both hold one key. Then one query reads the batch's
+keys from `events` with `(…) IN {keys:Array(Tuple(UInt32, Date, UUID, DateTime64(3, 'UTC'),
+UUID))}` beside `event_name_id IN` and `local_day IN`, which is what lets the primary key prune;
+`TupleParam` of `@clickhouse/client` binds the tuples, so nothing is interpolated. A key whose
+insert failed is blocked for ten seconds, and a batch holding one answers
+`503 analytics_unavailable` with the seconds left as `Retry-After`: the only answer that cannot
+store an event twice while its buffered row may still land. The check runs again after every
+wait, since another batch's insert may fail while this one waits on a third (verification). A batch that failed before its
+insert was sent blocks nothing; its waiters answer 503 and retry. Two copies within one batch
+count as one event and one duplicate. Rejected: a unique table in PostgreSQL per event (a
+write per event at 2,000 a second, and a second store to keep in step); ClickHouse's
+`insert_deduplication_token` (per block, not per event, and forgotten after a window).
+
+**A replay carries what was stored.** The lookup returns each stored copy's received time, and
+the replay row uses it (piece 1's contract), as does a copy that waited on another batch in
+flight: it takes the received time that batch stored, or found stored when it was itself a
+replay (verification found waiters taking the replaying batch's own time, which moved
+`latest` on a tie).
+
+**The received time a row carries is taken once the batch's installation locks are held, and
+never goes backwards.** The installation views call "first" the event received first; the
+install ages a batch stamps come from the install time it saw. A batch that arrived earlier
+than the one creating an installation, but looked it up after, would otherwise carry an
+earlier received time and become the installation's first event after the fact, moving the
+install time other rows were stamped with. `rowsReceivedTime` gives each batch a time later
+than every earlier batch's, at least a millisecond apart; it runs ahead of the wall clock only
+above a thousand batches a second. The clock correction and the future clamp still use the
+time the batch arrived, which may be a few milliseconds earlier. Departure from 31.3, which
+did not name when the received time is taken.
+
+**Install times.** An LRU of 100,000 (database key, installation) → install time or "no record"
+answers most batches with no read; a miss reads `installations` with piece 1's expression for
+the batch's missing IDs at once. Installations the batch may create are locked in process, in
+sorted order (no deadlock: a batch waits for keys in flight only after taking all its locks),
+evicted from the cache and read again under the lock, so the second of two batches creating
+one installation finds the first's record and stamps the same ages. A new installation's
+install time is its first qualifying event in the batch by (received time, effective time),
+the view's order, replays included.
+
+**Catalog: read the cache, write under a lock, look a name up before inserting it.** A batch
+that brings nothing new decides everything from an LRU of 5,000 (database, name) entries —
+ID, blocked, param keys with their observed types, categories — and touches no table. One that
+brings a name, key, type or category takes `pg_advisory_xact_lock(hashtext('inlet.analytics_catalog'),
+key)`, reads the batch's entries and the database's name counts again, decides again, and
+inserts; so two batches cannot both take the last slot, and a name is inserted only after the
+locked read did not find it, which spends no identity value on a name that exists (the one
+sequence is capped at 2^32 − 1, DECISIONS 33.2). Rejected: `INSERT … ON CONFLICT DO NOTHING
+RETURNING` on every new-looking name, which spends a value per attempt. `test_event` is exempt
+from the limit and from the hourly allowance, and is left out of both counts, so it never
+takes a slot (AN-025). Standard names are inserted `standard`. **AN-034 says ingest never
+updates an entry**; the exception is a param key seen with a new value type, whose
+`observed_types` are rewritten to the union read under the lock: at most twice per key ever,
+since there are three types. The catalog ID is guarded on the way to the event store's
+`UInt32` (`eventNameIdFor`): an ID it cannot hold refuses the batch with a logged 500.
+
+**The acceptance floor is read from the database row every batch already loads**, plus the
+floors retention raised in memory (`raiseAcceptanceFloor`). The brief proposed floors loaded
+from PostgreSQL and refreshed on an interval or a signal; ingest already reads the row to
+authenticate the key, so the stored `kept_from` is never staler than the request, and the
+in-memory raise is what makes a floor take effect before the retention pass writes it
+(AN-163). The lateness window is `effectiveStorage`'s; `kept_from` is compared with the local
+day, since weeks are partitioned by local day.
+
+**Rate limits in bucketed counters** (`lib/buckets.ts`): per key and bucket of one minute, a
+slot per bucket, so a read or an add costs a pass over the buckets whatever was counted. Per
+credential: sixty one-minute buckets, read as five for the five-minute window and all sixty
+for the hour; a batch that would pass either is refused whole, and a refused batch is not
+counted, so a client in a 429 loop does not extend its own penalty (as crash ingest, 24.3).
+Per installation: five buckets, counted one event at a time, only the excess rejected. Each
+structure holds at most 100,000 keys: past that, keys idle for the whole window go first, then
+the least recently counted, which can make one installation's limit forget part of its count
+but never grows the process (about 60 MB and 20 MB at worst). The per-installation limit is a
+noise control, not a security control (AN-020). The route sets `config: { rateLimit: false }`,
+so the platform's per-key ceiling of 1,000 requests a minute does not apply to it.
+
+**The per-address ceiling** (`lib/address-ceiling.ts`, neutral, for Remote Config's fetch too)
+counts requests in six ten-second buckets for at most 100,000 addresses, only when
+`INLET_TRUSTED_PROXIES` is set; without it, startup logs once that it is off. It runs after the
+key and the database are known, so its refusals are counted as `rate_limit_exceeded` on that
+database; the address is a key in memory for a minute and nothing else.
+
+**Country** (`lib/country.ts`, neutral). The header named by `INLET_COUNTRY_HEADER` is believed
+only when the request's address was resolved through a trusted proxy, which is when Fastify's
+`request.ip` differs from the socket's peer: it resolves `X-Forwarded-For` only from a peer
+`INLET_TRUSTED_PROXIES` trusts. `XX` and `T1` record no country without asking the database,
+since the proxy has said it does not know (or that the client is a Tor exit, which a database
+would place in the exit's country). Otherwise the bundled **DB-IP Lite country database**
+(CC BY 4.0, which allows bundling with attribution; MaxMind's GeoLite licence does not), read
+with **`mmdb-lib` 3.0.3** (MIT, no dependencies, the reader under `node-maxmind`): one `Reader`
+per file per process, loaded at startup from a buffer (8 MB). Rejected: `maxmind` (the same
+reader plus file watching and an LRU we do not need) and `@maxmind/geoip2-node` (MaxMind's own
+models, heavier). The file is pinned to one dated month and the SHA-256 of its download in
+`scripts/ip-country-db.mjs`, which the Dockerfile runs at build and `startLocalServices` runs for
+development and tests, into `apps/api/ip-country/` (git-ignored); the script says how to move
+the pin. The tests look up 193.51.24.1, in RENATER's 193.48.0.0/14, which the pinned file maps
+to France, rather than a committed fixture: a fixture would need a MaxMind DB writer this
+repository does not carry, and the real file is what production reads. A missing file logs
+once and derives nothing.
+
+**The body limit.** `AN-010`'s 256 KiB is the route's: a declared `content-length` above it is
+refused in `preParsing` before the body is read, and a body without one (chunked) is counted in
+`preParsing` as it arrives and refused once read, rather than mid-stream, which a client can see
+as a reset instead of the `413`. The route's Fastify `bodyLimit` is 1 MiB, so only a chunked body
+past that gets Fastify's generic `payload_too_large`. Verification replaced measuring the parsed
+body re-serialized, as crash ingest measures an envelope (24.3): `JSON.stringify` overflows the
+stack on a value some thousands of arrays deep, which a 256 KiB body holds, and answered `500`.
+
+**Clock correction rounds half a minute away from zero**, so clocks 90 s ahead and 90 s behind
+move by the same two minutes; `Math.round` alone rounds −1.5 to −1.
+
+**Counters** (AN-006) accumulate per database, hour and reason in memory and are written by
+the analytics worker every ten seconds with one additive upsert; a failed write puts them back
+for the next pass, and stopping the worker writes them one last time, so only a crash loses
+the last interval. `analytics_dropped_counts` gained `clock_corrected` (migration `0002`), the
+one warning without a column: warnings count per value (two truncated params are two), a
+refused batch counts each of its events. The worker is a list of passes, each with its own
+interval and a running guard, so pieces 4, 9 and 10 add theirs without a second timer loop.
+
+**The live feed** keeps the last 500 accepted events per database, oldest first, each with a
+sequence number; its cursor is the process's random epoch and the last sequence read, so a
+cursor from before a restart starts again from the new (empty) feed instead of skipping events
+whose sequence numbers restarted. A read with a cursor takes at most `limit` new events, the
+oldest first, and shows them newest first, so a client paging with the cursor sees each once;
+a read without one takes the `limit` most recent (AN-058).
+
+**The test event** is `test_event`, category `test`, environment `development`, platform
+`other`, app version `test`, SDK `inlet`/`test-event`, installation ID
+`HMAC-SHA256(installation_secret, "test-installation")` as a version-8 UUID, kind `test`, sent
+through `ingestAnalyticsBatch` with the caller's credential or `user:<id>` as its rate key.
+A server installation is the same HMAC over `user:<userId>`, so no user ID can collide with the
+test installation. **Later queries exclude the test installation** from every unique, active,
+new-installation, session and cohort figure by `installation_kind = 'device'` (and sessions by
+counting `app_started` of device installations only).
+
+**Warm-up.** `EventStore.readyAt` records when the store became ready in this process; ingest
+answers 503 until two seconds after it. The harness sets `analyticsIngestTimings.warmupMs` to 0,
+because its store is ready the moment it connects; one test sets it back.
+
+**Measured.** A 50-event batch through the route on this laptop (Apple Silicon, local
+PostgreSQL 18 and ClickHouse 26.8, 60 batches, the first ten ignored): median 80 ms, 95th
+percentile 92 ms, against the 300 ms budget of 9.5; most of it is the asynchronous insert's
+adaptive flush timeout. A batch of 50 duplicates answers in about the same time.
+
+### 33.4 Catalog, Lexicon and trends (piece 4, September 27, 2026)
+
+**The query layer is one module every later read goes through**,
+`apps/api/src/services/analytics-query.ts`: the slots and per-query limits
+(`runAnalyticsQuery`), the filter compiler, ranges, periods and coverage, the erasure and
+deletion skip (`readSkip`), the name resolver and the counting conditions. Trends
+(`analytics-trends.ts`) and the catalog (`analytics-catalog.ts`) are its first users; pieces 5
+to 10 build on it rather than beside it.
+
+**Query slots: an in-process scheduler with lanes** (`analytics-slots.ts`, AN-205). One API
+instance (Foundations §4) makes a process-local scheduler exact; nothing needs a lock table.
+Capacity is the operator's `INLET_ANALYTICS_QUERY_SLOTS`, read at every query, so a test or a
+restart with a new value takes effect at once. Credentials together hold at most capacity − 1,
+which is what "one slot kept for signed-in users" means when the others are free: a user can
+also use every slot when no key is querying. Each caller (a credential by its ID, a signed-in
+user by theirs, whatever the transport: MCP comes back through `app.inject` as the same key)
+holds at most one slot per lane, `query` and `funnelTrend`, so piece 7's two-minute funnel
+trend does not lock its caller out of every other screen. A caller's further queries in a lane
+wait behind its first, in order; the queue is served first come first served, skipping any
+waiter that cannot run yet, so one busy caller never holds up another. Ten seconds without a
+slot answers `503 analytics_busy` with `Retry-After: 5`. The event store's readiness is checked
+before the wait, so an outage answers `analytics_unavailable` at once. Rejected: a counting
+semaphore per caller type (it cannot express "one per caller" and "a caller's queries in
+order" together), and ClickHouse's own `max_concurrent_queries_for_user` (every API query
+arrives as the same reader, so it cannot tell a key from a person, and it refuses rather than
+queues).
+
+**Per-query limits.** Every slot query runs with `max_execution_time` (the operator's 30 s, or
+the funnel trend's limit for that lane), `max_memory_usage` and `max_threads`.
+`INLET_ANALYTICS_QUERY_THREADS = 0` resolves once per event store as half of
+`getSetting('max_threads')` read through the reader (so the reader's profile, 4 locally,
+gives 2), then a concrete number is sent with every query. A breach answers
+`query_limit_exceeded` through piece 1's mapping; the test sets the memory limit to 1,000 bytes.
+The catalog refresh and the deletion job run under the time and memory limits but hold no slot
+(workers never wait on one, 9.5).
+
+**The filter compiler** turns the 9.2 filters into one condition with every value bound
+(`SqlParams` numbers them `{p0:Type}`) and every column from an allowlist in the module; a
+test puts SQL-shaped values in every field and asserts none reaches the text. Same field and
+key → OR, different → AND. Choices the PRD leaves open: `isNot` on a dimension keeps the events
+without a value (`country NOT IN ['FR']` keeps `''`); a param's `is` compares the text ingest
+stored (`String(value)`), so `3` matches `3` whichever type it was sent as; `gt` and `lt`
+compare `toFloat64OrNull`, so a non-numeric value matches neither; `contains` is case-sensitive,
+as the stored value is; an experiment's `is` requires the key to be present, so an empty variant
+never matches events without the experiment. Install attribution reads the installation records
+once, as a set of installation IDs (`installation_id IN (SELECT … FROM installations … HAVING
+…)`), and a split by it joins the attribution onto the inner rows: either way the inner level of
+the query stays on the projection, since `installation_id` is one of its keys. An installation
+ID that is not a UUID is the one value the schema cannot check; the compiler refuses it with
+`invalid_query` at its path, before a slot is taken, even for a series whose event is unknown.
+
+**Two levels, and what `EXPLAIN` showed.** Every series is `SELECT bucket, installation_id,
+installation_kind, user_id, count() … GROUP BY` those (plus the split value) inside, and
+`sum(c)`, `uniqExactIf(installation_id, kind = 'device')` and `uniqExactIf(user_id, user_id !=
+'' AND kind != 'test')` outside, so one statement yields every metric and a unit active on
+several days of a period counts once. The integration test runs the generated SQL of a named
+event by day (a dimension filter), by week (an experiment split), by month (an install-age
+filter and a version split) and of any event (a `country` filter) under
+`force_optimize_projection = 1`, which fails with PROJECTION_NOT_USED if the optimizer would read
+the events, and reads `EXPLAIN`: `ReadFromMergeTree (by_event_day)` for a named event; for any
+event the optimizer picked `by_event_day` on one small part and may pick `by_day` on large ones,
+both being rollups. The same check on a param filter fails, as it must (params are not a
+projection key). Hour buckets read `effective_time`, which is not a projection key: an hourly
+chart reads the events, over seven days at most.
+
+**Splits** rank values by the series metric over the whole range (a second outer grouping of
+the same inner rows, `GROUP BY v`), then group each period's rows into the ten values, `other`
+and `none` with `multiIf(v = '', 'none', has(top, v), 'value', 'other')`, so Other is one set of
+units (`uniqExactIf` over its rows) and never a sum of lines. An empty value is None, a param
+included (an empty string param reads as none). Other is drawn when more than ten values exist,
+None when its metric over the range is not zero.
+
+**Ranges, periods and coverage.** Periods are generated by the API, zeros included. Day, week,
+month and year buckets come from the stored `local_day`; hours are
+`toStartOfHour(effective_time, {tz})`, the zone a bound parameter (verified: 26.8 accepts a
+parameter there), and the API steps absolute hours from the zone's local midnight, which
+gives 25 hours on the day DST ends, 23 on the day it starts, and hours on the half hour in
+Asia/Kolkata, matching what ClickHouse answers (both checked in tests; zones whose DST shift is
+not a whole hour, such as Lord Howe's, would misalign and are not handled). `last12Months` is
+the current calendar month and the eleven before it, so a monthly chart has twelve points; the
+PRD says only "the last 12 months". Coverage is from the oldest day kept — the later of
+`min(local_day)` over the database's events, answered by the parts' own min/max index
+(`_minmax_count_projection` in `EXPLAIN`, no event read), and `kept_from` — to today. A range
+wholly before it is `range_outside_retention` with `covered: null`; one wholly in the future
+covers nothing and has no notice. `incomplete` marks the period containing now (and hours not
+begun), and any period the covered range does not hold whole, which includes the days before
+the oldest one kept: AN-066's "a period the covered range cuts", read so that a chart never
+draws as complete a period it has no data for.
+
+**The erasure and deletion skip.** `readSkip(ctx, key)` loads, once per database until
+`invalidateReadSkip(key)`, the pending erasures and the IDs of deleted names whose rows remain,
+and gives each read its conditions: on `events`, `NOT ((installation_id IN … OR user_id = …) AND
+received_time < …)` per erasure and `event_name_id NOT IN …`; on the installation-scoped tables,
+whose aggregated states carry no received time, the erased installations are left out whole
+until the pending erasure is gone (more hidden, never less). With nothing pending each is `1`
+and the projections answer; while something is pending, `received_time` and the deleted IDs
+are not projection keys, so that database's reads scan events until the worker finishes
+(correct, slower). Rejected: filtering in the API after the query, which cannot correct a
+unique count.
+
+**Names by ID.** A name resolves to its ID from PostgreSQL at each query (one indexed read of
+the few names a definition holds), so deleting the row retires the ID for every read at once
+with no cache to invalidate; ingest keeps its own bounded cache, which deletion and blocking
+invalidate (`invalidateAnalyticsCatalog`). `resolveEventNames` answers `current`, `deleted` (the
+name is in `analytics_event_name_deletions`) or `unknown`, which is how pieces 7 and 8 answer a
+saved step with `event_deleted` rather than "never seen". "Any event" does not resolve names, so
+the skip's `event_name_id NOT IN` is what keeps a deleted name's rows out of it.
+
+**The catalog** is answered from PostgreSQL and filtered, searched (name and description, the
+platform's description for a standard event without one, case-insensitively) and sorted in
+memory: a database holds at most a few thousand names. The category filter keeps names that
+ever used the category (`analytics_event_categories`) or whose latest is it. The refresh pass
+(every five minutes, `catalogIntervalMs`) claims each database with a transaction-scoped
+advisory lock (not a row lock on the database, which would make a rename wait) and writes only
+its own columns: the 24-hour figures from one query over the last 24 hours of effective time
+(`countIf(kind != 'test' OR name = test_event)`, so the test installation counts only in
+`test_event`); last seen and the latest category from the newest local day of each name among
+the days an event could have arrived for since (the lateness window plus two days, and all days
+for a name never refreshed), read two-level from the projection, then the newest effective time
+within that one day, which the sort key prunes to. Last seen only moves forward.
+
+**Event detail and filter values.** The top values are one `ARRAY JOIN mapKeys(params),
+mapValues(params)` over the name's last seven local days, `LIMIT 10 BY key`, in every
+environment (a value seen only in development is still a value the team wants to name); filter
+values cover every environment too, since they fill the environment filter itself. Both hold a
+slot. Experiment filter values: without a key, the keys; with one, its variants.
+
+**Event-name deletion** (AN-056). The request deletes the name's row, its params and categories
+under ingest's catalog lock and records `analytics_event_name_deletions (event_name_id,
+database_key, name, requested_at, submitted_at, attempts, completed_at)` in the same
+transaction (migration `0003`). The worker's pass (every 30 s, `deletionsIntervalMs`) counts the
+name's rows left in `events`, `installation_first` and `user_first` (a primary-key read, and a
+lightweight delete already applied hides its rows); none left, and it stamps `completed_at`.
+Otherwise, unless `system.mutations` shows an unfinished mutation for that ID (the stored command
+is the statement with its parameters substituted, `event_name_id = _CAST(77, 'UInt32')`), it
+submits a lightweight `DELETE` per table with `lightweight_deletes_sync = 0`, so neither the
+request nor the worker waits the minutes such a delete takes at scale. Counting rows is the
+source of truth, so a restart before or after the submission, an outage, or a batch that raced
+the deletion and stored rows under the retired ID are all finished by a later pass (each case is
+a test). The record is kept once complete, which is how the resolver says `deleted`. Rejected:
+a synchronous `DELETE` in the request (it would answer after minutes, or time out at the
+writer's 30 s and be reported as an outage), and tracking by mutation ID alone (lost with the
+process if the submission's answer never arrives).
+
+**Exports.** `?format=csv|json` on the trend route downloads one row per period and series
+(`series, event, metric, splitValue, periodStart, periodLabel, value, incomplete, coveredFrom,
+coveredTo`); JSON carries the same rows with the definition. The catalog export has one CSV row
+per name with its params in one column. `query_analytics_trends` returns a whole answer, which
+at five series of a daily year can exceed 1,000 points: AN-204's cap is read as applying to
+lists of events and rows with a cursor, and a trend is one answer; a question for the owner.
+
+**Measured, as an indication only.** On a seed of 22.5 million events over 90 days
+(`SEED_DAYS=90 SEED_ACTIVE=5000 SEED_EVENTS=50`, merged), this laptop, the local ClickHouse at
+its 4 GB ceiling, `max_threads = 2`, median of five runs of the SQL `runTrend` sends, for a
+charted event of 790,000 events: one series by day over 90 days, unique installations, 30 ms
+(`by_event_day`; budget 500 ms at the reference workload); by week 23 ms; split by app version,
+both statements, 68 ms (budget 1.5 s); a param filter over the 90 days 49 ms (reads the events;
+budget 20 s over 13 months); any event by day 62 ms, which on these parts the optimizer answers
+from `by_day`. The reference workload holds about 180 times as many events; section 33.1's
+scaling applies. The seed script's own erasure measurement ran out of memory at the 4 GB ceiling
+here, as 33.1 found for the `rebuild` mode.
+
+**Two follow-ups from pieces 3 and 11b.** `@inlet/shared/analytics-core` refuses the param and
+experiment keys `__proto__`, `constructor` and `prototype` with `invalid_event` at their path
+(`RESERVED_OBJECT_KEYS`), and the batch route parses JSON in its own encapsulated context with
+Fastify's prototype-poisoning actions set to `ignore`, so such a key costs its event, not its
+batch; every other route keeps Fastify's refusal (tested). The SDK's `setExperiment`, and so
+the Electron main path that applies a window's, refuses the same three keys through `debug`.
+The Collect tab's Electron renderer snippet shows the preload bridge (`window.inletAnalytics`
+through `contextBridge`) exactly as the SDK README documents it.
+
+**From the verification (September 27, 2026).** Three defects, fixed where every caller goes
+through, each with a test in `apps/api/test/integration/analytics-query-verify.test.ts` that
+failed first:
+
+- *A range's dates are bounded by the event store's `Date`, 1970-01-01 to 2149-06-06.* A range
+  ending in 9999 by year never ended the period loop (the year after 9999 was read back as
+  1001) and ran the API process out of memory, taking every capability down with one Viewer's
+  request; by day it answered a 500 after building millions of periods; a year below 100 was
+  read as 19xx by `Date.UTC`. `resolveRange` refuses such dates with `invalid_query` at
+  `range.from` or `range.to`, so funnels and cohorts inherit the bound. Rejected: clamping
+  silently (a chart would not cover what was asked, and say nothing), and a cap on the number
+  of periods, which is a product rule the PRD does not state (the widest range, by day, is
+  65,000 points a series, about 5 MB).
+- *Install-age bounds are clamped to the column.* A `UInt16` query parameter wraps: 65,536
+  read as 0 and 70,000 as 4,464, so `between [0, 65536]` counted day-0 events only. No stored
+  age exceeds 65,535, so the upper bound is clamped and a lower bound above it matches nothing.
+- *A split ranks its values in the event store.* Every distinct value came back to the API to
+  be ranked, which for a param of a million values is a million rows parsed in the process; the
+  ranking is now `ORDER BY` the series metric, rounded as the answer rounds it, `LIMIT 12`
+  (None, the ten lines, and one more to know there is an Other).
+
+Proven besides, against the real event store: every figure of a constructed week (device,
+server and test installations, a background event naming a device installation, a second
+environment, two installations of one user) by day, by week, per metric, for any event and
+split by platform and version, equal to hand-computed values; the two-level queries equal to a
+raw one-level `uniqExact` over the events with `optimize_use_projections` on and off; an
+erasure pending hides exactly its rows received before it in events, splits and any event, and
+the plan of a query then reads no projection; hourly periods equal to ClickHouse's own buckets
+on DST days in Paris, Santiago (DST at midnight) and St John's (−03:30), and in Kolkata and
+Kathmandu; ISO week 53 and years across 2020–2021; SQL-shaped keys, fields and operators
+refused at the schema and values never in the text; `gt`/`lt` skip non-numeric stored values;
+a name deletion unreadable at once in any event, finished by the worker after a failed
+submission, the resolver telling `deleted` from `unknown`, and `test_event` deletable; the
+catalog, live feed, Lexicon writes, block, delete and export answering while every slot is
+held; three queries each from two keys and a user, sent together, all answering. In a
+browser: a Viewer's drawer offers no action, a Creator's describe and hide only; the three
+query states each show their sentence; the chart's drawing is hidden from assistive
+technology and its table named.
+
+Left open: a client that disconnects keeps its place in its lane, and a query already running
+runs to its time limit, since neither the slots nor `store.query` take an abort signal; with
+queries of several seconds a user who changes a chart three times quickly may see
+`analytics_busy` on the last. The catalog's cursor is an offset, not Appendix E's position and
+first-page time, so a name added or a refresh between two pages can move an entry across them.
+
+### 33.5 Overview (piece 5, September 27, 2026)
+
+**One answer, one slot.** `GET …/overview` (`routes/analytics-overview.ts`,
+`services/analytics-overview.ts`) runs its eight event-store statements, and the oldest-day
+read, one after the other inside a single `runAnalyticsQuery`, so the whole home screen holds
+one slot (AN-205) and never three. The catalog (top events and the notices) and the event-name
+IDs of `app_started` and `session_crashed` are read from PostgreSQL before the slot is taken.
+Rejected: statements in parallel inside the slot (it would put several statements per caller
+on the event store, which is what the slot is there to prevent), and one route per figure
+(the interface would hold three slots for one screen, and the web's own concurrency would
+decide the order).
+
+**How each figure is computed.** Filters are 9.2 filters built from the query (`app`,
+`platform` when named; `environment`, `production` by default) and compiled by piece 4's
+`compileFilters`; the installation records and the sessions expose their install or session
+dimensions under the same column names, so one compiler serves events, installations,
+sessions and `version_first`.
+
+- *Active figures, the chart, stickiness* — one set of inner rows over the rollup,
+  `(local_day, installation_id, user_id, count())` for `ANY_EVENT_ROWS` (device installations,
+  no background event) from 59 days before today (or the range's start, if earlier) to today;
+  one statement gives WAU, MAU and their previous windows with `uniqExactIf`, a second the
+  daily counts, from which the last complete day, today, the chart and stickiness come. The
+  unit is `uniqExactIf(installation_id, …)` or `uniqExactIf(user_id, user_id != '' AND …)`.
+  Stickiness divides the mean over the days the 30-day window covers (not always 30) by MAU,
+  so a database younger than a month is not diluted by days it could not have had.
+- *The last 60 minutes and "today so far" one day earlier* — effective time is not a rollup
+  key, so these read the events of yesterday and today (`local_day` prunes the rest). "The
+  same figure one day earlier" for today so far is read as yesterday up to the same time of
+  day — as long past yesterday's midnight as now is past today's — not the whole of yesterday,
+  which would always look larger (the PRD's words allow both; see the amendment below). Not
+  "now minus 24 hours": the day after a daylight-saving change that starts an hour off, and
+  just after midnight it falls before yesterday began and reads 0 (found in verification).
+- *New installations* — the installation records, `minIfMerge(install)` for the install day and
+  install dimensions, `kind = 'device' AND NOT ephemeral`, grouped by install day over the
+  previous and the current range at once.
+- *D1, D7, D30* — the same members joined to their `app_started` days
+  (`groupArray(local_day)` per installation over the two-level rollup read), `countIf` per N of
+  members whose `day + N < today` and of those with `has(days, day + N)`. Returns count on any
+  platform and in any environment and include a background `app_started` of the installation
+  (AN-103, AN-047); the value is null while no member's Nth day has ended.
+- *Sessions and crash-free sessions* — `sessionsSource`: `argMin((local_day, app_id, platform,
+  environment, app_version, params['crashReporting'] = 'true'), (received_time, effective_time,
+  event_id))` per session ID over the `app_started` of device installations that are not
+  background events, read from a day before the window to a day after it (a session lasts at
+  most 24 hours; two `app_started` of one session further apart need a broken client clock),
+  then filtered on the session's own day and dimensions. `crashedSessions` is the set of session
+  IDs any `session_crashed` names from the day before the window on, however late it arrived.
+  One statement returns sessions grouped by day, version, `crashReporting` and flagged; the
+  totals, the per-day counts, the previous range, the overall rate and the five versions with
+  the most sessions are sums in the API. A session without an app version counts in the overall
+  figure and in no version row.
+- *Shares* — the distinct installations active in the last 7 days (rollup) joined to
+  `maxIfMerge(latest)`, grouped with `GROUPING SETS ((app_version), (platform), (country))` in
+  one statement (`grouping(x) = 0` on the rows grouped by x, the SQL standard's reading, which
+  26.8 follows); ten values and Other in the API, so each installation counts once per table.
+- *Versions first seen* — a new table, below.
+- *Top events and notices* — the catalog's 24-hour figures (AN-143 names the catalog):
+  `no_events` when the database has no catalog entry at all, `no_app_started` once the catalog
+  has been refreshed and shows events and no `app_started` in the last 24 hours.
+
+**`version_first` (ClickHouse migration `0002_version_first.sql`).** The marker of AN-142 from
+the events would read every rollup row of the storage window, since no sort key leads with the
+app version: on the reference workload about 400 million rows for one marker line, several
+seconds of a one-second budget. The new table keeps `min(local_day)` per database, app,
+platform, environment and app version, fed by a materialized view from `events_ingest` with the
+active figures' rule (device installations, no background event), a few hundred rows per
+database; the Overview reads it whole and filters it like the events. It outlives the events of
+its first day, as the first occurrences do. After retention has dropped weeks, a version whose
+first day is the oldest day kept has no marker, since it may be older. Rejected: scanning the
+rollup (the cost above), and markers from `app_installed`/`app_updated` (an integrator sending
+its own events need not send them). The table is partitioned by database, so **piece 9's database
+removal must drop its partition** with the others, and the seed script and the harness now know
+it.
+
+**What `EXPLAIN` showed** (the 22.5-million-event seed of 33.4, 90 days, `max_threads = 2`): the
+two active statements `ReadFromMergeTree (by_day)`, 45 ms each; the last hour and today so far
+the events, 24 ms; new installations the `installations` table, 22 ms; retention
+`installations` and `by_event_day`, 36 ms; sessions the events of `app_started`, 318 ms; shares
+`by_day` and `installations`, 33 ms; `version_first`, 5 ms. The whole Overview, the oldest-day
+read included, took a median of 490 ms over five runs, for either unit. The sessions statement
+dominates because the seed's event-name ID 1, which stands for `app_started`, is its most
+frequent name (13% of all events, 3.7 rows per session); a real `app_started` is about one row
+per session. An integration test runs the active rows under `force_optimize_projection = 1`.
+Measured on a laptop, as an indication: the reference workload holds about 180 times as many
+events, and the two statements that read the whole `installations` table (new installations,
+retention) grow with the installations a database has ever had; piece 12's load test decides
+whether they need a table keyed by install day.
+
+**Previous periods (AN-141).** A range figure's previous period is the range of the same length
+just before; it is `null` unless it begins on or after the oldest day kept, and an empty
+database has none. The last hour's previous 60 minutes are available when they begin on or after
+the first instant of the oldest day kept, in the reporting timezone. A figure whose own period the window holds none of has `value` null too.
+
+**Piece 4's follow-ups.**
+
+- *A client that goes away frees its slot and its statement.* `clientGoneSignal(reply)` fires
+  when the response's connection closes before it was written in full; trends, event detail,
+  filter values and the Overview pass it to `runAnalyticsQuery`, which gives it to
+  `QuerySlots.acquire` (a waiter leaves the queue at once and the queue drains) and binds it to
+  `store.query`. `@clickhouse/client` stops listening to its abort signal once the answer starts
+  streaming, so `store.query` also closes the result by hand; and ClickHouse keeps running a
+  read whose HTTP client went away unless told otherwise — measured: with
+  `cancel_http_readonly_queries_on_client_close = 0` an aborted `sleepEachRow` statement stayed in
+  `system.processes` to its end, with `1` it left within 300 ms — so the reader sends that setting
+  with every read (the read-only users run with `readonly = 2`, which allows it). The error
+  handler answers such a request 499 and logs it at info. `app.inject` (the remote MCP) ends
+  its responses in full and never aborts. Rejected: `KILL QUERY` by query ID from the writer
+  (it needs a privilege a deployment's writer may lack, and one more round trip), and leaving
+  the statement to its time limit (a user who changes a chart three times would meet
+  `analytics_busy`). The read timeout now closes a streaming result too, which it never did.
+- *At most 1,000 periods per range* (AN-064, 9.2): `checkInterval(range, interval, path,
+  rangePath)` counts the periods the range touches (`periodCount`) and refuses more than 1,000
+  with `invalid_query` at `range`; the Overview checks by day. Funnels and cohorts call the same
+  function with their interval or granularity.
+- *The catalog cursor is a position.* It carries the sort, the last entry's sort value and
+  name, and the time of the first page; a later page starts strictly after that position and
+  leaves out names first seen after that time. The time is the newest first-seen time the first
+  page could read (ingest's received time, which only moves forward), so a name stamped a
+  millisecond ahead of the wall clock is not mistaken for a late one. Under `sort=name` a list
+  read page by page shows each name once whatever arrives or refreshes; under `lastSeen` and
+  `events24h`, an entry the refresh moves across the reader's position between two pages can
+  still be skipped or shown twice — the refresh keeps no earlier values, so no cursor can say
+  where the entry stood. Rejected: an in-memory snapshot of each first page's order (state per
+  reader for a rare case), and the offset (every later entry moved when a name arrived). The web
+  catalog now follows `nextCursor` until the last page, so a database allowed 5,000 names shows
+  them all.
+
+**PRD amendments for the orchestrator** (not applied here):
+
+- AN-141, "daily … active units from the same figure one day … earlier": add "; for today so far,
+  the same figure at the same time yesterday".
+- AN-140, after "D1, D7 and D30 retention of the standard cohort, where DN is …": add "(null
+  while no installation installed in the range has reached the end of its Nth day)".
+- Appendix E "Overview": "each figure of AN-140 with its `value`, its `previous` … and the range
+  it `covered` (null, with a null value, when the storage window holds none of its period)";
+  and "`crashFree` overall and by version, each with `rate` (null when not measured), `sessions`
+  (the sessions counted, those reporting a crash module), `measured` and `lowConfidence`".
+- Appendix E "Cursors": after "so that a list read page by page while events arrive shows each
+  item once", add "; for the catalog sorted by last seen or by 24-hour events, an entry whose
+  figures a refresh changes between two pages may move across the cursor".
+
+### 33.6 Profiles and links (piece 6, September 27, 2026)
+
+**One cross-capability lookup** (`apps/api/src/services/identity-links.ts`). Profiles (AN-124),
+the funnel drill-down's flags (AN-088, piece 7) and the erasure preview (piece 10) all ask the
+same question — what do this project's crash and feedback databases hold that carries these
+installation or user IDs — so one module answers it, and the three cannot disagree on what
+"carries" or "can read" means. `findIdentityLinks(ctx, principal, projectId, { installationIds,
+userIds })` answers the crash groups having retained reports carrying any of them (database,
+group, title, the number of such reports, the last received time) and the submissions carrying
+any of them (database, submission, received time, first free-text answer), newest first, 100 of
+each with a `truncated` flag; `identityFlags(…)` is the cheap "has any" form, one indexed
+`SELECT DISTINCT` per column and capability. Only databases of that project the principal can
+read count, resolved with the existing `listAccessibleCrashDatabaseIds` and
+`listAccessibleDatabaseIds` (FD-007's effective roles), so a database the reader cannot read
+contributes nothing, not even a count. It reads PostgreSQL alone, through the identity indexes
+already on `crash_reports` and `submissions` (CR-118, FR-062), so a profile's links work however
+the event store is doing. The group title is the one the crash screens show (`exceptionType` or
+the kind, then the top frame or module). The first free-text answer follows the pinned form
+version's authored order (FR-065), cut at 500 characters for a card; the whole answer is one
+click away. Rejected: a lookup per capability in each piece (three copies of the access rule),
+and asking the event store for the IDs of crash reports (it holds none).
+
+**Which IDs a profile's links match.** An installation's profile matches its installation ID
+**and every user ID seen on it**; a user's profile matches the user ID **and the IDs of every
+installation it was seen on**. AN-124 says "the profile's installation or user ID", and a
+crash report sent before sign-in carries only the installation ID while a feedback submission
+sent from a backend carries only the user ID: matching one ID alone would leave out exactly the
+records support opens a profile to find. The cost is that a shared device's profile also lists
+the crashes of its other users' other installations, which the identity history on the same
+page explains. Rejected: matching the installation ID alone for an installation (misses the
+backend's submissions) and following links transitively (user → installations → their other
+users), which would pull in strangers on a shared tablet.
+
+**Profile reads.** A profile by its exact ID holds no slot (AN-205) but runs under the per-query
+limits: the installation record (`installations` with the existence rule of AN-031), its
+identity links (`installation_users`, the current user ID being the last seen with ties to the
+larger ID, as `argMax(user_id, (last_seen, user_id))` derives it), and its counts and calendar
+from its events (`installation_id =` or `user_id =`, served by the bloom filters of DECISIONS
+31.4). Sessions are the distinct session IDs of its `app_started` events (AN-043; since piece 7, of
+the sessions holding one of its events, 33.7), active days
+the local days holding an event that is not a background event (AN-047), events every event
+including background ones. A user profile exists while one of its installations' records does
+(AN-126) and its totals are over the events carrying the user ID, on whichever installation.
+The test installation is never listed (AN-025); read by its exact ID it has a profile like any
+other. A server installation has no `lastSeen` (its events are background events), so lists
+order it by its last event. Column aliases never repeat a column's name (`max(last_seen) AS
+last_seen_at`): ClickHouse resolves an alias before a column, and `ifNull(max(last_seen), …)`
+beside `max(last_seen) AS last_seen` would read as an aggregate inside an aggregate.
+
+**Search, the recent list and the feed take a slot** (AN-205). A prefix needs six characters
+(AN-120); shorter text still matches exact IDs, because a user ID such as `u1` is legitimate,
+and the answer carries `notice: prefix_too_short` rather than an error, so the interface can say
+why a five-character prefix of an installation ID found nothing. An installation ID prefix is
+`startsWith(toString(installation_id), prefix)`, the prefix rebuilt from `q`'s hex digits in the
+stored lowercase dashed form, so it matches in any letter case, with or without dashes (9.1), and
+needs six hex digits (found by the verification: a dashless prefix longer than eight characters
+matched nothing); both prefixes scan the database's installation tables, which is why they hold a
+slot.
+
+**Cursors keep the first page's time** (Appendix E). The feed orders by effective time then
+event ID and reads `max(received_time) OVER ()` with its first page; later pages add
+`received_time <= that`, so an event arriving meanwhile, however old its effective time, never
+lands on a page already passed, and it heads a fresh first page instead. The recent-installations
+list orders by "seen" (last seen, or last event for a server installation) then installation ID
+and keeps the first page's newest "seen"; an installation active after that is left off the
+following pages (it heads a fresh list) rather than listed twice. **What that costs**: such an
+installation that was still below the cursor is missing from that paging session, since its
+earlier "seen" is merged away in the aggregate state and cannot be read as of the first page.
+Rejected: recomputing "seen" as of the first page from the events (a scan of the whole storage
+window per page).
+
+**Export** (AN-125) streams one JSON document: the record, identity links, first occurrences
+(a deleted name's are left out, as its events are; `*` for the any-event occurrence) and every
+event, newest first, read in pages of 5,000 through the feed's own cursor, each page taking and
+releasing a slot. The records and the first page are read before the response starts, so a
+missing profile, a busy slot or an outage answers with its status; a failure after that cuts
+the download, which a client sees as invalid JSON. The file name carries the database ID and
+the date, never the installation or user ID (a download's name lands in browser histories).
+With `limit`, the route answers one page as JSON (the records on the first page only): that is
+what `export_analytics_profile` reads, 1,000 events a call (AN-204).
+
+**The Usage profile link** (AN-154, FR-066) is its own request, `GET …/reports/{id}/usage-profile`
+and `GET …/submissions/{id}/usage-profile`, which the web asks after the report or submission
+has loaded: the crash and submission reads never touch the event store, so an outage can
+neither slow nor fail them. The lookup answers an empty list, never an error, when the event
+store is not configured, does not answer `reachable()` within 1.5 s, or the query fails, and it
+is bounded at 3 s in all (tested with a store refusing connections and one accepting them and
+never answering). It holds no slot (a read by exact ID). When several readable analytics
+databases of the project hold the installation, the answer lists them all, the one it was seen
+in most recently first, and the interface shows one link per database, named after it.
+Rejected: embedding the link in the report and submission answers (every read would wait on the
+event store, which AN-154 and FD-009 forbid), and choosing one database silently.
+
+**Web.** Users is a panel of the database page; the profile's subject is in the address
+(`?tab=users&installation=…` or `&user=…`), which is what the Usage profile link opens. The
+calendar draws at most the last 53 weeks and hides its drawing from assistive technology;
+**Active days as a list** gives every active day as text. The feed groups consecutive events of
+one session, as a newest-first list meets them. The Admin's Erase action has its marked place in
+the profile header for piece 10.
+
+**A background event names the installation's user** (decided with piece 7). A background event
+carrying a user ID updates the installation's identity links and its current user, since
+`installation_users` has no platform filter: AN-047 protects an installation's context and last
+seen, and a user ID is identity, not context, so a backend naming the installation's user is the
+link AN-122 wants. Pinned by `analytics-funnels.test.ts` ("lets a background event carrying a user
+ID link the installation to that user, without moving its context").
+
+### 33.7 Funnels (piece 7, September 27, 2026)
+
+**The query** (`apps/api/src/services/analytics-funnels.ts`, DECISIONS 31.4). One statement per
+answer, in three levels. The inner level reads the events of the steps' names — `event_name_id IN
+(…)` over the covered range plus the window, so the sort key's `(database_key, event_name_id,
+local_day)` prefix prunes it — and groups them by unit into one array, `arraySort(groupArray(
+(effective_time, UUIDToNum(event_id), mask, local_day, lowest, installation_id[, split value])))`:
+`mask` is the bits of the steps the occurrence matches (an event may match several, and a name may
+be two steps), `lowest` its lowest step. Sorting tuples orders by effective time, then by the event
+ID's 16 bytes in the order of its text (`UUIDToNum`), which is the natural order of its hexadecimal
+digits and the one a reader can check; ClickHouse's own `UUID` comparison is not (it compares the
+last 64 bits first: checked on 26.8). `UUIDToNum`'s `FixedString(16)` rather than the ID's text
+halves the memory the arrays hold (below). The middle level works per unit, in two passes that do
+not depend on the number of entry groups (verification of piece 7). One sort of the occurrences by
+(entry group, not a candidate, time, lowest step, position) puts each group's entry first: step 1's
+first occurrence in the range in a closed funnel (AN-083), and in an open one the earliest
+occurrence of any step, the lower step winning a tie of time and the first by event ID among those
+(AN-084); the steps view is one group. Then one `arrayReverseFill` per step, from the last step
+back, gives at every position the chain of times a walk starting there reaches: the first
+occurrence of step k at or after it, of step k + 1 strictly after that one, and so on, `INF` where
+the chain ends — so the occurrence that reached step k − 1 can never reach step k. An entry's
+chain is the one at the position after it, picked out for all entries at once by a mask (entries
+are distinct positions), and the outer level zips the entries with their chains and walks each by
+lookup: step k is reached when its chain time is no later than entry plus the window, the chain's
+times only rising. Closed and open funnels differ only in the entry and in which chain an entry at
+step `E` reads (the one starting at step `E + 1`), so `continued`, conversion and the times need no
+second formula. The outer level aggregates the walked rows: `countIf` per figure,
+`quantileExactInclusive(0.5)` and `avg` of the per-unit seconds. The trend view has one row per
+unit and entry group, so a unit entering in two weeks is walked twice, from each week's first
+entry (AN-086). A split carries the value of the entering occurrence (for install attribution the
+entering installation's record, joined per unit); a first statement ranks the values by entries (ten, then Other and None), and the second
+counts each walked row twice through `ARRAY JOIN [('', ''), (group, value)]`, once in the whole and
+once in its group, so the overall figures and "Other" are exact sets, never sums. Every value is a
+bound parameter; step numbers and bit positions are the code's own integers.
+
+**The median is `quantileExactInclusive(0.5)`**, which averages the two middle values of an even
+count (the median of 5 minutes and 24 hours is 12 hours 2.5 minutes), rather than `medianExact`,
+which returns the upper one. Both are exact (31.4 forbids only approximations); the inclusive one
+is the median a reader computes by hand. Appendix B's medians have an odd count and are the same
+under both.
+
+**Answers.** Steps are numbered from 1 (`index`, and the drill-down's `step`), since the PRD and
+the interface speak of "step 2". In a closed funnel a step's `entered` is null (the funnel's
+`entered` is step 1's); `continued`, `shareOfPrevious` and the times are null for step 1 and
+`dropped` for the last; a share with a zero denominator is null, not 0. The trend view also returns
+the `steps` (index, event, label), so an export and the interface can name them. An experiment
+split carries `split.descriptive` and a `note` stating that no significance test is run (AN-087).
+Every answer carries `range`, `timezone`, `keptFrom`, `covered` and `notice` as trends do.
+
+**Incomplete groups** follow AN-086 literally: a group is incomplete while its period's last
+instant plus the window is later than now, and a range that cuts a period does not make it
+incomplete, unlike a trend's period (Appendix B.4: week 36 is complete though the range starts on
+its Tuesday). `buildPeriods` gives the groups; the rule is computed here.
+
+**`event_deleted`** comes from piece 4's resolver: a step whose name is `deleted` compiles to `0`
+(no occurrence matches), with the warning `{ code, step, event }`; `unknown` compiles to `0` with
+no warning. Inline definitions get the warning too, because AN-082 wants both computed identically.
+
+**The drill-down** walks the steps view with two more conditions: `received_time <= runAt` and
+`unit > cursor`, both in the inner level, so each page reads only what it lists. The first page
+fixes `runAt` (the API's clock) and later pages carry it in the cursor (base64url JSON `{ r, u }`),
+which also fixes the "now" of a preset range; the keyset by unit ID shows each unit once whatever
+arrives. The rows reuse piece 6's `summarySql`, `latestUserIds` and `presentSummary` (now
+exported), and the flags piece 6's `identityFlags`, called after the slot is released (PostgreSQL
+only). A user-ID funnel's row is the installation of the unit's entering event. Rejected: re-running
+the whole funnel per page and filtering in the API (reads every unit per page), and an offset cursor
+(moves under arriving events).
+
+**Saved funnels** are checked as a run checks them (the schema, then each filter compiled with a
+throwaway scope, so an installation ID that is not a UUID answers `invalid_query` at
+`definition.steps.N.filters.M.values.K` when saving), so a saved funnel always runs. Definition
+failures on the CRUD routes answer `invalid_query` with the path, like the runs, rather than the
+generic `validation_failed`, since the body is a query definition (7.4). The HTTP `DELETE` takes no
+confirmation, as the analytics database's does; `delete_analytics_funnel` reads the funnel and
+demands its exact name (FD-022), as `delete_analytics_database` does. Rejected: a `confirm` query
+parameter as the event deletion has, because 7.2 asks for it there only, and a funnel's deletion
+loses no data.
+
+**Slots.** The steps view and the drill-down take a `query` slot; the trend view the caller's
+`funnelTrend` lane (AN-205), under `INLET_ANALYTICS_FUNNEL_TREND_TIME_S` (120 s). The test holds a
+signed-in user's `query` slot by hand and shows that its funnel trend still answers while its
+steps view waits, and that an Overview, a trend and a funnel trend requested together all answer.
+The interface shows a spinner with the elapsed seconds while a run is under way: the API reports no
+progress, and ClickHouse's progress headers would need a streaming response for a whole answer.
+
+**What `EXPLAIN` and the timings showed** (the 22.5-million-event seed of 33.4 — 90 days, 15,000
+installations a day — on this laptop, the local ClickHouse at its 4 GB ceiling, `max_threads = 2`,
+median of five runs of the SQL `runFunnel` sends; three steps of 2.1 million events over the 90
+days, the "funnel's steps at most a tenth" of 9.5 at this seed's scale). `EXPLAIN indexes = 1` of
+the steps view over 14 days: the partition key keeps 3 of 13 parts and the primary key 45 of 622
+granules (the `event_name_id IN` set and the day bounds), so the walk reads about 1.6 % of the
+database. As first built — one `arrayJoin` row per unit and entry group, each carrying the unit's
+whole array and scanning it once per step with `arrayFirstIndex` — the closed funnel took 68 ms for
+the steps view over 14 days, 216 ms over 90 days, 763 ms for the trend by day over 90 days and
+568 ms by week; the open one 147 ms, 2.4 s and 1.2 s, and its trend by day needed 911 MB, over the
+default per-query memory limit of 768 MB (`INLET_ANALYTICS_QUERY_MEMORY_BYTES`), so it answered
+`query_limit_exceeded` on this modest database. Scaled by rows read to the reference workload
+(about 43 times this seed's step events) on four threads, the trends by day extrapolated to about
+16 s closed and 50 s open, over the 10 s budget. With the per-unit passes above, measured the same
+way: closed 58 ms (steps, 14 days), 241 ms (steps, 90 days), 233 ms (trend by day), 238 ms (by
+week); open 58 ms, 198 ms, 207 ms and 200 ms; about 300 MB for any 90-day shape, the arrays of the
+`GROUP BY unit` now being the whole of it. Every answer is identical to the first build's on the
+seed (the means differ below 10⁻¹⁰ s, the order of a floating sum) and in the randomised comparison
+with a plain TypeScript walk (`analytics-funnels-reference.test.ts`). Extrapolated as before: the
+steps view over 14 days about 1.3 s (budget 3 s), the trends by day over 90 days about 5 s (budget
+10 s), within budget as an extrapolation that piece 12's load test replaces. **Memory is the open
+risk:** the arrays hold every step occurrence of the range, about 140 bytes each, so a 90-day
+funnel would need about 13 GB at the reference workload (a limit of 8 GB there) and about 1.3 GB at
+the Small workload (768 MB by default), and 13 months several times more. Letting the aggregation
+spill (`max_bytes_before_external_group_by` at about half the memory limit) answered every 90-day
+shape on the seed under a 150 MB limit, at a peak of 75 MB and 35 to 45 % more time, with the same
+answers; whether funnel statements spill, and the disk the event store may use for it, is the
+owner's to decide with piece 12's measurements.
+
+**A profile's sessions** (piece 6's follow-up). A subject's sessions are now the distinct session
+IDs, named by an `app_started` (AN-043), of the sessions in which at least one of its events
+occurred, whatever user ID the `app_started` carried: the SDK stamps the user ID when an event is
+created, so a user who signs in after launch had no `app_started` of their own and showed 0
+sessions. `countsOf` reads the `app_started` events whose installation and session hold one of the
+subject's events, and never a backend's (AN-047: a background event makes no session); for an
+installation the count is unchanged (its sessions' `app_started` are its own), and active days keep
+their rule (the subject's own events that are not background events).
+
+**Rejected.** `windowFunnel` (31.4; `analytics-funnels.test.ts` runs it beside a funnel it
+answers differently); one statement per group of the trend view (90 statements for a daily trend,
+each rereading the same events); one `arrayJoin` row per group carrying the unit's whole array and
+scanning it per step (the first build, above: its cost and memory grow with the number of groups);
+computing the walk in the API from the events (moves every occurrence over the network); and
+`medianExact`, above.
+
+### 33.8 Cohorts (piece 8, September 27, 2026)
+
+**One retention computation.** `cohortCounts` (`apps/api/src/services/analytics-cohorts.ts`)
+answers, for a start, a return, a granularity, a counting unit, population filters and the days of
+the start periods, the number of members per (cohort period, N) — N = 0 being the cohort's size,
+N ≥ 1 those that returned in the Nth calendar period after their cohort's. The Overview's D1, D7
+and D30 (piece 5) now call it with the standard cohort by day and sum its counts per N over the
+installation days whose Nth day has ended, and its new installations are the install start's
+members (`membersSql`); piece 5's own retention statement and `installedRows` body are gone, so the
+Overview and a cohort table cannot disagree. Piece 5's tests pass unchanged.
+
+**The query** (31.4), one statement per run:
+
+- **Members** (`membersSql`), one row per unit with the local day of its start. The install: the
+  installation record's `minIfMerge(install)`, device installations that exist and are not
+  ephemeral (AN-031, AN-047); it never moves. The first event, or a named event without filters:
+  `installation_first` or `user_first` (event-name ID 0 for the first event), an installation
+  counted only if its record is a device installation that is not ephemeral (`IN` the record set),
+  so server, test and ephemeral installations are in no cohort; these tables outlive the events of
+  their day while the installation keeps sending (AN-108, AN-165), so dropping weeks moves no
+  member. A named event with filters: the unit's first matching occurrence among the events kept,
+  ordered as first occurrences are (the earliest local day, then received first), with
+  `firstInWindow` in the answer. Population filters are compiled by piece 4's `compileFilters`
+  unchanged, over the members' dimensions exposed under the filter compiler's column names (install
+  attribution through its installation-ID set, installations only). A unit's start must fall in the
+  first day of the first period to the last day of the last.
+- **Returns** (`returnsSql`): the distinct (period, unit) pairs of the return event, grouped as
+  `GROUP BY <period of local_day>, unit`, which the aggregate projections answer (`by_day` for
+  "any event", `by_event_day` for a name; checked with `EXPLAIN`). A named return counts background
+  events (AN-047); "any event" is `ANY_EVENT_ROWS`.
+- **The join**: returns `RIGHT JOIN` members on the unit, members being the hash table (one row
+  per unit) and the pairs streaming past it. Each output row yields N = 0 and, when the pair is a
+  later period, its offset (`arrayJoin`); each (cohort, N ≥ 1) is `countIf` (the pairs are
+  distinct), N = 0 `uniqExactIf` (a member appears once per matched pair). Period offsets are
+  differences of `toRelativeDayNum`, `intDiv(toRelativeDayNum(toMonday(d)), 7)`,
+  `toRelativeMonthNum` or `toYear` of the local day, so periods are the reporting timezone's
+  (31.4).
+- **The table** (`cohortTable`, pure): a row per period with members, oldest first; a cell per
+  later period that has begun, `incomplete` when it is the current period and `covered` false when
+  it begins before the oldest day kept; the summary per N over the cells ended and covered, else,
+  only where no cohort's period N has ended yet, marked incomplete, over those begun (AN-104 to
+  AN-106; a column whose ended cells are all uncovered has no summary value). Rows are the newest 60, 52, 36 or 10
+  periods of the range (`truncated`); columns run to the current period.
+
+**Memory, measured.** `scripts/measure-cohorts.mjs` runs the very statements `cohortCounts` sends
+against a seed of 20,160,000 events and 900,000 installations over 12 weeks
+(`SEED_DAYS=84 SEED_ACTIVE=60000 SEED_EVENTS=4 SEED_POOL=900000 node scripts/analytics-seed.mjs
+seed`, a mode added for this), at four threads, and finds each statement's peak as the smallest
+`max_memory_usage` it runs under (a binary search to about 4%: the local ClickHouse keeps no
+`query_log`, and the `X-ClickHouse-Summary` header's `memory_usage` is not the peak — it reported
+22 MiB for a statement that needs 1.3 GiB). Two runs, on a laptop shared with other test runs:
+
+| Cohort (900,000 installations) | Peak | Time, under 768 MiB |
+| --- | --- | --- |
+| Retention, 12 weekly cohorts (install, then the most frequent name) | 343 MiB | 0.82 s |
+| Retention by month | 566 MiB | 0.78 s |
+| First event, any event, by week | 566 MiB | 0.64 s |
+| Named start without filters, by week | 303 MiB | 0.31 s |
+| Named start with a filter (`firstInWindow`), by week | 167 MiB | 0.14 s |
+| User IDs, first event, any event, by week | 207 MiB | 0.31 s |
+| Install, population filter `platform = ios`, by week | 271 MiB | 0.60 s |
+
+Every case fits the default per-query limit of 768 MiB. They did not at first:
+
+- **One array of return periods per unit** (`groupArray` per unit, then `LEFT JOIN` from the
+  members) needed over a gigabyte for the Retention cohort alone: an aggregate state per unit over
+  every unit, which 33.1 warned about. Replaced by the right join over distinct pairs.
+- **The install state** (`minIfMerge` of a tuple of every install dimension) over 900,000
+  installations peaked at about 1.3 GiB in a hash table. `installations` is sorted by the unit it
+  is grouped by, so the statement sets `optimize_aggregation_in_order = 1` for the install start,
+  which holds one installation's state at a time: about 240 MiB, and faster (0.5 s against 1.7 s).
+  The first-occurrence tables did worse with it (their states are small, below), so it is set for
+  the install only (`membersSettings`). The Overview's new installations read the same members and
+  take the same setting; piece 5's statements, which read the same subquery, would have
+  exceeded 768 MiB at this scale without it.
+- **First occurrences carried whole** (`min(first)`, 17 elements with arrays) peaked at about
+  375 MiB for the members alone; the minimum over (day, received, time) and only the dimensions
+  needed (the environment, and whatever a population filter tests) peaks at about 170 MiB. The
+  same for a filtered start's events. A tie on all three times then falls to the dimensions carried
+  rather than to every dimension; either occurrence is the first of that day.
+- **The (period, unit) pairs of a frequent return** (5 million for "any event" here) are the
+  largest hash table left; the statement sets `max_bytes_before_external_group_by` to a quarter of
+  the query's memory limit, so it spills to disk rather than fail.
+
+Both settings are passed with the statement (`QuerySettings` gained the two keys), never
+interpolated. A test runs 12 weekly cohorts of 10,000 installations under the smallest limit the
+operator may set, 64 MiB.
+
+**Time.** PRD 9.5 budgets 2 s for 12 weekly cohorts at the reference workload. The Retention
+cohort took 0.82 s here with 900,000 installations; the install members are about 0.5 s of it and
+grow with every installation a database has ever kept, so at five million installations it would
+be about 4 s on this laptop, over budget. Piece 12's load test measures it; the next step, if
+needed, is a table of install days kept beside `installations` (as piece 5 noted), which would
+answer the install start without merging install states.
+
+**Rejected.** A statement per cohort row (12 to 60 statements); the per-unit arrays and the per-unit
+`groupBitmap` of offsets (1.7 GiB); `uniqExact` over every (cohort, N, unit) of raw event rows instead of
+distinct pairs (566 MiB, and slower); counting sizes in a second `UNION ALL` branch,
+which reads the members twice (3.9 s); `argMin` states (33.1); `windowFunnel`-style functions,
+irrelevant here; sampling or `uniq` (31.4: exact only).
+
+**Decisions.**
+
+- **The production default tests the start, not the returns.** A definition that names no
+  environment counts starts in `production` (AN-064), as an implicit population filter tested on
+  the unit's context at its start; returns are counted in any environment, as population filters
+  never apply to returns (AN-103) and as piece 5 counted D1, D7 and D30. An environment named on
+  the start's own filters lifts the default too.
+- **Install attribution is refused for user-ID cohorts** (`invalid_query` at the filter's
+  `field`): a user ID has no install, and its first occurrence carries no installation.
+- **Ephemeral installations are excluded from installation cohorts only.** A user-ID cohort counts a
+  user whatever installation its events came from: the user ID is what makes a private window's
+  visitor recognisable (the web note says so).
+- **User IDs from server installations count** (a backend's `purchase_completed` naming a user is a
+  named start or return of that user, AN-047); the test installation's never do.
+- **The answer's `range` is the resolved range asked for**; `truncated` says when its oldest periods
+  were left out, and `rows[0].start` is the first shown. `covered` is computed as for every answer,
+  but unfiltered starts are answered whatever it is, from the records that outlive the events.
+- **`summary`** carries `members` beside `returned` and `share`, and the answer `size` and `periods`,
+  so a reader can recompute every share; a summary cell with no cohort begun is `share: null`.
+- **Cells not yet begun are absent**, not null: `cells` lists the periods begun, `period` naming
+  each.
+- **Web.** Granularity, range and population filters change any run without saving (AN-100): the
+  standard cohort runs by its ID with them as overrides, every other cohort runs its current
+  definition inline. Incomplete cells carry `*`, uncovered ones `†`, both in the legend; each cell's
+  share, count and state are text for assistive technology.
+
+**PRD amendments for the orchestrator** (not applied here):
+
+- **Appendix E "Cohort"** should read: "`cohort` (`id`, `name`, `standard`, or null for an inline
+  definition), `definition` (the definition run), `granularity`, `unit`, `range`, `timezone`,
+  `keptFrom`, `covered`, `notice`, `firstInWindow`, `truncated`, `warnings` (`code`
+  `event_deleted`, `in` `start` or `return`, `event`), `size` (every member of the rows shown),
+  `periods` (the columns, period 0 included), `summary` (per period from 1, `period`, `members`,
+  `returned`, `share`, null when no member is counted, and `incomplete`), and `rows`, each with
+  `start`, `label`, `size` and `cells`, one per later period that has begun, each with `period`,
+  `returned`, `share`, `incomplete` and `covered`."
+- **AN-101** should add: "Install attribution is a population filter of installation cohorts only."
+- **9.2**, after "A definition may carry `defaultRange`": "A definition that names no `environment`
+  filter, among its population filters or its start's filters, counts starts in `production` only;
+  returns are counted in every environment."
+
+**Verification (tester, September 27, 2026).** A randomised reference
+(`test/integration/analytics-cohorts-reference.test.ts`: plain TypeScript over the same events,
+about 400 installations over fifteen months with ephemeral, background-first, background-only and
+server installations, late events lowering first occurrences, ties within a batch; every start
+kind, both returns and units, the four granularities in America/New_York and Asia/Kolkata,
+population filters, a range longer than the rows allowed, and the oldest weeks dropped) agrees
+with every answer, and with the Overview's D1, D7, D30 and new installations. It found one
+difference, fixed: the summary fell back to the incomplete value where some cohorts' period N had
+ended but none was covered; AN-106 gives that value only where no cohort's period N has ended.
+Re-measured on the same seed (`inlet_seed_p8`), seventeen shapes including the install start with
+"any event", sixty daily cohorts, the most frequent name filtered and three population filters:
+every one runs under the default 768 MiB, the largest at about 525 MiB (the install start by
+month, and by week with "any event"). External aggregation is load-bearing, not a safety margin:
+without it the first event with "any event" needs more than 2 GiB; with it the answers are
+identical whether it spills at 8 MiB, 192 MiB or 512 MiB.
+
+- **AN-047**, **section 10** and **section 4 "Ephemeral Installation"** should say what this piece
+  does, which `user_first` (no ephemeral flag) could not change without a migration: AN-047's last
+  sentence "Ephemeral installations shall be excluded from new installations and from every cohort
+  that counts installations, and their events shall count everywhere else, a cohort that counts
+  user IDs included."; section 10 "ephemeral installations never count as new installations or in
+  cohorts of installations"; section 4 "Excluded from installs and from cohorts of installations."
+
+### 33.9 Storage, retention and data health (piece 9, September 27, 2026)
+
+**Modules.** `services/analytics-retention.ts` (the retention plan and pass, the pruning, database
+removal, the orphan sweep, the daily maintenance, the mutation tracker), `services/analytics-incidents.ts`
+(opening, updating and resolving incidents, the counter pass, the counters kept eight days),
+`services/analytics-storage.ts` (the storage answer, the recommendations, changing the settings, data
+health), `services/analytics-slack-message.ts` (the 8.2 renderer, pure), `routes/analytics-storage.ts`.
+
+**Partition statistics are the whole measurement.** A week's events and bytes come from the active
+parts of `events` in `system.parts`, grouped by `partition_id`, which ClickHouse writes as
+`<key>-<YYYYMMDD of the Monday>` for a partition key of integers and dates; the other keyed tables'
+IDs are the key alone. The week is `toMonday(min(min_date))`, so nothing parses the ID's date. A
+partition is dropped with `ALTER TABLE … DROP PARTITION ID {partition:String}`, the ID bound as a
+parameter, and `max_partition_size_to_drop = 0` as a query setting: ClickHouse refuses to drop a
+partition over 50 GB by default, which a whole database's installation records can exceed.
+
+**The order of a retention pass.** In one transaction holding a row lock on the database
+(`for update skip locked`, the claim of UX Analytics 11): read the partitions, plan the drops, write
+`kept_from`, add the cap's events to the hour's `removed_by_cap`, and open, update or resolve the
+storage incidents with their deliveries. Commit; raise ingest's floor; drop. The plan always drops
+the weeks before `kept_from` first, so a drop that failed after the commit, a restart in between, or
+a week an insert racing the drop recreated is dropped at the next pass without being counted again.
+A settings change takes the same row lock, so it never lands mid-pass. *Rejected:* dropping first
+and writing `kept_from` after (a restart in between loses the floor, and a late event recreates the
+week); a transaction-scoped advisory lock, as the catalog refresh uses (the brief and section 11 ask
+for row locks, and the settings route then waits on the same lock naturally).
+
+**The plan.** Weeks whose last day is older than the maximum age go first, so events up to a week
+beyond the age remain; then, while the events kept exceed the cap, the oldest week, never one of the
+current or previous Monday of the reporting timezone. What remains over the cap is
+`storage_cap_exceeded`. Every week the cap drops is younger than the maximum age (the age dropped the
+older ones), so any cap drop is AN-169's "early" removal.
+
+**Recommendations.** Under a binding cap the days kept vary by a week of volume: between
+⌊cap ÷ volume⌋ − 7 and ⌊cap ÷ volume⌋, which gives the PRD's 43 to 50 days (500 million at 10 million
+a day) and 13 to 20 (200 million). The cap that keeps N days without ever removing a week early is
+(N + 14) × volume: the age keeps up to a week beyond N, and a binding cap varies by another week, so
+the cap's lowest must reach the age's highest. At 10 million a day that is 409 × 10 million, "about
+4.1 billion events", and at the measured bytes per event (the `events` partitions' bytes, rollups
+included, over their rows) about 205 GB at 50 bytes: the PRD's figures (5.9, 9.5), which N + 7 would
+not give (4.0 billion). The binding limit is the cap when ⌊cap ÷ volume⌋ < age + 7. The volume is the
+average of the last seven complete days, or the complete days since the first event while the
+database is younger. *Rejected:* measuring the volume from the counters' `accepted` (kept eight days
+only, and counts arrival hours, not local days).
+
+**Incidents.** The counter kinds are read from `analytics_dropped_counts` every minute. "Within an
+hour" is one counted UTC hour, the only grain the counters keep; a qualifying hour counts until it
+ended 24 hours ago, so an incident opens when some hour of the last 25 qualifies, and resolves once
+24 hours have passed since the end of the last hour it was seen to hold (`lastHour`, which never
+moves back: an hour's share of invalid events can fall below 10% as the hour goes on, and that must
+not resolve the incident at once); a resolved incident cannot reopen from the hours that opened it.
+"Rejected as invalid"
+is what the envelope rules refuse (`invalid_event`, `unknown_field`, `missing_identity`,
+`event_too_large`) over every event the hour received. An incident keeps the figures that opened it
+(AN-191: "the figures that opened it"); only `affected` (the events refused while open, the events
+the cap removed early, or the largest excess over the cap) and its last hour or last drop move on,
+silently. `affected` is summed from the counters since the first qualifying hour (`firstHour`, which
+may precede the hour the incident opened in), keeping the largest sum reached, because the counters
+are kept eight days. *Rejected:* a sliding 60-minute window (needs
+per-minute state the counters do not keep); refreshing the opening figures while open (the message,
+rendered at send time, would then report a later hour's figures as the ones that opened it).
+
+**A delivery says whether it announces the resolution.** `notification_deliveries.analytics_resolution`
+(migration `0004_analytics_piece9_incident_resolution`, additive). The message is rendered at send
+time from the incident as it stands, so an opening delivery held back by a Slack outage can meet an
+incident already resolved; the column keeps it an opening message. *Rejected:* inferring the phase
+from the delivery's order (breaks when Slack is switched on while an incident is open: its only
+delivery is the resolution) or from `created_at` against `resolved_at` (two clocks). The analytics
+test message is an example incident, not the feedback sample.
+
+**Pruning** (AN-165) is three steps per database, each a lightweight `DELETE` submitted without
+waiting and finished when a count of what it targets reaches zero: the installation records whose
+`last_event` (any platform) is older than the maximum age; then the identity links and first
+occurrences of installations that no longer have a record (`installation_id NOT IN (SELECT …
+installations …)`), which also clears what an erasure leaves; then the user first occurrences of user
+IDs no link carries. `system.mutations` only says whether to wait. Each call recounts, so a restart
+or an outage loses nothing, and no state is kept but which databases still have a cycle to finish.
+Ingest's install-time cache is evicted for the whole database once the records are gone, so a pruned
+installation that sends again starts over. *Rejected:* binding the pruned IDs as an array parameter
+(ClickHouse's HTTP interface carries parameters in the URL, 1 MB by default, about 25,000 UUIDs);
+one statement per table with the staleness subquery (the tables after the first would find no stale
+installation once its records are gone, and keep its links forever).
+
+**A mutation that keeps failing** (DECISIONS 33.1: a lightweight delete rebuilds a part and needs
+memory) stays unfinished in `system.mutations`, and ClickHouse retries it by itself. Nothing kills it:
+the pass waits, submits nothing more for that database, and logs `latest_fail_reason`. The operator
+raises the memory ceiling or runs `KILL MUTATION` (docs/DEPLOYMENT.md); the next pass then counts and
+submits again. *Rejected:* killing a mutation after a deadline (a slow but healthy mutation on a large
+part would never finish).
+
+**Removal.** For each record, claimed with a row lock on it: the key-scoped PostgreSQL rows first, in
+batches of 5,000 each committed on its own (the event store is not needed for them), then every
+partition of the key in every keyed event-store table, a check that none is left, and the record
+deleted last in the claiming transaction. An unreachable event store leaves the record. The list of
+event-store tables is `KEYED_TABLES`; a test compares it with every MergeTree table of the event store
+that has a `database_key` column, so a new table cannot be forgotten.
+
+**The orphan sweep** reads the event store before PostgreSQL, so nothing created in between looks
+orphaned (a database's and a name's rows are committed before the first event naming them). An
+unknown key gets a removal record; an unknown event-name ID a deletion record with the name `''`
+(no event name is empty, so no read resolves it), or its completed one reopened; key-scoped
+PostgreSQL rows of no database are deleted. It also moves the key and name sequences past the largest
+value the event store holds, so a PostgreSQL restored from an older backup never hands an orphaned key
+or name ID to something new. The sweep, the pruning and the counters' eight days run once a day and at
+the first maintenance tick after start. The day's pruning is queued before the sweep runs, and a sweep
+that fails (retried the next day) or one database's failing pruning step never holds back the rest.
+
+**Availability.** Storage reads partition statistics, so both storage routes answer
+`503 analytics_unavailable` while the event store is down; data health reads PostgreSQL only and
+answers through an outage. **Version markers** keep their true first day: `version_first` is never
+pruned, and the Overview no longer hides a marker on or before `kept_from`.
+
+**Assumptions.** "A change that lowers a limit" (AN-161) is a lower maximum age or maximum events: a
+shorter lateness window removes nothing and needs no name. A maximum age lowered below the stored
+lateness window drags the window down with it (never longer than the age); a lateness window sent
+longer than the age is refused. The preview's `removes` gives the events and the day before which
+they were recorded (the statement's "recorded before September 17"), not a first removed date.
+
+**Not measured at scale.** The passes were exercised at test volumes (a few hundred thousand rows);
+pruning's `NOT IN` sets and the orphan sweep's `GROUP BY database_key, event_name_id` over `events`
+are for piece 12's load test to time at the reference workload.
+
+### 33.10 Erasure and the event export (piece 10, September 27, 2026)
+
+**Modules.** `services/erasure.ts` (the project's erasure: who may erase what, the preview, the
+crash and feedback deletions, the pending erasures and the record), `services/analytics-erasure.ts`
+(a user ID's installations, the analytics counts, the worker pass `erasures`), `services/analytics-export.ts`
+(the event export), `routes/erasures.ts`, `routes/analytics-export.ts`; migration
+`0005_analytics_piece10_erasure` adds `resolved`, `states_submitted_at` and `deleted_at` to
+`analytics_pending_erasures` (additive). Submission deletion is now `deleteSubmissionRows(tx, rows)`
+in `services/submissions.ts`, which the individual deletion (FR-064A) and the erasure both call, so
+intents are marked, attachments cascade and their keys go to the purge queue the same way.
+
+**Who may erase.** Every crash, feedback and analytics database of the project is resolved through
+the type's own `…RoleOf` (FD-007); the preview and the erasure cover those whose effective role is
+Admin. A secret key is a project Admin (FR-083). Someone with no role anywhere in the project gets
+`404 project_not_found`, as every project route answers; a member who administers nothing,
+`403 forbidden`, which is what a Creator meets. A selected database outside that set is `403` for
+the whole request, never a partial erasure. Config databases (Remote Config RC-100) do not exist yet;
+`ERASURE_DATABASE_TYPES` is where they join.
+
+**What a user ID takes with it.** In each analytics database the actor administers and the event
+store reaches: the server installation `serverInstallationId(secret, userId)` and every installation
+whose links hold that user ID alone (`HAVING uniqExact(user_id) = 1 AND any(user_id) = …`). The crash
+reports and submissions matched are those carrying the user ID or the ID of any of those
+installations, from every reachable analytics database the actor administers, whether or not it is
+selected: "the installations being erased" is a fact about the person, and a report sent before
+sign-in belongs to them either way. *Rejected:* only the selected analytics databases' installations
+(an Admin erasing crash reports only would miss the pre-sign-in reports the PRD names).
+
+**Crash reports (CR-047).** One statement deletes the reports carrying the IDs; groups whose
+`latest_report_id` was among them point to the newest remaining report by received time, or none.
+The user ID's `crash_group_users` rows go in every group of the database, a report or not, and each
+such group's `affected_users` drops by one (the primary key makes it one row per user and group).
+`count`, first and last seen, releases, the daily rollups and the state stay, as retention leaves
+them (CR-082). An installation erasure deletes reports by installation ID and no association (no user
+ID is erased).
+
+**The erasure's time** is `rowsReceivedTime(Date.now())` from ingest's clock (piece 3): at least a
+millisecond after every received time already stamped, so "received before" (AN-184) splits exactly
+at the erasure. The counts it reports are taken with that bound. Crash and feedback deletions, the
+pending erasures and the `erasures` record are one PostgreSQL transaction; the caches (read skip,
+live feed, install times) are invalidated after it commits.
+
+**The worker pass** (`erasures`, 30 s, `erasuresIntervalMs`), per database, with row locks on its
+pending erasures (`for update skip locked`), every pending erasure of a database batched into one
+statement per table (DECISIONS 33.1: the cost is per statement and part):
+
+1. *Resolve* a user ID recorded while the store was down (`resolved = false`).
+2. *Events*: count the rows received before each erasure's time; while any remain, submit one
+   lightweight `DELETE` without waiting (unless `mutationRunning` says one runs) and clear
+   `states_submitted_at`.
+3. *States*: once no such event remains, submit the deletes of `installations`, `installation_users`,
+   `installation_first` (by installation) and `user_first` (by user ID), and stamp
+   `states_submitted_at`. They follow the events so that a batch stamped just before the erasure and
+   inserted just after is caught by the events' recount before the states go.
+4. *Replay*: once those deletes finished, `INSERT INTO events_ingest SELECT *, true FROM events`
+   for the same IDs, filtered by the read skip read afresh (which hides every row received before a
+   pending erasure's time, and deleted names). A replay never reaches `events`; it rebuilds the
+   aggregated states of events sent after the erasure, with their stored received times — piece 1's
+   warning that deleting an installation's state rows deletes the state later events contributed.
+   Then `deleted_at` is stamped, and **the read skip ignores the erasure from then on**: the
+   lightweight-delete mask hides the rows and the projections were rebuilt (`rebuild` mode), so
+   reads return to the rollups within minutes rather than after the file bound (piece 4's handoff).
+5. *Files*: the rows the deletes masked are read directly — `NOT _row_exists` with
+   `apply_deleted_mask = 0`, on every table, for these IDs. None left: the pending erasures, the only
+   holders of the IDs (AN-185), are deleted. Otherwise, once the oldest has waited half of
+   `INLET_ANALYTICS_ERASURE_BOUND_DAYS`, `ALTER TABLE … APPLY DELETED MASK IN PARTITION ID …` on each
+   partition still carrying them (`_partition_id`), submitted without waiting; merges may clear them
+   sooner. Half the bound leaves the other half for an outage or a failing rewrite.
+
+Every step recounts, so a restart, a failed statement or an outage loses nothing. *Rejected:* waiting
+for mutations (`store.command` keeps a 30-second timeout, DECISIONS 33.1); forcing the rewrite at once
+(a busy week's part is several GB, rewritten for every erasure; waiting batches erasures per
+partition and lets merges do most of it); keeping the read skip until the files are clean (up to 30
+days of reads off the rollups); recording the touched partitions (the masked rows name them).
+
+**Ingest honours a pending erasure.** Ingest's install-time lookup applies the installations skip, so
+an erased installation that sends again while its erasure is pending starts over: its later events'
+install ages do not derive from the erased install time, and after the replay its record's install
+time is its first event after the erasure, which is what ingest used.
+
+**Without the event store**, or while it does not answer (`reachable()`, then any
+`analytics_unavailable` from the counting), every analytics database is listed `unreachable` in the
+preview and `deferred` in the erasure. A deferred erasure is recorded with the server installation
+(derivable without the store) and, for a user ID, `resolved = false`; the worker resolves the rest
+when the store answers. **Counts for a deferred database are not reported**: the answer's `deleted`
+is `null` and the record's counts for it are `{ "deferred": 1 }`. *Rejected:* back-filling the
+record's counts later (the record would change after the fact, and the pending erasure would need a
+link to it for no reader). ponytail: the deferred resolution reads the links as they are then, so an
+installation on which the user ID alone appeared *after* the erasure is taken too; it held no row
+received before the erasure, so the replay restores its state and nothing it sent is lost.
+
+**Limits of the match, stated.** An installation erasure leaves the user ID's `user_first` alone (the
+user is not erased), though a first occurrence may have come from that installation: an aggregated
+state without an installation to split it by, carrying no erased ID. (A shared installation's own
+state is derived again; see the follow-ups below.) "The only user ever seen" reads the links including those of another user whose erasure is
+still pending, so an installation shared with a user erased a moment earlier stays; erasing again
+once that erasure finished takes it. The IDs are bound as array parameters, which travel in the URL
+(1 MB, about 25,000 UUIDs, 33.9): far beyond the installations of one person.
+
+**`version_first` needs no erasure**: its rows are `(database, app, platform, environment, app
+version, first day)`, with no installation or user ID (0002_version_first.sql). A test compares
+`ERASED_TABLES` with every MergeTree table of the event store holding an `installation_id` or
+`user_id` column.
+
+**The event export (AN-210).** Pages read one local day at a time, ordered by effective time and event
+ID, with the keyset `(effective_time, event_id) > (t, i)` within the day; the local day is the
+effective time's day in the reporting timezone, so days follow effective time and each statement stays
+in one day's partition. The next day holding a match is found with `min(local_day)`; a page fills
+across days. The horizon is ingest's clock at the first page, carried in the cursor, so pages never
+mix in later arrivals. The stream reads 5,000 a page, each under its own slot (`runAnalyticsQuery`
+per page); `?limit` (≤ 1,000) answers one JSON page with a cursor for MCP. Each page reads the erasure
+skip afresh (it is cached), so an erasure made while a long export streams is skipped from the next
+page on, as AN-184's "unreadable when it answers" asks of every read. *Rejected:* one statement
+ordered over the whole range per page (every page sorts the whole remaining range); ordering by the
+sort key (not the "effective time and event ID" AN-210 asks). ponytail: a page still sorts its day's
+matches for the top 5,000, about 10 million rows a day at the reference workload.
+
+**Verification follow-ups (September 27, 2026).** Four gaps the verification pinned, each now closed:
+
+- *No erased ID in any event-store file, the mutation log included* (PRD 12, AN-185). A lightweight
+  `DELETE`'s text stays in `system.mutations` and in `mutation_N.txt` beside the table's parts until
+  `finished_mutations_to_keep` (100) newer mutations push it out, which on a quiet table is never.
+  The worker now inserts each pending erasure's targets into `analytics_erasure_targets` (event-store
+  migration `0003`, partitioned by erasure number: the installations erased, the kept installations
+  the user was seen on, the user ID, the time bound) and every delete, replay and file check names
+  them by number: `installation_id IN (SELECT arrayJoin(installations) FROM analytics_erasure_targets
+  WHERE erasure IN [42])`, `received_time < (SELECT any(before) … WHERE erasure = 42)`. **Verified on
+  ClickHouse 26.8.12.53**: a lightweight `DELETE` accepts `IN (SELECT …)` over another table and a
+  scalar subquery, with no `allow_nondeterministic_mutations`; the stored command reads
+  `erasure = _CAST(7, 'UInt64')`, so the log holds numbers and times only. The subqueries are read
+  when the mutation runs, so the partition is dropped only once the pending erasure is deleted (no
+  masked row left), and any partition PostgreSQL no longer knows (a finished erasure whose drop
+  failed, a database removed) at the start of each pass. A partition counts as an erasure's own only
+  if it also holds that erasure's time; one with another time is dropped and written again, since
+  PostgreSQL restored from a backup older than the event store's reissues erasure numbers whose old
+  targets — another person's IDs — the sweep drops only while no pending erasure has the number
+  (found in verification: the worker otherwise erased that other person again, and not the new
+  one). Cost: one small table read per part the
+  mutation touches, negligible beside the part rewrite. The targets are an insert's data, not a
+  statement's text; query and part logs are the operator's concern (DEPLOYMENT.md "Erasure on
+  disk"; the bundled service turns every log table off). A test reads `system.mutations` and every
+  `mutation_*.txt` under the tables' `data_paths`. *Rejected:* amending AN-185 to allow the IDs in
+  the mutation log (it is a file of the event store, which PRD 12 says carries no ID after the
+  bound); `KILL MUTATION` or lowering `finished_mutations_to_keep` (the first cancels, the second
+  still keeps a hundred texts); passing IDs as parameters (substituted into the stored text).
+- *Reports and submissions sent before sign-in go with their user even when the erasure ran during
+  an outage.* A pending erasure now names its erasure record (`erasure_id`) and the crash and feedback
+  databases the erasure selected (`crash_database_ids`, `feedback_database_ids`; PostgreSQL migration
+  `0006_analytics_piece10_erasure_links`). When the worker resolves a deferred user erasure's
+  installations, it deletes the reports (CR-047 rules, without the user's associations, which went
+  in the request) and submissions (FR-064A, purge queue included) carrying those installations' IDs
+  in those databases, in its claiming transaction, and adds what they lost to the record's counts.
+  The shared deletes live in `services/erasure-deletes.ts`, called by the request and the worker.
+  *Rejected:* leaving them for a second erasure (the Admin would have to know the outage hid them).
+- *A shared installation's own state is derived again without the erased user's events.* The targets
+  hold the installations the user ID was seen on that are kept (`shared`, read from the identity
+  links before any delete). After the events' delete, their `installations` and `installation_first`
+  state goes with the erased installations' (the two installation-scoped tables derived from all of
+  an installation's events; `installation_users` is per user, and only the erased user's links go),
+  and the replay covers every remaining event of those installations with its stored received time,
+  so install time, first and last seen, latest dimensions and first occurrences come only from events
+  that remain. Cost: a shared installation's whole history is replayed once per erasure touching it.
+  The replay runs in the same pass as the states' deletes, right after submitting them: a mutation
+  applies only to the parts inserted before it was submitted (checked on 26.8 with merges stopped),
+  so the replayed states survive it and a shared installation always has a record; until the deletes
+  apply, reads merge the old states with the replayed ones, as before the erasure. The next pass,
+  once the deletes are done, replays again (idempotent, for an insert that committed its states just
+  before the deletes and its event row just after the first replay read) and ends the skip.
+  *Rejected:* replaying a pass later (the first build): for that pass a shared installation had no
+  record, so an event it sent then, with the install-time cache cold (after a restart), created a
+  new record and stored install ages counted from itself, which are never recomputed (AN-031,
+  AN-032); leaving shared-installation state
+  (AN-183 only corrects the latest user ID, but the record's latest dimensions and first occurrences
+  would keep what the erased user did); adding shared installations to the read skip (it would hide
+  another person's installation from every read while the erasure is pending).
+- *The deletion impact* (`eventStoreCounts`, `services/analytics.ts`) applies the erasure skip, so it
+  counts no erased row while the worker has not finished, as no other read does.
+
+**Web.** `components/erase-panel.tsx` in Project → Settings. A profile's Erase (shown to a database
+or project Admin) opens the same component in a dialog on the profile, the ID filled in, the
+profile's database selected and the preview read at once. *Rejected:* a link to the project's
+settings with the ID in the address, the first build — a database Admin who is not a member of the
+project cannot open the project page, so Erase led nowhere for the one Admin who most needs it.
+Closing the dialog reads the profile again. The analytics delete dialog links the export
+(`erasureApi.exportEventsHref`). **MCP**: `preview_erasure`, `erase_identity` (destructive, `confirm`),
+`export_analytics_events`, in `apps/mcp/src/analytics-erasure-tools.ts`.
+
+### 33.12a Hardening, the SDK against the running API, and the documentation pass (piece 12a, September 27, 2026)
+
+The defects the testers of earlier pieces found and left for the closing pass, each fixed where
+every caller goes through and each pinned by a test that failed before the fix
+(`apps/api/test/integration/release-8-hardening.test.ts` unless named otherwise).
+
+- **A deeply nested body answered 500.** A crash report whose `context` nested 20,000 arrays in a
+  40 KB body overflowed the stack in `sanitizeDeep` (and would have in `JSON.stringify` next), and
+  so would a feedback submission's `clientContext`. `sanitizeDeep` (`packages/shared/src/text.ts`)
+  now stops at `JSON_NESTING_MAX` (64 levels) and throws `NestingTooDeepError` with the path; crash
+  ingest answers `invalid_envelope` with a `too_deep` detail at that path (single report, and one
+  item of a batch while the others are stored), and finalization answers `validation_failed` at
+  `clientContext.…`, the intent staying usable. 64 because the envelope's own fields are three
+  levels deep and a real context a handful; any depth that cannot overflow would do. *Rejected:*
+  an iterative walk that accepts any depth (the size checks' `JSON.stringify` and the canonical
+  hash would still recurse, and PostgreSQL's `jsonb` has its own stack limit), and a bound in each
+  route (the shared function is where every caller goes through). Hosted forms take no
+  `clientContext`; analytics events were already bounded by `validateEvent` (33.2).
+- **The compile-time schema checks of `form.ts` and `answers.ts` could never fail**, as 33.2 found
+  for its own: they now use `Assert<Exact<…>>`. Proven by giving `TitleElement` and one answer
+  shape a required key the schemas lack: `tsc` then reports `Type 'false' does not satisfy the
+  constraint 'true'` at each entry, and the mismatch was removed. The check, like `analytics.ts`'s,
+  compares by mutual assignability, so an *optional* key added on one side only still passes; left
+  as it is, since the runtime schemas are what validate requests.
+- **Slack headings carried a database name unescaped.** The feedback default (`New response in …`),
+  the crash defaults and the feedback test message's heading now escape the name as the analytics
+  renderer does, so a name cannot carry `<!channel>`; an operator's own title keeps its markup
+  (`notifications.test.ts`, `slack-notifications.test.ts`).
+- **The crash groups CSV began with two byte-order marks**: the route added one to `toCsv`'s. It
+  sends `toCsv`'s alone (`crash-reads.test.ts`).
+- **Every 503 of an event-store outage was logged as an error.** The error handler logs
+  `analytics_unavailable`, `analytics_busy` and `query_limit_exceeded` at `warn`, with the code and
+  message and no stack; every other 5xx stays at `error` with its stack.
+- **`deleteProject` raced the creation of an analytics database.** It now locks the project row
+  `FOR UPDATE` first. A creation's insert holds a key-share lock on that row until it commits, so
+  the deletion waits and its removal records see the new database; a creation arriving during a
+  deletion takes `FOR KEY SHARE` on the project first, waits, and answers `project_not_found`
+  rather than a foreign-key violation (a 500 before).
+- **Event-name deletion left its rows in the files** (AN-056 asks for the bound of AN-184). The
+  deletion job now continues after completion with piece 10's file step, factored out of
+  `analytics-erasure.ts` as `maskedTables` and `forceMaskedOut`: once half the operator's bound has
+  passed since the deletion was requested, the partitions still carrying masked rows of the name
+  are rewritten with `APPLY DELETED MASK`, and `analytics_event_name_deletions.files_cleared_at`
+  (migration `0007_analytics_piece12_name_deletion_files`) records when no file holds them, after
+  which the deletion is not checked again. *Rejected:* keeping `completed_at` unset until the
+  files are clear, which would keep the name in the read skip, and every read of the database off
+  the rollups, for up to 15 days.
+- **Funnels and cohorts spill to disk rather than fail** (9.5, 33.7's open question). The query
+  layer's `withSpill(settings)` sets `max_bytes_before_external_group_by` and
+  `max_bytes_before_external_sort` to half the per-query memory limit, keeping a lower threshold
+  already set (the cohort members' quarter, 33.8); funnel runs, their drill-downs and cohort runs
+  pass it. The answer is identical — only where the aggregation's states wait changes — and the
+  randomised reference comparisons and Appendix B tests pass unchanged. Measured on a constructed
+  dataset of 1.2 million step occurrences over 200,000 installations: at a 100 MB limit the steps
+  view answered `query_limit_exceeded` without the setting and answers with it; at 150 MB it
+  answered either way on the first statement after the load, but every later statement needs
+  more and is refused without the spill (verification: the test now runs the funnel once at the
+  default limit, then at 150 MB — 6 of 6 answered with the spill, 3 of 3 refused without it; at
+  100 MB it failed one run in five even with the spill); at 60 MB it fails even with spilling, the rest of
+  the statement (reading, the per-unit sort, the outer quantile) needing memory of its own, which
+  is why the floor of `INLET_ANALYTICS_QUERY_MEMORY_BYTES` stays 64 MiB and its default 768 MiB.
+  DEPLOYMENT.md states the temporary disk this needs on the event store's volume (the query limit
+  times the slots). Piece 12c's load test measures it at scale. *Rejected:* a lower threshold for
+  funnels (spilling sooner costs time on every long funnel for no gain below half).
+- **A funnel trend group nobody entered drew 0%.** `TrendChart` takes a gap (`value: null`): no
+  point, the line broken either side, "—" in its table; the funnel's trend passes null for a group
+  whose conversion is undefined (`e2e/ui/analytics-polish.spec.ts`).
+- **Overview polish** (piece 5's tester): a version not measured shows "—" sessions instead of 0
+  (the answer's `sessions` counts the sessions reporting a crash module, the rate's denominator; a
+  total per version would be a new answer field, not needed to stop the table misleading); a range
+  other than the default has a remove button, back to the last 30 days; the custom dates start on
+  today in the database's reporting timezone, not UTC. Verification found the same UTC default in
+  the Dates of Events, Funnels and Cohorts; they now use `useDatabaseToday`
+  (`apps/web/src/components/analytics-events.tsx`, the page's cached read of the database), beside
+  `todayInZone`, which moved there from the Overview (`analytics-polish.spec.ts`).
+- **The MCP client cut analytics calls at 30 s** while a funnel trend may run 120 s (the remote MCP
+  at `/v1/mcp` used the same default). `InletClient` waits at least `ANALYTICS_TIMEOUT_MS` (the
+  funnel-trend default plus 30 s, 150 s) on every `/v1/analytics-databases/…` path and on the
+  erasure and its preview (both count the events in the event store before answering; verification
+  found `erase_identity` still cut at 30 s, an error for an erasure the server went on to apply),
+  and keeps `INLET_TIMEOUT_MS` (30 s by default) for everything else; a longer
+  `INLET_TIMEOUT_MS` applies to both. *Rejected:* reading the operator's funnel-trend limit (the
+  standalone server cannot see it) and a timeout option on each analytics tool (every tool file
+  would repeat it).
+
+**The SDK against the running API** (`e2e/api/sdk-analytics-server.spec.ts`, beside the existing
+`sdk-analytics-browser.spec.ts`, which now also runs under the suite's own configuration and
+server): the built browser entry on a page of another origin, disabled until a consent click,
+with the crash module on the same page; the Node entry in server mode; device mode across two
+processes; and a deployment that did not list `analytics` yet. For the last, the hook is a small
+proxy in front of the real server that leaves `analytics` out of `/v1/health` until switched,
+which is what a server whose event store is not ready answers, with the SDK's injected clock
+passing the ten-minute re-read; a second server process without ClickHouse was rejected because
+it would never list `analytics`, so it cannot show the change. The device-mode test found a
+defect in every module: `flush(timeoutMs)` raced the flush against a timer it never cleared, so a
+Node process that awaited `flush(10_000)` lived ten seconds after its queue was sent. `settleWithin`
+(`packages/sdk/src/health.ts`) clears it; crash, feedback and analytics transports use it
+(`packages/sdk/test/flush-timeout.test.ts`, which also awaits each transport's own
+`flush(60_000)` and fails for any one of them reverted; and the device-mode test bounds each
+process's run at 8 seconds). The browser run also shows the browser SDK's crash messages arrive
+redacted, as CR-094 asks, and that nothing of analytics (installation ID, state, event queue) is
+on the device before the consent click (AN-225).
+
+**Documentation.** README describes Inlet as feedback, crashes and product analytics; USING-INLET's
+analytics part is one guide in reading order with the PRD's terms; API.md gained the analytics rows
+of the 7.3 matrix; MCP.md documents the analytics timeout; DEPLOYMENT.md the spill disk, the
+name-deletion file step and the log levels. The server instructions' analytics paragraph names the
+Overview, funnel, profile and erasure loop.
+
+**PRD amendments for the orchestrator** (behaviour specified by a requirement changed here):
+
+- Crash Reports **CR-011**, append: "An envelope nested more than 64 levels deep, the envelope
+  itself being the first level (objects and arrays inside one another), shall be rejected as
+  `invalid_envelope` with a detail naming the path at which the bound is passed, and never walked
+  further, so that no report answers a server error for its shape."
+- Feedback Collection **FR-062A**, append: "A `clientContext` nested more than 64 levels deep, the
+  object itself being the first level, shall be refused with `validation_failed` and a detail
+  naming the path at which the bound is passed; the intent stays usable."
+- UX Analytics **section 9.5, Query protection**, after the sentence ending "…the interface
+  suggesting a shorter range or a coarser interval.": "Funnel and cohort statements write their
+  aggregation and sorts to the event store's temporary disk once they hold half the memory limit,
+  so that a long range answers more slowly where it would otherwise exceed the limit; the event
+  store's volume keeps room for that disk."
+  (Verification's wording: the proposed text counted levels ambiguously — measured, 64 containers
+  including the envelope or `clientContext` are accepted and the 65th refused — and placed the 9.5
+  sentence inside another; a query can still exceed its limit with the spill, 60 MB above.)
+
+### 33.12c Measured: the load test at scale, and Docker with and without the profile (piece 12c, September 27, 2026)
+
+PRD 15 "8.3" asks for a load test at the reference workload on the reference node; 12 "Storage
+and data health" for every 9.5 budget at the 95th percentile while ingest sustains 2,000 events a
+second. **The reference node (8 vCPU, 32 GB, about 4.1 billion events) and the Small host were not
+available**, so this is the largest scale this laptop sustains, measured through the real API, and
+extrapolated. The harness is `scripts/analytics-load.mjs` (README, "Load-testing analytics"), so an
+owner can rerun every figure below on the reference node.
+
+**Method.**
+- **Machine.** Apple M5, 10 cores, 24 GB, macOS, shared during the whole run with another agent's
+  test suites (load average 5 to 34, swap in use): every "during ingest" figure is pessimistic for
+  contention, and a laptop core is faster than a typical server vCPU, which pulls the other way.
+- **Event store.** A ClickHouse 26.8.12.53 of its own (the local binary, not the shared test server
+  and its 4 GB ceiling), set as the reference host of DEPLOYMENT.md would be within this machine:
+  10 GB server memory (the reference's 24 GB does not fit beside the rest), mark cache 1 GB,
+  background pool 8, `query_log` and `part_log` on to read what each statement did. The API
+  (`apps/api/dist/server.js`, `NODE_ENV=production`) set 4 threads a query (half of 8 vCPU) and
+  8 GB of memory a query, as DEPLOYMENT.md says for the reference host, with the per-credential
+  ingest limits raised (`INLET_LIMIT_ANALYTICS_PER_KEY_5M=10000000`, `…_HOUR=100000000`) and
+  `INLET_ANALYTICS_NEW_EVENT_NAMES_PER_HOUR=100` for the seed's 63 names. PostgreSQL and RustFS
+  were the shared local servers (own database and bucket).
+- **Seed.** `scripts/analytics-seed.mjs`, extended for this piece (it can now seed a database Inlet
+  created, with its key and catalog IDs; installations grow by `SEED_NEW` a day, recent ones more
+  active; every session opens with `app_started` with `trigger` and `crashReporting`, one in about
+  150 ends with `session_crashed`, new installations send `app_installed`; the 60 other names keep
+  their weighting, the first being `screen_viewed`). `SEED_DAYS=32 SEED_ACTIVE=115000 SEED_EVENTS=87
+  SEED_POOL=300000 SEED_NEW=10000`: **320,160,063 events over 33 days (32 seeded, today's ingested),
+  10.0 million a day from 90,000 to 99,000 daily active installations** — the reference workload's
+  daily density, for 32 of its 395 days — and 916,634 installations. Seeded in 24 minutes, then
+  every partition merged (`OPTIMIZE … FINAL`, 5 minutes). Disk and time allowed more; the run was
+  sized so that the seed, the reads, three load runs and the passes fitted one working session.
+- **Reads.** Every row of the 9.5 table, as the interface asks for it, with the secret key (one
+  caller, so one slot at a time): times are the HTTP answer on loopback, which is the server's time
+  plus well under a millisecond. The charted event is `screen_viewed` (12.6% of events, under a
+  fifth); the funnel is `event_02 → event_03 → event_05` (5.4, 4.1 and 3.1%, under a tenth); the
+  param filter `event_04`'s `plan = pro`; the cohorts the standard Retention cohort by week and by
+  month; the profile an installation with a user ID and its first page of events; the prefix search
+  its first 8 hex digits; the erasure preview a user ID. Idle: 10 runs of each; during ingest: the
+  same list in a loop, 29 to 30 runs each over 15 minutes.
+- **Ingest.** Open loop, a batch of 50 events every 25 ms (2,000 a second) from 40,000 seeded
+  installations and new ones (5% of batches), each batch one installation's SDK flush with a session
+  and its `app_started`, whatever the answers take.
+
+**Storage** (budget 50 bytes an event, rollups and indexes included; 100 a row of the installation
+tables):
+
+| Table | Rows | Bytes on disk a row |
+| --- | --- | --- |
+| `events` (both projections and the skipping indexes included) | 320,160,063 | **43.7** |
+| `installations` | 916,634 | **81.7** |
+| `installation_first` | 26,367,378 | 35.7 |
+| `installation_users` | 550,789 | 33.7 |
+| `user_first` | 10,698,426 | 24.2 |
+
+Within budget, and within a byte of 33.1's spike. At the reference workload, 4.1 billion events are
+about 180 GB; the installation tables hold 1.3 GB at 917,000 installations here, about 7 GB at five
+million.
+
+**Reads, at 320 million events** (milliseconds; "ingest" is the product as built, during the
+15-minute run below):
+
+| Budgeted read (budget) | Idle p50 | Idle p95 | Ingest p50 | Ingest p95 | Reference, extrapolated | |
+| --- | --- | --- | --- | --- | --- | --- |
+| Overview (1,000) | 9,716 | 11,478 | 13,462 | 19,780 | the same (30 days are the default range) | **missed** |
+| Catalog (300) | 4 | 5 | 2 | 5 | the same | ok |
+| Trend, 90 days by day (500) | 219 | 252 | 262 | 363 | ×3 rows: about 0.7 s | **at risk** |
+| Trend, 13 months by week (2,000) | 196 | 216 | 215 | 267 | ×12: about 2.4 s | **at risk** |
+| Split by app version, 90 days (1,500) | 558 | 1,732 | 628 | 1,258 | ×3: about 1.7 s | **at risk** |
+| Param filter, 13 months (20,000) | 260 | 1,476 | 286 | 434 | ×12: about 3.5 s | ok |
+| Param top values, 7 days (3,000) | 42 | 48 | 45 | 76 | the same | ok |
+| Funnel steps, 14 days (3,000) | 976 | 1,070 | 1,179 | 3,110 | the same | at risk under load |
+| Funnel trend by day, 90 days (10,000) | 2,667 | 3,592 | 4,142 | 13,445 | ×3: 8 to 11 s | **at risk** |
+| Funnel trend by week, 13 months (60,000) | 2,544 | 3,077 | 3,235 | 7,977 | ×12: 30 to 40 s | ok |
+| Cohort, 12 weekly (2,000) | 807 | 988 | 911 | 2,092 | ×5 installations: about 4 s | **missed** |
+| Cohort, 12 monthly (3,000) | 831 | 926 | 874 | 2,260 | ×5: about 4 s | **at risk** |
+| Profile and a page of its events (300) | 113 | 137 | 126 | 612 | the same | at risk under load |
+| Profile prefix search (1,000) | 84 | 92 | 92 | 246 | the same | ok |
+| Recent installations (1,000) | 495 | 587 | 554 | 5,734 | ×5: about 3 s | **missed** |
+| Erasure preview of a user ID (10,000) | 951 | 1,039 | 1,027 | 1,714 | ×12: about 12 s | **at risk** |
+| Live feed (50) | 2 | 8 | 2 | 3 | the same | ok |
+
+The extrapolation scales by the rows each statement reads (a 90-day range reads 3 times this seed's
+32 days at the reference workload, 13 months about 12 times; cohorts and the recent list grow with
+installations, about five million after 13 months against 917,000 here), which is linear and
+ignores that a server vCPU is slower than this laptop's cores. Measured with piece 12a's spill
+(`withSpill`, below) the funnel and cohort shapes moved by 5 to 25% (steps 1,053 ms p50, trend by
+day 3,379, by week 2,806, weekly cohort 962, monthly 907): no statement of this seed held half its
+8 GB limit in aggregation states, so nothing spilled, and the difference is the machine's.
+
+**Ingest.** The product as built did **not** sustain 2,000 events a second beside the reads. It
+accepted 1,992 to 2,015 a second for eight minutes, then fell to 1,526 to 1,865; batches waited in
+the API (2,412 in flight at the end), 4,092 of 35,999 hit the client's 60-second timeout, and the
+p50 was 823 ms and the p95 51 s (budget 300 ms). Ingest alone, for 10 minutes, held the rate
+(1,985 a second, every batch 200) but at a p50 of 1.5 s and a p95 of 4.3 s.
+
+*Cause.* `@clickhouse/client` opens at most 10 sockets per client by default (`max_open_connections`),
+and each batch is one asynchronous insert that waits for its flush, about 245 ms at the 50th
+percentile and 300 ms at the 95th in `system.query_log` (the adaptive busy timeout of up to 200 ms,
+then the write through five views and two projections). Ten sockets therefore carry about 40
+inserts a second, exactly the 40 batches a second of the test: `query_log` shows the duplicate
+lookups arriving at 2,400 a minute throughout while the inserts stayed capped near 2,400 and fell
+below it whenever a flush slowed, and the queue in front of the pool grew without bound.
+*Experiment, not a change:* the same API with the writer's agent raised to 64 sockets (a Node
+`--import` preload wrapping `http.Agent`, nothing in the product changed) held 1,972 events a
+second for 12 minutes beside the reads, every batch answered 200, p50 250 ms, p95 2.5 s, 376 batches
+in flight at most — the tail being this machine's contention (load average 19 to 34) on top of the
+insert's own 250 ms. *Proposed fix:* give the writer client `max_open_connections` of about 100
+(`apps/api/src/db/clickhouse.ts`, `client()`), and lower `async_insert_busy_timeout_max_ms` for
+ingest's inserts to about 100 ms, since the flush wait alone is most of the 300 ms budget; then
+rerun `load` on the reference node.
+
+**Resources during the 15-minute run** (5-second samples): ClickHouse's `MemoryTracking` mean 3.0 GB,
+p95 5.9 GB, max 6.2 GB, resident memory max 5.4 GB, CPU mean 4.4 cores (max 7.2); the API resident
+memory mean 226 MB, max 1.0 GB (the queued batches), CPU about a quarter of one core. Ingest alone:
+ClickHouse 1.1 GB tracked, 1.6 cores. So the API is not CPU-bound at this rate; ClickHouse's
+reads are what compete with the inserts.
+
+**Why the Overview misses.** Its statements run one after another in its slot: the crash-free
+sessions statement 6.9 s and 4.7 GiB, the table by version, platform and country 0.75 s and
+1.3 GiB, retention 0.72 s, new installations 0.54 s, weekly and monthly active 0.25 s, daily active
+0.2 s. The crash-free statement groups every `app_started` of the range by session (`argMin` of the
+session's dimensions over about 10 million sessions in 30 days, the reference's own number) before
+joining `session_crashed`; with a 4 GB limit it answered `query_limit_exceeded`, and under the Small
+host's 768 MiB every Overview failed. *Proposed fix:* a session table maintained at ingest like the
+installation states (one row per session: its first `app_started`'s day, version, dimensions and
+`crashReporting`, and whether a `session_crashed` named it), which turns the statement into a read of
+a few million small rows; and running the Overview's independent statements concurrently within its
+slot, whose sum is otherwise the answer time. Without the first, the 1 s budget cannot hold at the
+reference workload.
+
+**Why cohorts and the recent list will miss at five million installations.** Both read every
+installation's merged state (`installations`): 917,000 here take 0.5 to 0.6 s of each answer, and
+the recent list's `max(seen) OVER ()` statement needs 1.3 GiB (over the Small host's 768 MiB, where
+it answered `query_limit_exceeded`). *Proposed fix:* the table of install days 33.8 named for
+cohorts, and for the recent list an ordering read from a table sorted by last seen, rather than a
+sort of every installation.
+
+**Worker passes**, run by `analytics-load.mjs passes` through the worker's own functions with the
+API stopped:
+
+| Pass | Measured |
+| --- | --- |
+| Retention (AN-164), nothing to drop | 16 ms; its partition read 4 ms |
+| Orphan sweep (its `GROUP BY` over `events` and the first-occurrence tables) | 68 ms, the projections answering it |
+| Daily pruning's counts, nothing stale (the `NOT IN` sets over 921,750 installations) | 423 ms |
+| Daily pruning with "now" moved 381 days on, so 240,182 installations without an event in 14 days are stale | 3.8 s for all three steps, deletes included |
+| An event name of 5.9 million events (1.9%) deleted | 133 s until no row is left (66 passes, the longest 193 ms) |
+| A user ID's erasure (1,277 events, every week touched) | request 1.1 s; deletes and replays done in 122 s; the forced file removal (`APPLY DELETED MASK`, reached by moving "now" 16 days on) done 254 s after the request |
+
+The two deletes that touch `events` rebuild the projections of every part holding one of their rows
+(`lightweight_mutation_projection_mode = 'rebuild'`), so they scale with the rows of the weeks
+touched: here five merged weekly parts of 64 to 70 million rows, the reference's own part size, so
+the memory is the reference's (within this 10 GB server), and the time about 12 times more for a
+13-month database, about 25 minutes for a name deletion or for an erasure of a user active all year.
+Both are background work that no request waits for, within AN-184's 30 days.
+
+**The Small host, approximated.** The same ClickHouse restarted at the Small host's settings
+(3 GB server memory, mark cache 256 MB, background pool 4) and the API at its defaults (768 MiB a
+query) with 2 threads a query; its CPUs could not be limited for a native macOS process, and the
+data is the reference's daily density (ten times the Small workload's), though its 320 million
+events are about the Small workload's 13 months. Three runs of each read: the Overview and the recent
+installations answered `query_limit_exceeded` every time; the funnel steps 2.2 s (p95 9.8 s), the
+funnel trends 5.6 s (both under 3 GB thanks to spilling: the 90-day trend's statement answered in
+3.8 s under a 3 GB limit, writing 945 MiB of aggregation to disk, and failed in 0.9 s without the
+spill); cohorts 1.1 s; the erasure preview 1.7 s (p95 12.5 s); every other read within its budget.
+What it shows: at the Small host's memory, the statements that hold one state per session or per
+installation are the ones to fix first, the same two as above.
+
+**Docker, with and without the profile** (throwaway project `inlet-p12c`, an env file holding only
+the secret and the first Admin, the image built from the working tree):
+- `docker compose build`: succeeds.
+- Without the profile: `/v1/health` lists `feedback, crash, feedback-cross-origin, mcp, identity`,
+  not `analytics`; the log warns once that the event store is not ready and how to enable it;
+  creating an analytics database answers `409 analytics_not_enabled` with "Start Inlet with
+  `docker compose --profile analytics up -d`, or set `INLET_CLICKHOUSE_URL` …"; a feedback
+  submission through `inlet-sdk/feedback/node` and a crash report through `inlet-sdk/crash/node` are
+  stored.
+- `--profile analytics up -d` on the running stack, Inlet not restarted: `analytics` listed 22
+  seconds later, the event store's tables created (`events`, `events_ingest`, the five state tables,
+  their views, `analytics_erasure_targets`, `inlet_migrations`). A database created; five events
+  through `inlet-sdk/analytics/node` in device mode (with `app_installed` and `app_started`, 7
+  stored) and four HTTP batches of 25 with the publishable key; the Overview (2 active today, 5
+  sessions) and a trend (101 events today) read back.
+- ClickHouse stopped: `/v1/health` still 200 and still lists `analytics`; ingest `503
+  analytics_unavailable` with `Retry-After: 30`; the Overview, profiles and storage `503` with
+  `Retry-After`, the catalog and the live feed answer from PostgreSQL and memory, the database read
+  says `eventStore: unavailable`; in a browser (Playwright's Chromium against the container, signed
+  in), the Overview, Events, Funnels, Cohorts, Users, Collect and Settings → Storage each say "The
+  analytics event store is unreachable, so this database cannot be read or collect events for now;
+  the rest of Inlet works as usual", while the feedback and crash database pages load normally; a
+  feedback submission and a crash report are stored. The SDK kept its 8 events (a session's
+  `app_started` and 7 tracked) in its queue file at `close()`.
+- ClickHouse started: the next SDK process delivered the queue — the 7 events stored once each, 16
+  events for the installation, 16 distinct IDs — and all 100 events answered before the stop were
+  there. `docker compose restart clickhouse` during continuous ingest (12 installations, batches of
+  20 every 100 ms): 202 batches answered 200 and 9 answered 503; the 4,040 events of the answered
+  batches were all stored, once each.
+- Inlet restarted while ClickHouse was stopped: `analytics` not listed, the existing database's
+  Overview `503 analytics_unavailable`, creation `409 analytics_not_enabled`; ClickHouse started,
+  `analytics` listed within 6 seconds.
+- The whole stack `down` then `up` with the profile: every count identical (16 and 100 events, both
+  crash groups). The project and its volumes were removed at the end.
+- No defect needed a fix. ClickHouse logs `Listen [::]:8123 failed … Address family for hostname not
+  supported` at start on Docker Desktop, which has no IPv6: harmless, noted in DEPLOYMENT.md's
+  troubleshooting. Its container reports 10 cores (`max_threads` 10) on this machine, so a Small host
+  limiting CPUs with Docker should also set `INLET_ANALYTICS_QUERY_THREADS`.
+
+**Not possible here.** The reference node and its 4.1 billion events (a 13-month seed is about
+7 hours of seeding at this laptop's rate and 180 GB, and the reads' extrapolation above is linear);
+the Small host's 4 vCPU (only its memory and pools were applied, to a native process) and its own
+workload; an ingest p95 on an idle machine; more than one concurrent reader (the slots' fairness is
+covered by the suites, not measured at scale).
+
+### 33.12d The budgets 33.12c missed: connections, two internal rollups, and the Overview at once (piece 12d, September 27, 2026)
+
+33.12c found three budgets of PRD 9.5 missed or at risk: ingest beside the reads, the Overview, and
+the reads of every installation (cohorts, the recent list). This piece fixes each where 12c found
+the cause, proves every answer unchanged, and re-measures with 12c's harness at the same scale.
+
+**Ingest: 100 connections, a 100 ms flush wait** (`apps/api/src/db/clickhouse.ts`). Both clients
+now hold up to 100 sockets (`max_open_connections`), not the client's 10. Inserts in flight are the
+rate times the flush wait (about a quarter of a second), so 100 carries about 400 batches a second,
+ten times the budget's 40; the reader gets the same because ingest's duplicate and install-time
+lookups share it with the slots' long reads. Asynchronous inserts send
+`async_insert_busy_timeout_max_ms = 100` (the default 200); `wait_for_async_insert = 1` stays, so a
+`200` still means stored. Not operator settings: no host measured needs another value, and
+ClickHouse's own connection limits are in the thousands (DEPLOYMENT.md says what a managed
+ClickHouse or proxy must allow). An integration test runs thirty half-second statements on each
+client at once and fails at 10 sockets (1.5 s) where 100 take 0.6 s.
+
+**`session_rollup`** (ClickHouse migration 0004, AN-035). One row per database, ISO week, event
+name, session and installation: for a session's `app_started` of a device installation that is
+not a background event, the minimum of (received, effective time, local day, app, platform,
+environment, app version, `crashReporting`) over that week's rows; for its `session_crashed`, any
+platform, the row alone. Fed by a view from `events_ingest`, replays included, with a `min` state,
+so a duplicate or a replay changes nothing. The view cannot know which catalog ID is `app_started`,
+so `events_ingest` gained `session_event` (`none`, `started`, `crashed`), set by ingest from the name
+and by the erasure's replay from the resolved IDs; `events_mv` keeps the columns it was created
+with, so `events` does not store it. Partitioned like `events`, with the same partition IDs:
+retention drops the rollup's week before the events' (a failure in between leaves a week of events
+the next pass drops again, never rollup rows the events no longer hold); removal and the orphan
+sweep go through `KEYED_TABLES`; the erasure deletes the sessions of every installation it
+re-derives (`ERASED_TABLES`, through the targets table) and the replay rebuilds them; an event
+name's deletion and the sweep's name check include it (`NAME_TABLES`, now checked against every
+table with an `event_name_id`). *The Overview's sessions read the same whole weeks from both
+sources:* the rollup's grain is the week, so the events statement now reads the `app_started` of
+the ISO weeks holding the day before the range to the day after it (it read exactly those days),
+and a session's first `app_started` is the minimum of that tuple (it was an `argMin` keyed on the
+event ID too: a tie on both times now falls to the values, as 33.1 decided for installations).
+Both only widen the one-day clock margin to a week, which AN-043's "first `app_started` accepted"
+favours. *While an erasure is pending* the Overview reads the events (`ReadSkip.erasing`): the
+rollup keeps no received time to hide exactly the rows received before it, as every read already
+scans the events then. *Reading it:* the minimum of a tuple of strings over every session of 60
+days was 0.87 s (hash) to 1.2 s (in order) at 9.2 million sessions, so `rollupSessions` takes the
+row itself for a session with one row over the weeks read (almost all) and aggregates only the
+others (`count() > 1`): 0.28 s, the same answer (checksums equal on the load data; the test below).
+
+**`installation_index`** (0004). The records of `installations` from the same rows by the same rules
+in plain `min`/`max` columns (`install` and `latest` the very tuples, element for element; the
+largest `install` a real event cannot reach, and `has_qualifying` 0, for an installation without a
+qualifying event). A state of `installations` is serialised row by row and must be deserialised
+to be merged; `indexRecords` (analytics-query.ts) takes the row of an installation that has one,
+aggregating only the others; the one-row and the other entries are separate subqueries of one
+statement, which must read one snapshot of the table (`enable_shared_storage_snapshot_in_query`,
+the default since ClickHouse 25.12, stated on every read: off, with the snapshots slowed by
+`merge_tree_storage_snapshot_sleep_ms` and an insert between them, a scratch table's entry was
+listed twice in 2 of 6 tries), and so must `rollupSessions`. The members of the install start over
+917,000 installations: `installations` 0.50 s; the index aggregated 0.39 s; `installations` with the same one-row path
+0.36 s (`finalizeAggregation` still deserialises); the index one-row path 0.09 s. Read by cohorts'
+install start (and so the Overview's new installations and D1, D7, D30), the Overview's shares and
+the recent list, whose first read orders the index by "seen" and whose second reads the page's 50
+rows from `installations` by ID (the `max(seen) OVER ()` of 1.3 GiB is gone: the first row's "seen"
+is the horizon). Pruned with `installations` in the same step, by its own `last_event`; erased,
+removed and swept as `installations`; truncated by the harness.
+
+**Not a table ordered by install day or by last seen**, as 33.12c proposed. An install day is the
+day of the qualifying event *received first*; a view sees one insert block and cannot know whether
+an earlier block exists, so a table ordered by install day holds a candidate row per block (per
+active day of every installation), and deciding which is the install needs every row of the
+installation, which is the scan this was to avoid; an installation ID is random, so looking the
+candidates up by ID touches every granule. Exact without ingest stamping each event with its install
+day, whose correction after an erasure of a shared installation's install event the worker would own.
+The same for last seen. Measured instead: the plain index read in the table's order is linear but
+cheap, within the budgets at five million installations (below). *If a larger database needs it:*
+ingest stamps the install day it already computes (it computes the install ages from it), the view
+orders by it, and the erasure worker writes the re-derived installations' rows itself.
+
+**The Overview at once.** Its seven event-store statements run concurrently inside its one slot
+(`allFinished`: every statement ends before the slot is released, the first failure then thrown).
+The slot (AN-205) bounds how many callers hold a share of the event store; the Overview is one
+caller's one answer, so running its statements side by side changes when that share is used, not
+how many use it. One statement went: new installations are the retention cohort's members per day
+(N = 0, the same `membersSql`). The shares filter the index rows by the week's active
+installations outside `indexRecords` (0.15 s against 0.30 s inside it). Sequential after the
+rollups: 2.1 s; concurrent: 1.0 s; with a merge of the daily active counts and the windows into
+one `GROUPING SETS ((local_day), ())` statement, 0.77 s, each statement with the slot's whole
+limits. Together they peaked at about 1.9 GB at both 917,000 and five million installations (the
+largest, that merged statement, 0.9 GB).
+
+*The slot's share, divided (the orchestrator's decision, verification of 12d).* Each statement at
+the slot's whole limits made one Overview up to seven queries' worth of memory and threads, beyond
+the operator's per-query limits (FD-032) and, with three slots busy, the Small host's 3 GB
+ceiling. So each statement now gets a seventh of the slot's memory and threads, at least one
+thread (`shareOfSlot`), and spills its aggregation to disk past half of it (`withSpill`). Measured
+by bisecting `max_memory_usage` on a seed of 16.8 million events over 35 days, 12,000 active
+installations a day (about the Small workload's), one thread: the merged statement needed 156 MiB,
+over a seventh of the default 768 MiB, where the two statements it merged needed 60 and 56 MiB
+(GROUPING SETS computes every count in every set: a window's set for each day, a 60-day set for
+the total row), so they are two statements again; the sessions from the rollup 54 MiB; from the
+events while an erasure is pending 514 MiB, which spilling answers within a seventh (712,830
+sessions either way, 112 ms against 43). The whole Overview then answers identically at the
+default 768 MiB, and down to a slot of about 310 MiB (453 MiB while an erasure is pending). The
+cost is time: with a thread a statement, its median was 242 ms against 123 ms with the whole
+limits each (1,354 against 722 ms while an erasure is pending), so the 1 s budget at the reference
+workload, already at risk below, is further from it unless the operator gives a query seven
+threads or more (`INLET_ANALYTICS_QUERY_THREADS`). At the reference density, the largest
+statement's 0.9 GB was the merged one; split, each half was about 0.55 GB, within a seventh of
+8 GB (1.14 GB). The response header's `memory_usage` is not the peak (the events' sessions
+statement reported 4 MiB and failed at a 32 MiB limit): peaks here are bisected limits.
+
+**Proof that nothing changed** (`test/integration/analytics-rollups.test.ts`, a randomised database
+in America/New_York stored through ingest: 24 device installations over five weeks, sessions with
+and without a crash module, a second `app_started` minutes or a day later with another version,
+ties in one batch, a session across a local Sunday midnight, `session_crashed` at once, days late or
+from a backend, a background `app_started`, a server installation's, one without a session, a crash
+naming no session, an ephemeral installation and one with only background events). The rollup and
+the events give the same sessions (day, version, crash module, crashed) over three windows with and
+without a platform filter; the index gives every column of `installations`; the Overview answers the
+same figures, crash-free sessions and shares from the rollups and from the events; all of it again
+after every batch is sent twice (replays), after an erasure of a user who shares an installation and
+of an installation (the events-based read while pending; the shared installation re-derived),
+after retention drops weeks, after the orphan sweep and the name deletion remove an unknown ID's
+rows, after the pruning; and the install cohort's sizes per week equal `installations`' install
+days. Reading `max` for `min` fails five of the nine for the sessions, and the cohort sizes for the
+install members. The Overview suites, piece 8's
+cohort reference (D1, D7, D30) and Appendix B.6's cases pass unchanged.
+
+**Measured** as 33.12c did, on the same laptop and seed shape (a ClickHouse of its own, 10 GB, the
+API at 4 threads and 8 GB a query): **324 million events over 33 days, 10 million a day**. This
+machine was worse than for 12c: another workload kept 27 to 30 GB of its 28 to 31 GB of swap in use
+and load averages of 6 to 20 throughout, and with no ingest at all ClickHouse's writes of a few
+thousand rows of its own log tables took up to 1.3 s and one merge of 8,000 rows 12.6 s. "Before"
+is the build before this piece (git `56fa9df`, built in a scratch worktree) on the same data; the
+seed script now sets `session_event` and merges the two new tables, and the harness is unchanged.
+
+| Budgeted read (budget) | Before, idle p50 / p95 | After, idle p50 / p95 | After, during ingest p50 / p95 |
+| --- | --- | --- | --- |
+| Overview (1,000) | 8,960 / 10,090 | **718 / 918** | 996 / 1,574 |
+| Cohort, 12 weekly (2,000) | 776 / 784 | 291 / 303 | 429 / 5,466 |
+| Cohort, 12 monthly (3,000) | 805 / 818 | 332 / 344 | 409 / 1,495 |
+| Recent installations (1,000) | 466 / 529 | 79 / 93 | 139 / 162 |
+| Profile prefix search (1,000) | 83 / 89 | 76 / 81 | 86 / 99 |
+| Profile and a page of its events (300) | 122 / 151 | 88 / 110 | 112 / 1,236 |
+| Funnel steps, 14 days (3,000) | 945 / 1,039 | 806 / 848 | 1,007 / 2,437 |
+| Funnel trend by day, 90 days (10,000) | 2,628 / 2,991 | 2,260 / 2,445 | 3,316 / 10,250 |
+| Erasure preview of a user ID (10,000) | 908 / 948 | 826 / 838 | 934 / 1,000 |
+
+The other rows moved with the machine only (trends 169 to 553 ms idle, the live feed 1 to 2 ms);
+their reads did not change. **Ingest beside the reads** (15 minutes, the same open loop): all 35,999
+batches answered 200, 1,968 events a second accepted, **p50 166 ms, p95 8.6 s**, p99 14.7 s, at most
+712 batches in flight; 12c: 4,092 timeouts, p50 823 ms, p95 51 s. **Ingest alone** (10 minutes):
+p50 129 ms, p95 5.6 s at 100 ms; p50 206 ms, p95 5.6 s at the default 200 ms, so the shorter wait
+is kept and the tail is not it. In `system.query_log` the slow inserts spent their time waiting,
+not computing (under a thousandth of their wall time on a CPU), in bursts of a minute during which parts of 200
+rows took 1 to 3 s to write whatever the reads did: this machine's swap, which the reference node
+must not have. ClickHouse's memory during the run: mean 3.6 GB, max 7.4 GB.
+
+**At five million installations** (4,025,000 older installations added with an event each on a day
+40 to 390 days ago, those weeks then dropped as retention would, so the records outlive their events
+as a 13-month database's do; 4,945,886 installations, the events unchanged), idle:
+
+| Read (budget) | Before p50 / p95 | After p50 / p95 |
+| --- | --- | --- |
+| Overview (1,000) | 28,016 / 34,549 | 1,529 / 1,650 |
+| Cohort, 12 weekly (2,000) | 2,946 / 3,237 | **895 / 1,100** |
+| Cohort, 12 monthly (3,000) | 3,107 / 4,882 | **1,211 / 1,548** |
+| Recent installations (1,000) | 16,618 / 17,179 | **225 / 280** |
+| Profile prefix search (1,000) | 466 / 695 | 500 / 675 |
+
+(load averages 8 to 16 during both). Cohorts and the recent list are within budget at five million.
+**The Overview is not**: about 8 CPU-seconds of statements (the retention cohort 2.4, sessions 2.0,
+the active figures 1.9, shares 1.1, the last hour 0.6) spread over this machine's contended cores.
+
+**Storage**: `session_rollup` 42 bytes a row, 9.2 million rows for 33 days, about 1.2 bytes an event
+(the 50-byte budget holds it: `events` is 43.9); `installation_index` 63 bytes a row at 917,000
+installations, 55 at five million (`installations` 82 and 65).
+
+**Extrapolated to the reference workload** (8 vCPU of its own, 13 months, about five million
+installations): cohorts and the recent list as measured at five million, within budget; ingest's
+p50 within the 300 ms, its p95 a matter of the host's disk, which this laptop could not show; the
+Overview reads 60 days where this seed held 33, so its sessions, active figures and returns roughly
+double, and the retention members grow with installations: about 1.5 to 2 s on this laptop, so
+**the 1 s budget is likely missed** unless the reference node's eight cores are faster than this
+contended laptop by that much. These Overview figures were measured with every statement at the
+slot's whole limits; divided since (above), its statements run on a thread each at the reference
+host's four threads a query, about twice as long on the small seed, so the budget is further off
+still unless the operator sets `INLET_ANALYTICS_QUERY_THREADS` to 7 or more. What it takes, in
+order: measure on the reference node (`scripts/analytics-load.mjs`, unchanged); if still over, an install day stamped at ingest (above)
+makes the members a range read, and the retention returns can be limited to days 1, 7 and 30; or
+the owner amends the budget (below).
+
+**PRD amendments for the orchestrator** (not applied here):
+
+- **AN-038** should read: "(Withdrawn September 26, 2026: sessions, sessions per app version and
+  crash-free sessions are computed from the `app_started` and `session_crashed` events of the
+  storage window (AN-043, AN-152), so no session record is kept; an internal rollup of those events
+  may be (AN-035).)"
+- **9.5**, only if the reference node also misses it: the Overview row "1 s" becomes "2 s", with the
+  note "the Overview's figures are several statements over 60 days and every installation installed
+  in them".

@@ -1,3 +1,4 @@
+import { settleWithin } from '../health.js';
 import type { QueueStore } from '../store.js';
 import type { FeedbackError, FinalizePayload, SubmissionIdentity, SubmitOutcome } from './types.js';
 
@@ -186,11 +187,25 @@ export class PendingQueue {
       });
     }
     if (timeoutMs === undefined) return this.flushing;
-    return Promise.race([this.flushing, this.sleep(timeoutMs)]);
+    return settleWithin(this.flushing, timeoutMs);
   }
 
   close(): void {
     this.closed = true;
+  }
+
+  /** AN-225, FD-016: `forget` removes the installation ID from submissions still queued. Null removes any. */
+  async forgetInstallation(installationId: string | null): Promise<void> {
+    await this.load();
+    let changed = false;
+    this.items = this.items.map((item) => {
+      const held = item.identity?.installationId;
+      if (held === undefined || (installationId !== null && held !== installationId)) return item;
+      changed = true;
+      const { installationId: _removed, ...identity } = item.identity!;
+      return { ...item, identity };
+    });
+    if (changed) await this.persist();
   }
 
   private async run(): Promise<void> {

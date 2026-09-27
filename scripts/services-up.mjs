@@ -1,9 +1,11 @@
-/** Starts local PostgreSQL and RustFS and keeps them running until interrupted. */
+/** Starts local PostgreSQL, RustFS and ClickHouse and keeps them running until interrupted. */
 import { startLocalServices } from './local-services.mjs';
 
 const services = await startLocalServices({ quiet: false });
 console.log(`PostgreSQL  ${services.env.INLET_DATABASE_URL}${services.postgres.reused ? '  (reused)' : ''}`);
 console.log(`RustFS      ${services.env.INLET_S3_ENDPOINT}${services.storage.reused ? '  (reused)' : ''}`);
+// The address without its credentials: they are in .env.example and scripts/local-services.mjs.
+console.log(`ClickHouse  http://127.0.0.1:8124${services.clickhouse.reused ? '  (reused)' : ''}`);
 console.log('Press Ctrl-C to stop.');
 
 const shutdown = async () => {

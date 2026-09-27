@@ -1,6 +1,7 @@
 # Dependencies and build output
 node_modules/
 dist/
+apps/web/dist-*/
 build/
 *.tsbuildinfo
 
@@ -21,12 +22,15 @@ coverage/
 playwright-report/
 blob-report/
 test-results/
+test-results-*/
 playwright/.cache/
 .vite/
 *.log
 
 # Local PostgreSQL and RustFS, created by `npm run services:up`
 .dev/
+# The IP-to-country database (AN-033), fetched by scripts/ip-country-db.mjs, never committed
+apps/api/ip-country/
 
 # Generated: the OpenAPI document is written to docs/openapi.json, which is tracked.
 # This is the older path, kept ignored so a stale copy cannot be committed.

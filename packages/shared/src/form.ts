@@ -152,17 +152,20 @@ export const formDefinitionSchema = z
  * a schema that gains a key no longer extends the type, and a type that gains one is no
  * longer satisfied by the schema.
  */
-type Exact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
+// `false` rather than `never`, each entry through `Assert`: a tuple holding `never` compiles,
+// so the earlier form of this check could never fail (release 8 hardening, as `analytics.ts`).
+type Exact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+type Assert<T extends true> = T;
 type _SchemasMatchTheTypes = [
-  Exact<z.infer<typeof titleElementSchema>, TitleElement>,
-  Exact<z.infer<typeof subtitleElementSchema>, SubtitleElement>,
-  Exact<z.infer<typeof bodyTextElementSchema>, BodyTextElement>,
-  Exact<z.infer<typeof choiceOptionSchema>, ChoiceOption>,
-  Exact<z.infer<typeof choiceQuestionSchema>, ChoiceQuestion>,
-  Exact<z.infer<typeof textQuestionSchema>, TextQuestion>,
-  Exact<z.infer<typeof emailQuestionSchema>, EmailQuestion>,
-  Exact<z.infer<typeof screenshotQuestionSchema>, ScreenshotQuestion>,
-  Exact<z.infer<typeof elementSchema>, FormElement>,
-  Exact<z.infer<typeof pageSchema>, FormPage>,
-  Exact<z.infer<typeof formDefinitionSchema>, FormDefinition>,
+  Assert<Exact<z.infer<typeof titleElementSchema>, TitleElement>>,
+  Assert<Exact<z.infer<typeof subtitleElementSchema>, SubtitleElement>>,
+  Assert<Exact<z.infer<typeof bodyTextElementSchema>, BodyTextElement>>,
+  Assert<Exact<z.infer<typeof choiceOptionSchema>, ChoiceOption>>,
+  Assert<Exact<z.infer<typeof choiceQuestionSchema>, ChoiceQuestion>>,
+  Assert<Exact<z.infer<typeof textQuestionSchema>, TextQuestion>>,
+  Assert<Exact<z.infer<typeof emailQuestionSchema>, EmailQuestion>>,
+  Assert<Exact<z.infer<typeof screenshotQuestionSchema>, ScreenshotQuestion>>,
+  Assert<Exact<z.infer<typeof elementSchema>, FormElement>>,
+  Assert<Exact<z.infer<typeof pageSchema>, FormPage>>,
+  Assert<Exact<z.infer<typeof formDefinitionSchema>, FormDefinition>>,
 ];

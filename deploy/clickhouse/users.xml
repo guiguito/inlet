@@ -1,0 +1,41 @@
+<!--
+  The two users Inlet connects as (UX Analytics 9.5, "reading as a read-only user and writing
+  as another"), mounted into /etc/clickhouse-server/users.d/. Their passwords come from the
+  environment docker-compose.yml passes; set them in .env.
+
+  - `inlet` writes: inserts, deletes, and the DDL of the migrations Inlet applies at start.
+    INLET_CLICKHOUSE_URL carries its credentials.
+  - `inlet_reader` answers analytics queries. `readonly = 2` refuses every write and DDL but
+    lets a query set its own time, memory and thread limits, which the API does per query.
+    INLET_CLICKHOUSE_READ_URL carries its credentials.
+
+  The image's own `default` user stays, reachable from inside the container only, which is
+  what the healthcheck uses. No port is published, so both users are reachable on the
+  compose network alone.
+-->
+<clickhouse>
+    <profiles>
+        <default>
+            <!-- UX Analytics 9.4: one asynchronous flush may mix databases and late weeks,
+                 beyond the default of 100 partitions an insert may touch. -->
+            <max_partitions_per_insert_block>1000</max_partitions_per_insert_block>
+        </default>
+        <inlet_reader>
+            <readonly>2</readonly>
+        </inlet_reader>
+    </profiles>
+    <users>
+        <inlet>
+            <password from_env="INLET_CLICKHOUSE_PASSWORD"/>
+            <networks><ip>::/0</ip></networks>
+            <profile>default</profile>
+            <quota>default</quota>
+        </inlet>
+        <inlet_reader>
+            <password from_env="INLET_CLICKHOUSE_READER_PASSWORD"/>
+            <networks><ip>::/0</ip></networks>
+            <profile>inlet_reader</profile>
+            <quota>default</quota>
+        </inlet_reader>
+    </users>
+</clickhouse>

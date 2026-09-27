@@ -19,5 +19,7 @@ export default defineConfig({
       '/docs': { target: 'http://127.0.0.1:3000', changeOrigin: false },
     },
   },
-  build: { outDir: 'dist', sourcemap: true },
+  // INLET_WEB_OUT_DIR lets a slotted end-to-end run (scripts/e2e-server.mjs) build into its own
+  // directory, so its build never empties the one another run's server is serving.
+  build: { outDir: process.env.INLET_WEB_OUT_DIR || 'dist', sourcemap: true },
 });

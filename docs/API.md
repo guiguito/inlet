@@ -18,6 +18,8 @@ Everything is under `/v1`. Requests and responses are JSON unless stated otherwi
 - [Slack notifications](#slack-notifications)
 - [Access: members and invitations](#access-members-and-invitations)
 - [Crash reports](#crash-reports)
+- [Analytics databases](#analytics-databases)
+- [Erasing an installation or user ID](#erasing-an-installation-or-user-id)
 - [Errors](#errors)
 - [Limits](#limits)
 - [MCP over HTTP](#mcp-over-http)
@@ -226,7 +228,9 @@ this one request; there is no partial save.
 replayed result.
 
 `clientContext` is arbitrary JSON, stored exactly as you send it, capped at 16 KiB as
-UTF-8. Inlet never interprets it. You are responsible for what it contains and for the
+UTF-8 and at 64 levels of nesting (objects and arrays inside one another): a deeper value is
+`400 validation_failed` with a detail of code `too_deep` whose `path` starts `clientContext.`,
+and the intent stays usable. Inlet never interprets it. You are responsible for what it contains and for the
 lawful use of anything identifying you put in it.
 
 Three optional fields carry the identity `inlet-sdk` attaches (FR-204): `sessionId` and
@@ -344,6 +348,7 @@ These need a secret server key or a signed-in user.
 ```
 GET  /v1/feedback-databases/{databaseId}/submissions?limit=50&cursor=…
 GET  /v1/feedback-databases/{databaseId}/submissions/{submissionId}
+GET  /v1/feedback-databases/{databaseId}/submissions/{submissionId}/usage-profile
 POST /v1/feedback-databases/{databaseId}/submissions/seen
 DELETE /v1/feedback-databases/{databaseId}/submissions/{submissionId}
 GET  /v1/feedback-databases/{databaseId}/submissions/export?format=json
@@ -352,6 +357,10 @@ GET  /v1/feedback-databases/{databaseId}/submissions/export?format=csv
 
 The list is newest first and keyset-paginated, so a page stays stable while new
 feedback arrives. Follow `nextCursor` until it is null.
+
+A submission carries the SDK identity it was sent with, `installationId`, `sessionId` and
+`userId` (null when absent). `…/usage-profile` answers the analytics profiles of its
+installation, for the "Usage profile" link (see [Profiles](#profiles)).
 
 ### Narrowing the list
 
@@ -951,7 +960,10 @@ See that section for what the exception is and is not.
 ### The envelope
 
 At most 64 KiB serialized. Exactly these top-level fields; any other is refused with
-`unknown_field` naming it. A field out of bounds is `invalid_envelope` with the path.
+`unknown_field` naming it. A field out of bounds is `invalid_envelope` with the path. A value
+nested more than 64 levels deep (objects and arrays inside one another, in `context` say) is
+`invalid_envelope` with a detail of code `too_deep` at its path, checked before anything else
+reads the body.
 
 | Field | Required | Bounds |
 | --- | --- | --- |
@@ -1019,6 +1031,7 @@ GET  /v1/crash-databases/{id}/groups?state&kind&release&os&arch&environment&user
 GET  /v1/crash-databases/{id}/groups/{groupId}?days=30
 GET  /v1/crash-databases/{id}/groups/{groupId}/reports?release&os&environment&userId&installationId&sessionId&limit
 GET  /v1/crash-databases/{id}/reports/{reportId}
+GET  /v1/crash-databases/{id}/reports/{reportId}/usage-profile
 GET  /v1/crash-databases/{id}/releases
 GET  /v1/crash-databases/{id}/filters
 GET  /v1/crash-databases/{id}/stats?days=30&by=day|release|os|environment|kind (plus the list filters)
@@ -1036,6 +1049,8 @@ the release, OS and environment filters too, and reshapes its breakdowns and tim
 A report carries `installationId` and `sessionId` (null when absent) beside `userId`.
 Filtering groups by either returns the groups with at least one retained report carrying
 it; the same filters apply to the report export.
+`…/usage-profile` answers the analytics profiles of the report's installation, for the
+"Usage profile" link (see [Profiles](#profiles)).
 
 `/filters` returns `{kinds, operatingSystems, environments}`: the distinct values this
 database has actually seen, for populating a filter control without offering a value that
@@ -1067,6 +1082,8 @@ GET  /v1/crash-databases/{id}/deletion-impact                 → {groups, repor
 DELETE /v1/crash-databases/{id}
 ```
 
+The CSV of groups is UTF-8 with one byte-order mark and CRLF rows, as the submissions export.
+
 Retention bounds: 1,000 to 100,000 reports; 7 to 365 days or `null`, unless the operator moved them; the read returns the bounds in force as `bounds`. Over the cap the
 oldest reports of the fullest group are evicted at ingest, every group keeping its latest;
 aged reports are evicted at ingest and hourly. Eviction never changes a group's count,
@@ -1079,6 +1096,1295 @@ settings as a feedback database. A crash database announces `crash_group_opened`
 `crash_group_regressed` and nothing else; `contentLevel` is accepted and ignored. The
 message is `kind · type · top frame or module · release`, the count, first seen, affected
 users and a link. The error message text is never sent.
+
+## Analytics databases
+
+An analytics database counts how a product is used, from the events its apps send
+(UX Analytics PRD). It needs the analytics event store, ClickHouse, which a deployment
+enables with `docker compose --profile analytics up -d` or `INLET_CLICKHOUSE_URL` (see
+[DEPLOYMENT.md](DEPLOYMENT.md)). Databases, [ingest](#analytics-ingest), the test event and
+the live feed, the [event catalog and its Lexicon](#the-event-catalog-and-the-lexicon) and
+[trends](#trends), [the Overview](#the-overview), [profiles](#profiles) and
+[funnels](#funnels), [cohorts](#cohorts), [storage and data health](#storage-and-data-health),
+[the event export](#the-event-export) and [erasure](#erasing-an-installation-or-user-id) are
+all available.
+
+```
+POST /v1/projects/prj_5waxfxyby3st/analytics-databases
+Cookie: inlet_session=…
+
+{ "name": "Checkout app", "timezone": "Europe/Paris" }
+```
+
+```json
+{
+  "id": "adb_4kq2m8vx7ncd",
+  "projectId": "prj_5waxfxyby3st",
+  "name": "Checkout app",
+  "type": "analytics",
+  "timezone": "Europe/Paris",
+  "countryDerivation": true,
+  "storage": { "maxAgeDays": 395, "maxEvents": 500000000, "latenessDays": 30 },
+  "limits": { "eventNames": 500, "newEventNamesPerHour": 50, "paramKeysPerEventName": 100, "categoriesPerEventName": 10 },
+  "createdAt": "2026-09-26T10:00:00.000Z",
+  "updatedAt": "2026-09-26T10:00:00.000Z"
+}
+```
+
+### The reporting timezone
+
+`timezone` is required and never changes: every day, week, month and year the database
+reports is counted in it, and each stored event carries its day in it. It must be an IANA
+name that both the API's timezone data and the event store's `system.time_zones` list.
+Aliases are accepted and stored exactly as given (`Europe/Kiev`, `US/Eastern`); the name's
+case must match. Offsets are refused, including `UTC+2` (which POSIX reads as two hours
+west of UTC), `GMT-3` and `+02:00`, and so are IANA names that carry the same inverted sign,
+such as `Etc/GMT+2` and `GMT+0`: any `+` or `-` followed by a digit. `UTC` and `Etc/UTC` are
+accepted. A missing or unlisted zone is `400 timezone_invalid`
+with `details[0].path` = `timezone`. A zone renamed after the server's timezone data was
+published is known to it by its former name; the interface proposes that name.
+
+### Routes
+
+```
+GET    /v1/projects/{projectId}/analytics-databases     the ones you can read
+POST   /v1/projects/{projectId}/analytics-databases     {name, timezone}
+GET    /v1/analytics-databases/{id}                     plus eventStore: available | unavailable
+PATCH  /v1/analytics-databases/{id}                     {name?, countryDerivation?}
+GET    /v1/analytics-databases/{id}/deletion-impact     → {events, installations, users, eventStore, funnels, cohorts, notice}
+DELETE /v1/analytics-databases/{id}
+GET|PUT|DELETE /v1/analytics-databases/{id}/members[/{userId}]
+GET|POST       /v1/analytics-databases/{id}/invitations, …/invitations/{invitationId}/revoke
+GET|PATCH      /v1/analytics-databases/{id}/slack-notifications, POST …/slack-notifications/test
+```
+
+- **Creation** needs Creator or Admin and the event store. A deployment without one answers
+  `409 analytics_not_enabled`, whose message names the step that enables it; once the
+  event store has been ready, an outage answers `503 analytics_unavailable` with
+  `Retry-After`. A deployment holds at most 50 analytics databases unless its operator
+  changed that (`409 analytics_database_limit`). Storage starts at the operator's defaults,
+  country derivation on, and the database gets its standard Retention cohort.
+- **Reading** returns the storage settings in force, the stored values applied at the
+  operator's current bounds, and the deployment's event-name, param-key and category
+  limits, which are the same for every analytics database. It never returns the database's
+  installation secret. `eventStore` says whether the event store answers now.
+- **Renaming** needs Creator or Admin. **`countryDerivation`** needs a database or project
+  Admin; it applies to events received afterwards and leaves stored countries as they are.
+- **Deletion** needs Admin. It answers as fast for millions of events as for none: the
+  database's row goes, with its funnels, cohorts, incidents, memberships, invitations,
+  notification settings and queued deliveries, in one transaction, and its events become
+  unreadable at once; a background worker then removes them from the event store.
+  Deleting a project does the same for each of its analytics databases. The deletion impact
+  reports the events, device installation records and distinct user IDs the event store
+  holds, as `null` with `eventStore: "unavailable"` while it cannot be reached, which never
+  prevents the deletion.
+- **Reads, renames and deletion work while the event store is down.** Only creation needs it.
+- **Slack settings** are the shared ones. An analytics database announces data-health
+  incidents only (AN-190), so `contentLevel` is accepted, stored and never read for it, as
+  for a crash database. Its test message is an example incident ("Checkout app is rate
+  limited: 12,480 events are refused in the last hour."), not the feedback sample; see
+  [Storage and data health](#storage-and-data-health) for the incidents.
+- **A publishable key reads and changes nothing here** (`403 insufficient_scope`); it only
+  ingests events.
+
+### Analytics ingest
+
+```
+POST /v1/analytics-databases/{databaseId}/batch
+Authorization: Bearer ipk_…
+Content-Type: application/json
+
+{
+  "sentAt": "2026-09-26T10:00:05.120Z",
+  "events": [
+    {
+      "eventId": "0192f5a0-7c1e-7000-8000-00000000a001",
+      "timestamp": "2026-09-26T10:00:04.870Z",
+      "name": "checkout_completed",
+      "installationId": "0192f5a0-0000-7000-8000-0000000000aa",
+      "sessionId": "0192f5a0-0001-7000-8000-0000000000bb",
+      "params": { "plan": "pro", "items": 3 },
+      "platform": "web",
+      "app": { "version": "1.4.0" },
+      "sdk": { "name": "inlet-sdk", "version": "0.3.0" }
+    }
+  ]
+}
+```
+
+```json
+{ "accepted": 1, "duplicates": 0, "rejected": [], "warnings": [] }
+```
+
+Authenticated with a publishable or secret key of the project that owns the database; a
+key of another project gets `403 analytics_database_inaccessible`. Events arrive in batches
+only: `sentAt`, the client's clock when it sent the batch, and `events`, 1 to 100 events, at
+most 256 KiB as UTF-8. A single event is a batch of one. `inlet-sdk/analytics` does all of
+this for you; the route is for any other client.
+
+**The answer is per event.** Every valid event is stored even when others in the batch are
+not. `accepted` counts the events stored by this request, `duplicates` those already stored
+(see below), and `rejected` and `warnings` list each event concerned by its `index` in
+`events`, with a `code` and, where one applies, the `field`:
+
+```json
+{
+  "accepted": 98,
+  "duplicates": 0,
+  "rejected": [
+    { "index": 17, "code": "unknown_field", "field": "channel" },
+    { "index": 64, "code": "invalid_event", "field": "name" }
+  ],
+  "warnings": [{ "index": 3, "code": "truncated", "field": "params.note" }]
+}
+```
+
+| Rejected with | When |
+| --- | --- |
+| `unknown_field` | The event carries a field the envelope does not name, nested ones included (`app.channel`). |
+| `invalid_event` | A field is missing, of the wrong type or out of its bounds; `field` is its path. |
+| `event_too_large` | Over 8 KiB serialized as UTF-8, after truncation. |
+| `missing_identity` | Neither `installationId` nor `userId`, once placeholder user IDs are dropped. |
+| `event_too_old` | Its effective time is before the acceptance floor: older than the lateness window (30 days by default), or in a week retention has already dropped. |
+| `event_name_limit` | A new name, and the database already holds its limit of names (500 by default). |
+| `event_name_rate` | A new name beyond the 50 new names an hour the database accepts. |
+| `event_blocked` | A name an Admin blocked. |
+| `installation_rate_limited` | That installation sent more than 1,000 events in five minutes; only its excess is refused. |
+
+| Warned with | What was stored |
+| --- | --- |
+| `truncated` | A string param (256 characters), an attribution (128) or a category (32) cut to its bound, never through a surrogate pair. |
+| `placeholder_user_id` | A user ID such as `""`, `null`, `undefined`, `anonymous`, `0` or the all-zero UUID, dropped. |
+| `param_key_limit` | A new param key beyond the 100 an event name may have, dropped; `field` names it. |
+| `category_limit` | A new category beyond the 10 an event name may have: the event is stored without one. |
+| `clock_corrected` | The timestamp was moved, see below. |
+
+A condition of the data never answers `5xx`. The batch as a whole is refused only for
+these: `400 malformed_json` (not JSON, or not `{sentAt, events}` with an RFC 3339 `sentAt`),
+`400 too_many_events` (more than 100), `413 batch_too_large` (over 256 KiB),
+`401`/`403` for the key, `429 rate_limit_exceeded`, and `503 analytics_unavailable` while the
+event store is unreachable or refuses the write; the last two carry `Retry-After` in seconds.
+
+#### The envelope
+
+Each event holds exactly these fields. Strings have their lone surrogates replaced with
+U+FFFD and their U+0000 characters removed before anything is checked. A JSON `null` in an
+optional field is read as the field's absence; a param value may not be `null`.
+
+| Field | Required | Bounds | Notes |
+| --- | --- | --- | --- |
+| `eventId` | yes | UUID | Client-generated, UUIDv7 recommended; the idempotency key |
+| `timestamp` | yes | RFC 3339 with an offset | The client's clock; see clock correction |
+| `name` | yes | `^[A-Za-z][A-Za-z0-9_.:-]{0,63}$` | Case-sensitive; counts toward the event-name limit |
+| `category` | no | 32 characters, truncated; 10 per event name | `standard` for standard events, `test` for the test event |
+| `installationId` | unless `userId` | UUID | |
+| `userId` | unless `installationId` | 128 characters | Placeholders dropped |
+| `sessionId` | no | UUID | |
+| `attribution` | no | 128 characters, truncated | The acquisition source |
+| `experiments` | no | 5 entries; key `^[A-Za-z0-9_.-]{1,40}$`, not `__proto__`, `constructor` or `prototype`; variant 40 characters | Experiment to variant |
+| `params` | no | 25 entries; key `^[A-Za-z_][A-Za-z0-9_.]{0,39}$`, not `__proto__`, `constructor` or `prototype`; a string of 256 characters (truncated), a finite number or a boolean | No nesting, arrays or null |
+| `app` | yes | `version` 64, `build` 64, `id` 64 | `id` tells apart the apps of one product |
+| `platform` | no | `web`, `ios`, `android`, `macos`, `windows`, `linux`, `server`, `other` | Defaults to `other`; `server` marks a background event |
+| `os` | no | `name` 32, `version` 64 | |
+| `runtime` | no | `name` 32, `version` 32 | |
+| `locale` | no | BCP 47 with hyphens, 35 characters | `en-GB`, not `en_GB` |
+| `country` | no | ISO 3166-1 alpha-2 | Overrides the derived country |
+| `environment` | no | 32 characters | Defaults to `production` |
+| `ephemeral` | no | boolean | Set when the client could not persist its identity |
+| `sdk` | yes | `name` 64, `version` 32 | |
+
+UUIDs are accepted in any letter case, with or without dashes, and stored and returned
+lowercase with dashes. Standard events (`app_installed`, `app_updated`, `app_started`,
+`session_crashed`, `screen_viewed`) are ordinary events with the names and params the
+PRD gives them; any client may send them.
+
+#### Idempotency and clock correction
+
+- **Retry freely.** An event is identified by its database, `eventId`, name, installation
+  and effective time. Sent again, it is answered as a duplicate, stored once and counted
+  once, whether the copies arrive one after the other, at the same moment, or after the
+  server restarted. An `eventId` reused for another name or installation is another event.
+  When a batch is refused with `503`, any of its events the event store did store are
+  answered as duplicates when you send it again.
+- **Clock correction.** The server records when it received the batch. When `sentAt` differs
+  from that by more than 60 seconds, every event's timestamp moves by the difference rounded
+  to the whole minute, with the warning `clock_corrected`; so a device whose clock is three
+  hours behind stores its events three hours later. A time more than five minutes in the
+  future becomes the received time, with the same warning. The result is the event's
+  **effective time**, which queries use. A client whose skew changes between two attempts may
+  store a retried event twice; keep `sentAt` accurate.
+- **A user ID alone** belongs to that user's server installation, derived from the user ID
+  under a secret of the database: the same user always has the same one in a database, and
+  another in the next. Server installations are counted by user ID, never as installations.
+- **Country.** Unless the event carries `country`, the database has derivation off, or the
+  platform is `server`, the country is derived from the request: from the trusted proxy's
+  country header when the deployment configures one, else from the bundled DB-IP database.
+  The address is used for the lookup and stored and logged nowhere.
+
+#### Rate limits
+
+Counted in events, not requests, and exempt from the platform's per-key request ceiling,
+because every installation of an application shares one publishable key:
+
+- per key, 200,000 events in five minutes and 2,000,000 an hour: a batch that would go past
+  either is refused whole with `429 rate_limit_exceeded` and `Retry-After`;
+- per installation, 1,000 events in five minutes: only that installation's excess events are
+  rejected, one by one, with `installation_rate_limited`;
+- per address, 6,000 requests a minute, only where the deployment names a trusted proxy.
+
+The operator may move each (see [DEPLOYMENT.md](DEPLOYMENT.md)).
+
+#### Cross-origin
+
+`POST /v1/analytics-databases/{databaseId}/batch` and its preflight answer cross-origin, with
+a wildcard origin, no credentials and `Retry-After` exposed, so the browser module can send
+from your own site. It is opened for that method only: nothing else under
+`/v1/analytics-databases`, the catalog and the live feed included, answers a preflight.
+
+### The test event and the live feed
+
+```
+POST /v1/analytics-databases/{databaseId}/test-event          Creator or Admin
+GET  /v1/analytics-databases/{databaseId}/live?after=<cursor>  Viewer or above
+```
+
+The **test event** sends one `test_event`, category `test`, environment `development`,
+through the ingest path, attributed to the database's test installation. It answers like a
+batch, plus the `eventId` it sent. The test installation counts in no unique, active,
+new-installation, session or cohort figure, the event takes no slot of the event-name limit,
+and it appears in the live feed. A publishable key cannot send it.
+
+The **live feed** returns the last events the database accepted, newest first, each with
+`name`, `time` (the effective time), `installationId`, `platform` and `appVersion`, and a
+`cursor`:
+
+```json
+{
+  "events": [
+    { "name": "test_event", "time": "2026-09-26T10:00:05.120Z", "installationId": "5d1c…", "platform": "other", "appVersion": "test" }
+  ],
+  "cursor": "YjNmMGE5YzE6MTI"
+}
+```
+
+Pass `cursor` back as `after` to get only the events accepted since, so a client polling
+every few seconds sees each event once; `limit` (1 to 500) takes the most recent events
+without `after`, and with it pages through a backlog, oldest first taken. The feed holds the last 500 events per database in the server's memory: it is
+empty after a restart, and a duplicate never appears twice. It takes no query slot. Until the
+event store has been ready since the server started (or on a deployment without one) it answers
+`503 analytics_unavailable`.
+
+A batch never loses its valid events to one bad key: an event whose param or experiment key
+is `__proto__`, `constructor` or `prototype` is rejected alone, as `invalid_event` with its
+`field` (`params.__proto__`), where a JSON parser guarding against prototype poisoning would
+otherwise refuse the whole body.
+
+### The event catalog and the Lexicon
+
+```
+GET    /v1/analytics-databases/{id}/events?q&category&includeHidden&includeParams&sort&limit&cursor   Viewer or above
+GET    /v1/analytics-databases/{id}/events/{name}                      Viewer or above; a query slot
+PATCH  /v1/analytics-databases/{id}/events/{name}                      {description?, hidden?}; Creator or Admin
+PATCH  /v1/analytics-databases/{id}/events/{name}/params/{key}         {description}; Creator or Admin
+PUT    /v1/analytics-databases/{id}/events/{name}/blocked              {blocked}; database or project Admin
+DELETE /v1/analytics-databases/{id}/events/{name}?confirm={name}       database or project Admin
+GET    /v1/analytics-databases/{id}/exports/catalog?format=csv|json    Viewer or above; json by default
+```
+
+The **catalog** lists every event name the database has received, from PostgreSQL: it takes
+no query slot and answers while the event store is down.
+
+```json
+{
+  "events": [
+    {
+      "name": "checkout_completed",
+      "category": "purchase",
+      "description": "An order paid in full.",
+      "hidden": false,
+      "blocked": false,
+      "standard": false,
+      "firstSeen": "2026-09-01T08:12:00.000Z",
+      "lastSeen": "2026-09-27T09:58:41.120Z",
+      "last24h": { "events": 18240, "installations": 3120, "users": 2210 },
+      "computedAt": "2026-09-27T10:00:00.000Z"
+    }
+  ],
+  "nextCursor": null,
+  "total": 1
+}
+```
+
+- `category` is the category of the name's latest event. `lastSeen`, `category` and
+  `last24h` (events, unique device installations and unique user IDs over the last 24 hours)
+  are refreshed by a background pass at least every five minutes and stamped `computedAt`;
+  they are empty until its first pass.
+- `q` matches a case-insensitive substring of the name or the description; `category` keeps
+  the names that have used that category; hidden names are left out unless
+  `includeHidden=true`; `includeParams=true` adds each name's params with their types and
+  descriptions. `sort` is `name` (the default), `lastSeen` or `events24h`, each then by name.
+  At most 1,000 a page: pass `nextCursor` back as `cursor`, with the same `sort` (another
+  sort's cursor, or one not returned by this list, is `400 invalid_query` at `cursor`). The
+  cursor is a position — the last entry's sort value and name — and the time of the first
+  page, so a name that arrives while you page is not shown on a later page (read the list
+  again to see it), and an entry is never shown twice because an earlier one arrived. Under
+  `lastSeen` and `events24h`, an entry whose figures the refresh moves across your position
+  between two pages can still be skipped or repeated; `name` is exact.
+- Standard events show the platform's own description until the team writes one.
+
+**One event** (`GET …/events/{name}`) adds its categories and its params, each with its
+observed types, its description and the ten most frequent values over the last seven days,
+today included, in every environment (`topValues`, with `topValuesFrom` and `topValuesTo`).
+The top values read the event store, so this route holds a query slot. A hidden event reads
+the same. An unknown name is `404 event_not_found`.
+
+**Descriptions** are at most 500 characters; `null` or an empty string clears one. They are
+returned wherever the event is listed, to the API and to MCP, so an agent reads the tracking
+plan before it queries. **Hidden** events are still ingested, stored and queryable by name;
+they leave the catalog list and the pickers.
+
+**Blocking** makes ingest refuse the name's events with `event_blocked` from the next batch
+on; the name keeps its entry and its slot under the event-name limit, and what is stored
+stays. **Deleting** needs the exact name as `confirm` (`400 confirmation_mismatch`
+otherwise). The name's catalog and Lexicon entries go at once, which retires its ID: its
+events are unreadable when the call answers, and its slot under the limit is free. A
+background job then removes its rows from the event store without the call waiting, and
+finishes after a restart; the event store's files hold no trace of them within the operator's
+erasure bound (30 days by default, `INLET_ANALYTICS_ERASURE_BOUND_DAYS`, AN-184). If a client sends the name again, it comes back as a new event.
+Standard events can be neither blocked nor deleted (`409 standard_event_undeletable`).
+
+The **catalog export** holds every name, hidden ones included, with its flags, 24-hour
+figures, descriptions and params: CSV has one row per name (its params in one column as
+`key (types): description; …`), JSON the same entries in full.
+
+### Filter values
+
+```
+GET /v1/analytics-databases/{id}/filters?dimension=appVersion
+GET /v1/analytics-databases/{id}/filters?dimension=experiment&key=checkout
+GET /v1/analytics-databases/{id}/filters?param=plan&event=checkout_completed
+```
+
+```json
+{ "values": ["1.3.2", "1.4.0"], "truncated": false }
+```
+
+Distinct values, without counts, sorted, at most 1,000 (`truncated` says there are more), to
+fill filter controls. A `dimension` (`platform`, `platformVersion`, `runtime`, `app`,
+`appVersion`, `environment`, `country`, `attribution`, `installAttribution`, `category`,
+`experiment`) covers the whole storage window; `experiment` lists experiment keys, and with
+`key` that experiment's variants. A `param` of an `event` covers the last seven days. Viewer
+or above; a query slot.
+
+### Trends
+
+```
+POST /v1/analytics-databases/{id}/queries/trends[?format=csv|json]    Viewer or above; a query slot
+```
+
+The body is a trend definition (UX Analytics PRD 9.2). Everything but `series` has a default:
+
+```json
+{
+  "range": { "preset": "last30Days" },
+  "interval": "day",
+  "series": [
+    { "event": "checkout_completed", "metric": "installations", "label": "1.4.0",
+      "filters": [{ "field": "appVersion", "op": "is", "values": ["1.4.0"] }] },
+    { "event": "checkout_completed", "metric": "installations", "label": "1.3.2",
+      "filters": [{ "field": "appVersion", "op": "is", "values": ["1.3.2"] }] }
+  ],
+  "filters": [{ "field": "platform", "op": "is", "values": ["ios", "android"] }]
+}
+```
+
+- **Range**: `{ "from": "2026-09-01", "to": "2026-09-27" }`, dates in the database's
+  reporting timezone, both included, between `1970-01-01` and `2149-06-06` (the days the
+  event store can hold; others are `400 invalid_query` at `range.from` or `range.to`); or a
+  `preset`, ending today and including it, today
+  being computed in that zone: `today`, `yesterday`, `last7Days`, `last30Days` (the default),
+  `last90Days`, `last12Months` (this calendar month and the eleven before it), `thisMonth`,
+  `thisYear`.
+- **Interval**: `hour` (a range of at most seven days, else `400 invalid_query`), `day` (the
+  default), `week` (ISO weeks, Monday to Sunday), `month` or `year`. A range spans at most
+  1,000 periods of its interval (1,000 days by day, about 19 years by week); a longer one is
+  `400 invalid_query` at `range`.
+- **Series**: one to five. `event` is an event name or `*`, any event: every event of a device
+  installation that is not a background event, of every name and category, hidden ones
+  included. `metric` is `events`, `installations` (unique installations: server installations
+  and the test installation never count), `users` (unique non-empty user IDs) or
+  `perInstallation` (events divided by unique installations). A unique count counts each unit
+  once per period, however many days it was active; it is never a sum of daily counts, so one
+  user ID on two installations counts two installations and one user. A background event
+  (`platform: "server"`) counts in its event's totals, unique installations (of the device
+  installation it names) and users, and never in `*`. The test installation counts only in
+  `test_event`'s totals.
+- **Filters** on a series apply to it; `filters` beside `series` apply to every series.
+  Fields and operators: `platform`, `runtime`, `app`, `environment`, `country`, `userId`,
+  `installationId`, `attribution`, `installAttribution` (the installation's first
+  attribution), `category` and `experiment` (with `key`; the values are variants) take `is`,
+  `isNot`, `isSet`, `isNotSet`; `appVersion` and `platformVersion` add `startsWith`;
+  `installAgeDays`, `installAgeWeeks` and `installAgeMonths` take `between` with the lowest
+  and highest, both included; `param` (with `key`) takes `is`, `isNot`, `contains`, `isSet`,
+  `isNotSet`, and `gt` and `lt` with a number. Filters on the same field (and key) combine
+  with or, on different fields with and. **A definition that names no `environment` filter
+  counts `production` events only.**
+- **Split** (one series only): `{ "field": "appVersion" }`, or an experiment or a param with
+  its `key`: a line for each of the ten values with the largest metric over the range, then
+  `Other`, every remaining value counted as one set (an installation active on two of them
+  counts once), and `None`, events without a value, only when it is not zero.
+
+The answer has one point per period of the range, zeros included:
+
+```json
+{
+  "range": { "from": "2026-08-29", "to": "2026-09-27" },
+  "interval": "day",
+  "timezone": "Europe/Paris",
+  "keptFrom": "2026-09-01",
+  "series": [
+    {
+      "label": "1.4.0",
+      "event": "checkout_completed",
+      "metric": "installations",
+      "covered": { "from": "2026-09-01", "to": "2026-09-27" },
+      "notice": null,
+      "points": [
+        { "start": "2026-08-29", "label": "2026-08-29", "value": 0, "incomplete": true },
+        { "start": "2026-09-01", "label": "2026-09-01", "value": 412, "incomplete": false },
+        { "start": "2026-09-27", "label": "2026-09-27", "value": 96, "incomplete": true }
+      ]
+    }
+  ]
+}
+```
+
+- **Coverage.** Every series states the range it `covered`: from the oldest day the database
+  keeps (`keptFrom`, its oldest stored event, or the start of the oldest week retention kept)
+  to today. Days before it have no data. A range wholly before it answers every series empty,
+  with `covered: null` and `notice: "range_outside_retention"`, not an error.
+- **Incomplete periods.** A point is `incomplete` when its period contains now, has not
+  begun, or is cut by the covered range: the first and last week of a range that starts or
+  ends mid-week, and the days before the oldest one kept.
+- **Labels.** Days are `2026-09-21`, weeks `2026-W39` (the ISO week-year and number), months
+  `2026-09`, years `2026`. Hours are hours of absolute time labelled with the zone's offset,
+  `2026-10-25T02:00+02:00` then `2026-10-25T02:00+01:00`, so a day on which daylight saving
+  time ends has 25 and the day it starts 23.
+- **A split** answers one series per line, with `value` (null for Other and None) and
+  `group` (`value`, `other` or `none`), Other and None last.
+- **An unknown or deleted event** answers an empty series, not an error. A definition outside
+  the contract is `400 invalid_query` with each problem's `path` (`series.0.metric`,
+  `range.to`, `series.1.filters.0.values.0` for an installation ID that is not a UUID).
+- **Exports.** `?format=csv` or `?format=json` downloads the result instead, one row per
+  period and series: `series, event, metric, splitValue, periodStart, periodLabel, value,
+  incomplete, coveredFrom, coveredTo`, the chart's own values.
+
+### The Overview
+
+```
+GET /v1/analytics-databases/{id}/overview?preset&from&to&app&platform&environment&unit    Viewer or above; one query slot
+```
+
+The home screen of a database (UX Analytics AN-140 to AN-144), in one answer that holds one
+query slot for all of its statements.
+
+- **Range**: `preset` (`last30Days` by default; presets end today and include it) or `from`
+  and `to`, dates in the reporting timezone, both included, at most 1,000 days.
+- **Filters**: `app` (every app by default), `platform` (every client platform by default:
+  `web`, `ios`, `android`, `macos`, `windows`, `linux`, `other`; `server` is refused, since
+  a backend's events count in no active figure) and `environment` (`production` by default).
+  Repeat a parameter for several values: `?environment=production&environment=staging`.
+- **`unit`**: `installation` (the default) or `user`. It changes the active figures only:
+  with `user` they count distinct non-empty user IDs of the same events.
+
+```json
+{
+  "range": { "from": "2026-08-29", "to": "2026-09-27" },
+  "unit": "installation",
+  "timezone": "Europe/Paris",
+  "keptFrom": "2026-06-01",
+  "filters": { "apps": [], "platforms": [], "environments": ["production"] },
+  "figures": {
+    "activeLastHour": { "value": 412, "previous": 398, "covered": { "from": "2026-09-27T09:00:00.000Z", "to": "2026-09-27T10:00:00.000Z" } },
+    "dailyActiveLastDay": { "value": 5210, "previous": 5102, "covered": { "from": "2026-09-26", "to": "2026-09-26" } },
+    "dailyActiveToday": { "value": 3120, "previous": 3044, "covered": { "from": "2026-09-27", "to": "2026-09-27" } },
+    "weeklyActive": { "value": 14320, "previous": 13980, "covered": { "from": "2026-09-21", "to": "2026-09-27" } },
+    "monthlyActive": { "value": 31022, "previous": null, "covered": { "from": "2026-08-29", "to": "2026-09-27" } },
+    "stickiness": { "value": 0.162, "previous": null, "covered": { "from": "2026-08-29", "to": "2026-09-27" } },
+    "newInstallations": { "value": 2210, "previous": 1987, "covered": { "from": "2026-08-29", "to": "2026-09-27" }, "perDay": [{ "day": "2026-08-29", "value": 71 }] },
+    "sessions": { "value": 88410, "previous": 84002, "covered": { "from": "2026-08-29", "to": "2026-09-27" }, "perDay": [{ "day": "2026-08-29", "value": 2890 }] },
+    "d1": { "value": 0.41, "previous": 0.39, "covered": { "from": "2026-08-29", "to": "2026-09-27" }, "installations": 2140 },
+    "d7": { "value": 0.22, "previous": 0.21, "covered": { "from": "2026-08-29", "to": "2026-09-27" }, "installations": 1650 },
+    "d30": { "value": null, "previous": 0.11, "covered": { "from": "2026-08-29", "to": "2026-09-27" }, "installations": 0 }
+  },
+  "crashFree": {
+    "covered": { "from": "2026-08-29", "to": "2026-09-27" },
+    "overall": { "rate": 0.992, "sessions": 80120, "measured": true, "lowConfidence": false, "previous": 0.990 },
+    "versions": [
+      { "version": "1.5.0", "rate": 0.99, "sessions": 1000, "measured": true, "lowConfidence": false },
+      { "version": "1.4.2", "rate": null, "sessions": 0, "measured": false, "lowConfidence": false }
+    ]
+  },
+  "shares": {
+    "covered": { "from": "2026-09-21", "to": "2026-09-27" },
+    "appVersion": [{ "value": "1.5.0", "share": 0.62, "installations": 8878 }, { "value": "Other", "share": 0.02, "installations": 286, "other": true }],
+    "platform": [{ "value": "ios", "share": 0.55, "installations": 7876 }],
+    "country": [{ "value": "FR", "share": 0.31, "installations": 4439 }]
+  },
+  "topEvents": { "computedAt": "2026-09-27T09:58:00.000Z", "events": [{ "name": "screen_viewed", "events": 120400 }] },
+  "dailyActive": { "covered": { "from": "2026-08-29", "to": "2026-09-27" }, "points": [{ "start": "2026-08-29", "label": "2026-08-29", "value": 4980, "incomplete": false }] },
+  "versionsFirstSeen": [{ "version": "1.5.0", "day": "2026-09-15" }],
+  "notices": []
+}
+```
+
+Field by field:
+
+- **Every figure** has `value`, `previous` and `covered`. `covered` is the part of the figure's
+  period the storage window holds (null when it holds none of it, and then `value` is null
+  too). `previous` is the same figure for the previous period, and is `null` — shown as "not
+  available" — whenever that period begins before the oldest event kept (`keptFrom`), so a
+  change is never computed from part of a period.
+- **Anchored to now**, whatever the range: `activeLastHour`, units with an event in the last
+  60 minutes by event time (previous: the 60 minutes before; `covered` holds RFC 3339 times);
+  `dailyActiveLastDay`, yesterday (previous: the day before); `dailyActiveToday`, today so far
+  (previous: yesterday up to the same time of day); `weeklyActive` and `monthlyActive`, the
+  7 and 30 days ending today (previous: seven and thirty days earlier); `stickiness`, the mean
+  daily active units over those 30 days (over the days kept, when fewer) divided by
+  `monthlyActive` (previous: thirty days earlier).
+- **Active** means an event that is not a background event (platform `server`) from a device
+  installation. Server installations (events carrying a user ID and no installation ID) and
+  the database's test installation count in no active or unique figure.
+- **Over the range** (previous: the range of the same length just before):
+  `newInstallations`, installations whose install day falls in the range, filtered by their
+  install dimensions, never ephemeral, server or test ones; `sessions`, distinct session IDs of
+  stored `app_started` events of device installations, each on the local day, app version,
+  dimensions and `crashReporting` of its first `app_started` accepted, a session ID no
+  `app_started` names counting nowhere; each with `perDay` over the covered days.
+- **`d1`, `d7`, `d30`**: of the installations installed in the range whose Nth day after
+  installing has ended (`installations`, the denominator), the share that sent `app_started`
+  on that local day, on any platform and in any environment — the standard Retention cohort,
+  by day. `value` is null while no installation of the range has reached its Nth day's end,
+  which with the default 30 days is always the case for `d30`.
+- **`crashFree`**: over the sessions whose `app_started` falls in the range and reports a crash
+  module (`crashReporting` true), `rate` = 1 − sessions flagged crashed ÷ sessions, a session
+  being flagged when any `session_crashed` names it however late it arrived (one per session
+  counts). `overall`, with `previous`, and `versions`, the five app versions with the most
+  sessions in the range; `measured` is false ("not measured", `rate` null) for a version none
+  of whose sessions reported a crash module, `sessions` is the number counted, and
+  `lowConfidence` is true below 100.
+- **`shares`**: the installations active in the last 7 days, each counted once by its latest
+  app version, platform and country: the ten largest values and `Other` (`other: true`),
+  `share` adding up to 1. An empty `value` means none was reported.
+- **`topEvents`**: the ten names with the most events in the last 24 hours, hidden ones left
+  out, from the catalog's refresh as of `computedAt` (at most five minutes old; empty before
+  its first pass).
+- **`dailyActive`**: daily active units over the range, a point a day as a trend's points,
+  `incomplete` for today and for days before the oldest one kept.
+- **`versionsFirstSeen`**: the day each app version was first seen, for the versions first seen
+  within the range, from the events the active figures count.
+- **`notices`**: `no_events`, when nothing has arrived yet; `no_app_started`, when the last 24
+  hours brought events and no `app_started` (the standard events are off, typically), which
+  is why sessions, retention and crash-free sessions are empty.
+
+A bad range, unit or platform is `400 invalid_query` with its path (`range`, `range.to`,
+`unit`, `platform.0`).
+
+### Profiles
+
+A profile is everything an analytics database knows about one installation or one user ID
+(UX Analytics PRD 6.9). An **installation** is one install of an app on one device or browser
+profile, identified by the random ID the SDK keeps; a **server installation** is the one the
+server derives for events that carry a user ID and no installation ID (a backend); the **test
+installation** receives the test event and is never listed. A **user ID** is the opaque ID the
+application sets after sign-in. The two are never merged: one installation may carry several
+user IDs over its life, and one user ID may span several installations.
+
+```
+GET /v1/analytics-databases/{id}/profiles?q&platform&appVersion&country&environment&cursor&limit   a query slot
+GET /v1/analytics-databases/{id}/profiles/installations/{installationId}                          no slot
+GET /v1/analytics-databases/{id}/profiles/users/{userId}                                          no slot
+GET /v1/analytics-databases/{id}/profiles/installations/{installationId}/events?name&from&to&cursor&limit   a query slot
+GET /v1/analytics-databases/{id}/profiles/users/{userId}/events?name&from&to&cursor&limit                   a query slot
+GET /v1/analytics-databases/{id}/profiles/installations/{installationId}/export[?limit&cursor]     a slot per page
+GET /v1/analytics-databases/{id}/profiles/users/{userId}/export[?limit&cursor]                     a slot per page
+GET /v1/crash-databases/{id}/reports/{reportId}/usage-profile                                     no slot
+GET /v1/feedback-databases/{id}/submissions/{submissionId}/usage-profile                          no slot
+```
+
+All need Viewer or above (a secret key qualifies) and answer `503 analytics_unavailable` while
+the event store is down, except the two `usage-profile` routes, which answer an empty list.
+A user ID goes in the path URL-encoded (`/profiles/users/a%2Fb`). Every route is logged by its
+pattern, so no installation or user ID reaches the server's log.
+
+**Finding a profile.** With `q`, the answer lists the installations whose ID is `q` or starts
+with it, and in `users` the user IDs equal to it or starting with it, their installations
+included in `installations`. A prefix needs **at least six characters**: shorter text matches
+exact IDs only (a user ID such as `u1` is still found) and the answer says
+`"notice": "prefix_too_short"`. An installation ID, or its first six hex digits or more, is
+found in any letter case, with or without its dashes. At most `limit` of each (50 by default,
+1,000 at most), with `truncated: true` when more match.
+
+Without `q`, the answer is the installations **seen most recently**, newest first then by
+installation ID, 50 a page, optionally filtered by their latest `platform`, `appVersion`,
+`country` and `environment`:
+
+```json
+{
+  "installations": [
+    {
+      "installationId": "0192f5a0-1111-7000-8000-00000000000a",
+      "userId": "u2",
+      "installationKind": "device", "server": false, "ephemeral": false,
+      "platform": "ios", "platformVersion": "18.1", "appVersion": "1.5.0",
+      "country": "FR", "environment": "production",
+      "firstSeen": "2026-09-01T08:00:00.000Z",
+      "lastSeen": "2026-09-27T09:41:12.004Z",
+      "lastEvent": "2026-09-27T09:41:12.004Z"
+    }
+  ],
+  "users": [],
+  "nextCursor": "eyJoIjoi…",
+  "truncated": false,
+  "notice": null
+}
+```
+
+`userId` is the user ID seen last on the installation. `lastSeen` comes from events that are
+not background events, so it is null for a server installation, which is ordered by its
+`lastEvent` instead. Device and server installations are listed; the test installation is not.
+
+**Cursors** are opaque. They carry the next page's position and the time of the first page, so
+paging while events arrive shows each item at most once: an installation that becomes active
+after the first page was read moves to the top of a fresh list rather than onto a later page,
+and a profile's events that arrive meanwhile are left off the pages that follow (they head a
+fresh first page). A cursor not issued by the list is `400 invalid_query`.
+
+**An installation profile**:
+
+```json
+{
+  "kind": "installation",
+  "installation": {
+    "installationId": "0192f5a0-1111-7000-8000-00000000000a",
+    "installationKind": "device", "server": false, "ephemeral": false,
+    "installTime": "2026-09-01T08:00:00.000Z", "installDay": "2026-09-01",
+    "firstSeen": "2026-09-01T08:00:00.000Z",
+    "lastSeen": "2026-09-27T09:41:12.004Z",
+    "lastEvent": "2026-09-27T09:41:12.004Z",
+    "installAttribution": "newsletter",
+    "install": { "platform": "ios", "appVersion": "1.4.0", "…": "…", "experiments": {} },
+    "latest": { "platform": "ios", "osName": "iOS", "platformVersion": "18.1", "runtime": null,
+                "runtimeVersion": null, "app": "com.example.checkout", "appVersion": "1.5.0",
+                "appBuild": "412", "locale": "fr-FR", "environment": "production", "country": "FR",
+                "attribution": "ads", "experiments": { "checkout": "b" } },
+    "userId": "u2"
+  },
+  "identity": [
+    { "userId": "u2", "firstSeen": "2026-09-20T10:00:00.000Z", "lastSeen": "2026-09-27T09:41:12.004Z", "current": true },
+    { "userId": "u1", "firstSeen": "2026-09-01T08:00:00.000Z", "lastSeen": "2026-09-19T18:30:00.000Z", "current": false }
+  ],
+  "counts": { "events": 1840, "sessions": 61, "activeDays": 22 },
+  "activeDays": [{ "day": "2026-09-01", "events": 40 }],
+  "window": { "from": "2026-06-01", "to": "2026-09-27" },
+  "links": {
+    "crashGroups": [
+      { "crashDatabaseId": "cdb_…", "crashDatabaseName": "Checkout crashes", "groupId": "cgr_…",
+        "title": "PaymentError · pay (checkout.js)", "reports": 2, "lastReceivedAt": "2026-09-27T09:40:58.100Z" }
+    ],
+    "submissions": [
+      { "feedbackDatabaseId": "fdb_…", "feedbackDatabaseName": "Checkout feedback", "submissionId": "sub_…",
+        "receivedAt": "2026-09-27T09:42:03.000Z", "firstTextAnswer": "Paying did nothing, twice." }
+    ],
+    "truncated": { "crashGroups": false, "submissions": false }
+  }
+}
+```
+
+- `installTime` is the effective time of the event that created the record and never moves;
+  `install` holds that event's dimensions, `latest` those of its latest event. The current user
+  ID is the one seen last; the others are its previous user IDs, each with when it was first and
+  last seen on this installation.
+- `counts` and `activeDays` are counted from its events: every event; sessions, the distinct
+  session IDs of its `app_started` events; active days, the days (in the reporting timezone)
+  holding an event that is not a background event. `window` is the storage window the calendar
+  covers, from the oldest day kept to today.
+- `links` lists, from the crash and feedback databases of the same project **that you can
+  read**, the crash groups having retained reports that carry the installation ID or any user ID
+  seen on it (with the number of such reports and when the last arrived) and the submissions
+  carrying either (with their received time and first free-text answer, cut at 500 characters),
+  newest first, 100 of each at most. A database you cannot read contributes nothing.
+- `404 profile_not_found` when no installation record exists: never received, only background
+  events (which create no record), erased, or aged out with its events.
+
+**A user profile** has `kind: "user"`, `user` (`userId`, `firstSeen`, `lastSeen`,
+`installations`), `identity` (the installations it was seen on, most recent first, each as a
+list row plus `userFirstSeen` and `userLastSeen`), `counts` and `activeDays` over the events
+carrying the user ID, `window`, and `links` for the user ID and those installations' IDs.
+
+**A profile's events** are newest first by effective time then event ID, 50 a page (`limit` up
+to 1,000), each with `eventId`, `name`, `category`, `time` (effective), `receivedTime`,
+`sessionId`, `installationId`, `userId`, `params` (as stored, every value text) and `context`
+(the dimensions above). `name` keeps one event name, an unknown or deleted one answering none;
+`from` and `to` are dates in the reporting timezone, both included. Every environment is
+included.
+
+**The export** is a JSON download, to answer a request for access: the record, `identity`,
+`firstOccurrences` (for each event name still in the catalog, and `*` for any event, the day,
+time and dimensions of the first occurrence), and `events`, every stored event of the profile,
+newest first. The events are read in pages of 5,000, each holding a query slot only while it is
+read. With `limit`, the route answers one page of JSON instead, the records on the first page
+only, with `nextCursor` (MCP uses it).
+
+**The Usage profile link.** `GET …/reports/{reportId}/usage-profile` and
+`GET …/submissions/{submissionId}/usage-profile` need Viewer on the crash or feedback database
+and answer:
+
+```json
+{ "profiles": [{ "analyticsDatabaseId": "adb_…", "analyticsDatabaseName": "Checkout app",
+                 "installationId": "0192f5a0-…", "lastSeen": "2026-09-27T09:41:12.004Z" }] }
+```
+
+one entry per analytics database of the same project that you can read and that holds the
+installation, the most recently seen first. The list is empty when the report or submission
+carries no installation ID, no readable analytics database holds it, the deployment runs no
+event store, or the event store does not answer within about a second and a half. It is a
+separate request so the report or submission itself never waits on the event store.
+
+### Funnels
+
+A funnel is an ordered list of two to ten steps, each an event name with optional filters and
+label (UX Analytics PRD 6.7). It answers where people stop, and — in the trend view — whether
+that improves over time.
+
+```
+GET    /v1/analytics-databases/{id}/funnels                      Viewer or above; no slot
+POST   /v1/analytics-databases/{id}/funnels                      Creator or Admin
+GET    /v1/analytics-databases/{id}/funnels/{funnelId}           Viewer or above; no slot
+PATCH  /v1/analytics-databases/{id}/funnels/{funnelId}           Creator or Admin
+DELETE /v1/analytics-databases/{id}/funnels/{funnelId}           Creator or Admin
+POST   /v1/analytics-databases/{id}/queries/funnel[?format=csv|json]   Viewer or above; a query slot
+POST   /v1/analytics-databases/{id}/queries/funnel/units         Viewer or above; a query slot
+```
+
+**Saved funnels** live in PostgreSQL, so listing, reading and saving them work while the event
+store is unreachable. The list is ordered by name. A body is `{ "name", "definition" }`: a name of
+at most 80 characters and the definition below; a `PATCH` takes a name, a definition (replaced
+whole) or both. The defaults are applied and stored. Deleting a funnel removes only its
+definition, touches no event, and takes no confirmation, as deleting an analytics database over
+HTTP does; the MCP tool asks for the exact name. An unknown ID answers `404 funnel_not_found`.
+
+**The definition** (PRD 9.2), with every default written out (`split` is optional):
+
+```json
+{
+  "steps": [
+    { "event": "app_installed" },
+    { "event": "signup_completed", "label": "Signed up" },
+    { "event": "first_project_created",
+      "filters": [{ "field": "param", "key": "template", "op": "isNot", "values": ["blank"] }] }
+  ],
+  "mode": "closed",
+  "window": { "value": 7, "unit": "day" },
+  "unit": "installation",
+  "filters": [],
+  "split": { "field": "experiment", "key": "onboarding" },
+  "defaultRange": { "preset": "last30Days" },
+  "defaultView": { "kind": "steps" }
+}
+```
+
+`mode` is `closed` or `open`; `window` runs from one minute to 90 days (`unit` `minute`, `hour`
+or `day`); `unit` is `installation` or `user`; `filters` apply to every step's events, with the
+same fields and operators as trends; `split` is optional. A definition that names no
+`environment` filter reads `production` only.
+
+**A run** takes a saved funnel's `funnelId` or an inline `definition` — exactly one — and
+optionally a `range` and a `view`; without them it uses the definition's `defaultRange` and
+`defaultView`. Both are computed by the same code, so a variation tried inline gives what the
+saved funnel would.
+
+```json
+{ "funnelId": "afn_4k2m9x7qpz1c", "range": { "from": "2026-09-01", "to": "2026-09-15" }, "view": { "kind": "trend", "interval": "week" } }
+```
+
+How units move through it (AN-083, AN-084):
+
+- **Closed.** A unit enters at its first occurrence of step 1 in the range. It reaches step k at
+  the earliest occurrence of step k's event — matching step k's filters and the global ones —
+  after the occurrence that reached step k − 1 (that same occurrence never counts twice) and no
+  later than its entry time plus the window. Occurrences are ordered by effective time, then by
+  event ID. Other events may happen in between. A step reached within the window counts even
+  when it falls after the range ends.
+- **Open.** A unit enters at the step it performed earliest in the range (the lower step wins a
+  tie of time) and progresses from there, the window counted from that entry. A unit entering at
+  the last step is counted there and is not a conversion.
+- **Units.** Installations are device installations: server installations (a user ID sent
+  without an installation ID) and the test installation never count. A user-ID funnel ignores
+  events without a user ID, so a step such as `app_installed`, usually sent before sign-in, is
+  often empty. Background events (platform `server`) count as steps of the installation or user
+  they name.
+
+**The steps view** answers, as `view: "steps"`:
+
+```json
+{
+  "funnel": { "id": "afn_4k2m9x7qpz1c", "name": "Onboarding" },
+  "view": "steps", "mode": "closed", "window": { "value": 7, "unit": "day" }, "unit": "installation",
+  "range": { "from": "2026-09-01", "to": "2026-09-15" }, "timezone": "UTC", "keptFrom": "2026-08-30",
+  "covered": { "from": "2026-09-01", "to": "2026-09-15" }, "notice": null, "warnings": [], "split": null,
+  "entered": 3,
+  "steps": [
+    { "index": 1, "event": "onboarding_started", "label": null, "entered": null, "continued": null, "reached": 3,
+      "shareOfEntered": 1, "shareOfPrevious": null, "dropped": 0, "medianSeconds": null, "meanSeconds": null },
+    { "index": 2, "event": "signup_completed", "label": null, "entered": null, "continued": 3, "reached": 3,
+      "shareOfEntered": 1, "shareOfPrevious": 1, "dropped": 2, "medianSeconds": 86400, "meanSeconds": 74500 },
+    { "index": 3, "event": "project_created", "label": null, "entered": null, "continued": 1, "reached": 1,
+      "shareOfEntered": 0.3333333333333333, "shareOfPrevious": 0.3333333333333333, "dropped": null,
+      "medianSeconds": 86400, "meanSeconds": 86400 }
+  ],
+  "conversion": 0.3333333333333333, "medianSeconds": 223200,
+  "splits": null
+}
+```
+
+(Appendix B.2 of the PRD.) Steps are numbered from 1. `entered` per step is for open funnels
+(null in a closed one); `continued` is the units that came from the previous step (null for
+step 1); `shareOfEntered` is `reached` over every unit that entered, at any step;
+`shareOfPrevious` is `continued` over the previous step's `reached`; `dropped` is the units at
+the step that did not continue (null for the last); times are exact medians and means, in
+seconds, from the previous step for the units that continued. `conversion` is the units that
+continued into the last step over those that entered before it, and `medianSeconds` the median
+time from entry to the last step. Shares are null when their denominator is 0.
+
+**The trend view** (`"view": { "kind": "trend", "interval": "day" | "week" | "month" }`) groups
+entries by the day, ISO week or month of their entry time in the reporting timezone and runs the
+funnel separately for each group, a unit entering a group at its first entering occurrence there.
+A unit may therefore count in several groups, and the groups need not add up to the steps view's
+total. It answers `steps` (index, event, label) and `groups`, one per period of the range, each
+`{ start, label, entered, conversion, stepShares, incomplete }`: `stepShares` is each step's
+`reached` over the group's entries, and `incomplete` is true while the group's last instant plus
+the window is later than now, since its entries may still convert (a range starting mid-week does
+not make its first week incomplete). The trend view holds the caller's second, funnel-trend slot
+and runs under its own time limit, 120 seconds by default (`INLET_ANALYTICS_FUNNEL_TREND_TIME_S`);
+a range spans at most 1,000 periods of its interval.
+
+**A split** (the definition's `split`: a dimension, `installAttribution`, an experiment or a
+param with its `key`) takes the value on each unit's entering event and adds `splits`: one result
+for each of the ten values with the most entries, then `Other` (every remaining value, as one set
+of units) and `None` (no value), each with `label`, `value`, `group` (`value`, `other`, `none`)
+and the same figures (the steps view's per step, or the trend view's `groups`). An experiment
+split carries `split.descriptive: true` and a `note`: it is a readout of what happened per
+variant, with no significance test.
+
+Every answer states the range it `covered` (from the oldest day kept to today); a range starting
+before the oldest event kept covers what is kept, and one wholly before it answers `covered: null`
+with `notice: "range_outside_retention"`. A step whose event name was deleted answers no units and
+a warning `{ "code": "event_deleted", "step": 2, "event": "signup_completed" }`; a name never sent
+simply has no units. `?format=csv` or `?format=json` downloads the result: one row per step (and
+split value) in the steps view, one per group and step in the trend view, with the columns
+`split, groupStart, groupLabel, incomplete, step, event, label, entered, continued, reached,
+shareOfEntered, shareOfPrevious, dropped, medianSeconds, meanSeconds, conversion, coveredFrom,
+coveredTo`.
+
+**The drill-down** lists the units behind a step of the steps view (AN-088):
+
+```json
+{ "funnelId": "afn_4k2m9x7qpz1c", "range": { "from": "2026-09-01", "to": "2026-09-15" }, "step": 2, "kind": "dropped" }
+```
+
+`kind` `dropped` (the default) lists the units that reached `step` and not the next; `reached`
+those that reached it. 50 a page (`limit` up to 1,000), ordered by unit ID:
+
+```json
+{
+  "funnel": { "id": "afn_4k2m9x7qpz1c", "name": "Onboarding" }, "unit": "installation", "step": 2, "kind": "dropped",
+  "range": { "from": "2026-09-01", "to": "2026-09-15" }, "covered": { "from": "2026-09-01", "to": "2026-09-15" },
+  "runAt": "2026-09-24T12:00:00.000Z",
+  "units": [
+    { "unit": "0192f5a0-0000-7000-8000-000000000001", "installationId": "0192f5a0-0000-7000-8000-000000000001",
+      "userId": null, "platform": "ios", "appVersion": "1.4.0", "lastSeen": "2026-09-12T09:00:00.000Z",
+      "crashReports": false, "feedback": true }
+  ],
+  "nextCursor": "eyJyIjoxNzkwMjU…"
+}
+```
+
+Pass `nextCursor` back as `cursor` with the same run. The cursor keeps the run's time (`runAt`):
+every page counts only events received by then and resolves a preset range at that time, so a list
+read page by page while events arrive shows each unit once. In a user-ID funnel `unit` is the user
+ID and `installationId` the installation of its entering event. `crashReports` and `feedback` say
+whether crash reports or feedback submissions, in the project's databases the reader can read,
+carry the unit's installation ID or user ID; the profile (`GET …/profiles/installations/{id}`)
+lists them.
+
+### Cohorts
+
+A cohort groups units by the calendar period in which they first did a start event, and shows
+the share that did a return event in each later period (UX Analytics PRD 6.8). It answers "who
+comes back".
+
+```
+GET    /v1/analytics-databases/{id}/cohorts                      Viewer or above; no slot
+POST   /v1/analytics-databases/{id}/cohorts                      Creator or Admin
+GET    /v1/analytics-databases/{id}/cohorts/{cohortId}           Viewer or above; no slot
+PATCH  /v1/analytics-databases/{id}/cohorts/{cohortId}           Creator or Admin
+DELETE /v1/analytics-databases/{id}/cohorts/{cohortId}           Creator or Admin
+POST   /v1/analytics-databases/{id}/queries/cohort[?format=csv|json]   Viewer or above; a query slot
+```
+
+**Saved cohorts** live in PostgreSQL, so listing, reading and saving them work while the event
+store is unreachable. Every analytics database is created with the standard **Retention** cohort
+(start the install, return `app_started`, by week, counting installations). It is listed first,
+then the others by name; each carries `standard` (true for Retention only). Editing or deleting
+Retention answers `409 standard_cohort_immutable`; a run can still change its granularity, range
+and population filters. A body is `{ "name", "definition" }`, a name of at most 80 characters; a
+`PATCH` takes a name, a definition (replaced whole) or both. Deleting a cohort removes only its
+definition and takes no confirmation over HTTP; the MCP tool asks for the exact name. An unknown
+ID answers `404 cohort_not_found`.
+
+**The definition** (PRD 9.2), an example; the defaults are listed below it:
+
+```json
+{
+  "start": { "kind": "event", "event": "purchase_completed", "filters": [] },
+  "return": { "kind": "event", "event": "purchase_completed", "filters": [] },
+  "granularity": "month",
+  "unit": "installation",
+  "filters": [{ "field": "platform", "op": "is", "values": ["ios", "android"] }],
+  "defaultRange": { "preset": "last12Months" }
+}
+```
+
+- `start.kind` is `install` (installations only), `firstSeen` (the first event of any name) or
+  `event` (a name, with optional `filters` of any field).
+- `return.kind` is `anyEvent` (any event of a device installation that is not a background
+  event) or `event` (a name, with optional `filters`).
+- `granularity` is `day`, `week`, `month` or `year`: calendar periods in the database's reporting
+  timezone, ISO weeks from Monday. It has no default.
+- `unit` is `installation` (the default) or `user`.
+- `filters` are **population filters**, on the standard dimensions (`platform`,
+  `platformVersion`, `runtime`, `app`, `appVersion`, `environment`, `country`, `attribution`,
+  `experiment` with a `key`) and `installAttribution` (installations only). A definition that
+  names no `environment` filter, here or on its start, counts starts in `production` only.
+- `defaultRange` is the start periods a run covers when it names none; without it, the last 12
+  periods of the granularity, the current one included.
+
+**A run** takes a saved cohort's `cohortId` or an inline `definition` — exactly one — computed by
+the same code. A run of a saved cohort may also give `granularity` and `filters`, which replace the
+saved ones for that run only, and a `range`, which replaces its `defaultRange`:
+
+```json
+{ "cohortId": "aco_4k2m9x7qpz1c", "granularity": "month", "range": { "from": "2026-06-01", "to": "2026-09-23" } }
+```
+
+A range spans at most 1,000 periods of the granularity.
+
+How units become members and return (AN-102 to AN-104):
+
+- **Membership.** A unit belongs to the cohort of the period containing its start, provided that
+  period lies in the range. An **unfiltered start** — the install, the first event, or a named
+  event without filters — is the first time the unit ever did it, read from the installation
+  records and first occurrences, which outlive the events of their day while the installation
+  keeps sending events. Membership therefore does not move as old weeks are dropped (a late event
+  within the lateness window may still lower a first occurrence; the install never moves), and a
+  unit whose first start falls before the range is in no row. A **filtered start** is the unit's
+  first matching occurrence among the events kept, and the answer says `firstInWindow: true`: its
+  membership may move as the storage window moves.
+- **Population filters** test the unit's context at its start: for the install, the installation's
+  install dimensions and install attribution; otherwise the dimensions of the occurrence that is
+  its start. They never apply to returns.
+- **Returns.** A member returned in period N (N ≥ 1) if it did the return event, matching the
+  return's own filters, in the calendar period N periods after its cohort's — on any platform and
+  in any environment.
+- **Units.** Installations are device installations: ephemeral installations (a private window,
+  blocked storage), server installations and the test installation are in no cohort. User IDs count
+  each user once across its installations.
+
+**The answer** (Appendix B.5 of the PRD: P and Q installed in week 36, R in week 38, each starting
+the app as described there, run on September 24):
+
+```json
+{
+  "cohort": null,
+  "definition": { "start": { "kind": "install" }, "return": { "kind": "event", "event": "app_started", "filters": [] },
+                  "granularity": "week", "unit": "installation", "filters": [] },
+  "granularity": "week", "unit": "installation",
+  "range": { "from": "2026-08-31", "to": "2026-09-24" }, "timezone": "UTC", "keptFrom": "2026-09-02",
+  "covered": { "from": "2026-09-02", "to": "2026-09-24" }, "notice": null,
+  "firstInWindow": false, "truncated": false, "warnings": [],
+  "size": 3, "periods": 4,
+  "summary": [
+    { "period": 1, "members": 2, "returned": 2, "share": 1, "incomplete": false },
+    { "period": 2, "members": 2, "returned": 0, "share": 0, "incomplete": false },
+    { "period": 3, "members": 2, "returned": 1, "share": 0.5, "incomplete": true }
+  ],
+  "rows": [
+    { "start": "2026-08-31", "label": "2026-W36", "size": 2, "cells": [
+      { "period": 1, "returned": 2, "share": 1, "incomplete": false, "covered": true },
+      { "period": 2, "returned": 0, "share": 0, "incomplete": false, "covered": true },
+      { "period": 3, "returned": 1, "share": 0.5, "incomplete": true, "covered": true } ] },
+    { "start": "2026-09-14", "label": "2026-W38", "size": 1, "cells": [
+      { "period": 1, "returned": 0, "share": 0, "incomplete": true, "covered": true } ] }
+  ]
+}
+```
+
+- `rows`: one per cohort period with at least one member, oldest first. `size` is period 0, shown
+  at 100%. `cells` holds one entry per later period that has begun (a period not yet begun has no
+  cell), each with the members who `returned` in it and their `share` of the size. A cell is
+  `incomplete` while its period has not ended, and `covered: false` when its period begins before
+  the oldest event kept (`keptFrom`), since returns before it are no longer known.
+- `periods` is the number of columns, period 0 included: as many as periods have begun since the
+  first cohort shown. `size` is the sum of the rows' sizes.
+- `summary`, per N from 1: the members who returned in period N divided by the `members` of the
+  cohorts whose period N has ended and is covered, so young cohorts and returns no longer kept do
+  not pull it down. Where no cohort's period N has ended yet, it is the incomplete value over the
+  cohorts whose period N has begun, marked `incomplete`. In the example, week 1 counts only the
+  week 36 cohort, because the week 38 cohort's first week has not ended.
+- At most 60 rows by day, 52 by week, 36 by month and 10 by year: a longer range shows its newest
+  periods and answers `truncated: true`.
+- `covered` and `notice` state the part of the range the storage window holds, as every analytics
+  answer does; unfiltered starts are answered from the installation records and first occurrences
+  whatever it is.
+- A start or return whose event name was deleted answers no units for it and a warning
+  `{ "code": "event_deleted", "in": "start" | "return", "event": "purchase_completed" }`; a name
+  never sent simply has no units.
+
+`?format=csv` or `?format=json` downloads the table: one row for the summary and for each cohort
+per period, period 0 being the size, with the columns `row` (`summary` or `cohort`),
+`cohortStart, cohortLabel, size, period, members, returned, share, incomplete, covered`.
+
+### Storage and data health
+
+Three settings bound what an analytics database keeps (UX Analytics AN-160): the **maximum
+age** (395 days, 13 months, by default; 7 to 760), the **maximum events** (500 million by
+default; 100,000 to 10 billion) and the **lateness window** (30 days by default; 1 to 90,
+never longer than the maximum age). The operator may change each default and bound
+([DEPLOYMENT.md](DEPLOYMENT.md#operator-limits)); the answer's `bounds` are the ones in force.
+
+```
+GET   /v1/analytics-databases/{id}/storage       database or project Admin
+PATCH /v1/analytics-databases/{id}/storage       database or project Admin
+GET   /v1/analytics-databases/{id}/data-health   Viewer or above
+```
+
+```
+PATCH /v1/analytics-databases/adb_4kq2m8vx7ncd/storage
+{ "maxEvents": 200000000, "preview": true }
+```
+
+```json
+{
+  "settings": { "maxAgeDays": 395, "maxEvents": 500000000, "latenessDays": 30 },
+  "bounds": {
+    "maxAgeDays": { "min": 7, "max": 760, "default": 395 },
+    "maxEvents": { "min": 100000, "max": 10000000000, "default": 500000000 },
+    "latenessDays": { "min": 1, "max": 90, "default": 30 }
+  },
+  "usage": {
+    "eventsPerDay": { "average": 10000000, "days": [{ "day": "2026-08-29", "events": 9800000 }, "…30 days, today last"] },
+    "events": 482000000,
+    "oldestWeek": "2026-08-10",
+    "keptFrom": "2026-08-10",
+    "bytes": { "database": 24100000000, "eventStore": 24800000000, "postgres": 61000000 }
+  },
+  "binding": "maxEvents",
+  "keptDays": { "min": 43, "max": 50 },
+  "recommendations": [
+    "At 10,000,000 events a day, your cap of 500 million events keeps between 43 and 50 days.",
+    "Keeping 30 days needs a cap of about 440 million events and about 22 GB.",
+    "Keeping 90 days needs a cap of about 1 billion events and about 50 GB.",
+    "Keeping 395 days needs a cap of about 4.1 billion events and about 205 GB."
+  ],
+  "notes": ["Retention removes whole weeks: …", "A raised limit never restores events already removed.", "A change takes effect at the next retention pass, within the hour."],
+  "removes": {
+    "events": 290000000,
+    "before": "2026-09-07",
+    "statement": "This removes about 290,000,000 events recorded before September 7. Charts and funnels then start on that day; cohorts keep their members and lose the returns before it."
+  }
+}
+```
+
+- **Reading** measures what the event store holds from its own partition statistics, never by
+  reading events: `events` and `oldestWeek` from the row counts of the database's weekly
+  partitions (rows erased but not yet removed from the event store's files may count), `bytes`
+  from the active parts of the database's own partitions in every event-store table, of the
+  whole event store and of the PostgreSQL database. `eventsPerDay.average` is over the last
+  seven complete days in the reporting timezone (the days since the first event while the
+  database is younger). `binding` says which limit decides what is kept at that volume and
+  `keptDays` the range of days kept: under a binding cap, between cap ÷ volume less a week and
+  cap ÷ volume, because whole weeks are dropped. `recommendations` are sentences: how many days
+  the cap keeps; what keeping 30, 90 and 395 days needs in events and disk (the days plus two
+  weeks of volume, at the measured bytes per event); that a cap below two weeks of volume
+  cannot be honoured; and, when the cap keeps fewer days than the lateness window, that later
+  events are refused.
+- **Changing** takes only what changes. A value outside its bounds is `400
+  storage_setting_out_of_bounds`, whose message and `details[0].path` name the setting and its
+  bounds. `preview: true` answers `removes` — the events the next retention pass would drop,
+  the day before which they were recorded, and the statement to show — and applies nothing. A
+  change that lowers the maximum age or the maximum events needs `confirm`, the database's
+  exact name (`400 confirmation_mismatch`, whose message carries the statement), and is applied
+  by the next hourly retention pass. A raised limit keeps more from then on and never restores
+  what was removed; the answer's `notice` says so. Any change resolves an open
+  `storage_cap_reached` incident. Both routes answer `503 analytics_unavailable` while the
+  event store is down.
+- **Retention** runs every hour: it drops the weeks older than the maximum age (so events up to
+  a week beyond it may remain), then, while the events kept exceed the maximum events, the
+  oldest week — never the current or the previous week of the reporting timezone. Before it
+  drops a week it records the first week kept (`keptFrom`); ingest refuses an event dated
+  before it with `event_too_old`, even within the lateness window, so no late event recreates
+  a dropped week.
+- **Data health** (`GET …/data-health`) reads PostgreSQL only, so it answers while the event
+  store is down. Over the last 24 hours (`last24h`, the current hour included) and 7 days
+  (`last7d`): `refused` events by the code each batch answered (`rate_limit_exceeded`,
+  `installation_rate_limited`, `event_too_old`, `event_too_large`, `event_name_limit`,
+  `event_name_rate`, `event_blocked`, `invalid_event`, `unknown_field`, `missing_identity`),
+  `warned` values by warning code (`truncated`, `param_key_limit`, `category_limit`,
+  `placeholder_user_id`, `clock_corrected`), `removedByCap`, `duplicates` and `accepted`. The
+  counts are written every ten seconds, so the last seconds may not show yet. `incidents` are
+  the open ones and those resolved in the last 7 days, newest first, each with `kind`,
+  `openedAt`, `resolvedAt`, the `figures` its Slack message reports and a `summary` sentence.
+
+The incidents (AN-169), opened and resolved by the server's worker, at most one open per kind:
+
+| Kind | Opens when | Resolves |
+| --- | --- | --- |
+| `storage_cap_reached` | the cap first drops a week younger than the maximum age | when the settings change, or after 14 days without such a drop |
+| `storage_cap_exceeded` | the cap cannot be met without the current or previous week (ingest continues) | at the first retention pass that meets it |
+| `rate_limited` | more than 1,000 events are refused for rate limiting in an hour | after 24 hours without recurrence |
+| `event_name_limit` | an event is refused for the event-name limit | after 24 hours without recurrence |
+| `event_name_rate` | an event is refused for the hourly allowance of new names | after 24 hours without recurrence |
+| `invalid_events` | more than 10% of an hour of at least 1,000 events are invalid (`invalid_event`, `unknown_field`, `missing_identity`, `event_too_large`) | after 24 hours without recurrence |
+
+An hour is one of the counters' UTC hours. With Slack notifications on, the opening and the
+resolution of each incident send one message each; nothing else about an analytics database
+is ever announced (see [Slack notifications](#slack-notifications)).
+
+### The event export
+
+Every stored event of an analytics database, as newline-delimited JSON (UX Analytics AN-210),
+for a Viewer or above:
+
+```
+GET /v1/analytics-databases/{id}/exports/events?from&to&name&installationId&userId&limit&cursor
+```
+
+```
+{"eventId":"0192f5a0-…","name":"checkout_completed","category":null,"time":"2026-09-26T14:03:11.402Z","receivedTime":"2026-09-26T14:03:12.018Z","localDay":"2026-09-26","installationId":"0192f5a0-1111-…","installationKind":"device","ephemeral":false,"userId":"user-42","sessionId":"0192f5a0-aaaa-…","context":{"platform":"web","osName":"macOS","platformVersion":"15.1","runtime":"Chrome","runtimeVersion":"131","app":null,"appVersion":"1.4.0","appBuild":null,"locale":"fr-FR","environment":"production","country":"FR","attribution":"newsletter","experiments":{"checkout":"b"}},"params":{"plan":"pro","items":"3"},"installAge":{"days":12,"weeks":1,"months":0},"clockCorrected":false,"credentialId":"cred_9rdayr4rstbv"}
+```
+
+- **One line per event**, ordered by effective time then event ID, with every field stored and
+  the values derived at ingest: the local day in the reporting timezone, the installation's
+  kind (`device`, `server` for events that carried a user ID alone, `test`), the install ages,
+  whether the client's clock was corrected, and the key that sent it (`null` for a signed-in
+  user's test event). Param values are strings, as stored. Params, attribution, experiments
+  and the user ID are the integrator's.
+- **Filters**: `from` and `to` are local days (the oldest day kept and today by default; days
+  outside the storage window simply hold nothing), `name` one event name (a name never seen or
+  deleted exports nothing), `installationId` one installation ID in any letter case, `userId`
+  one user ID. A bad date or installation ID is `400 invalid_query`.
+- **Read in pages** of 5,000 events, each holding a [query slot](#query-slots-and-limits) only
+  while it is read, so a long export never starves the interface; the first page is read before
+  the download starts, so a busy slot or an outage answers with its status rather than a cut
+  file. Only events that had arrived when the export started are included, and an event an
+  [erasure](#erasing-an-installation-or-user-id) took is never exported.
+- **With `limit`** (at most 1,000) and `cursor`, it answers one JSON page, `{ events, nextCursor }`,
+  as MCP's `export_analytics_events` does (AN-204). The cursor keeps the export's start, so
+  later pages never mix in events that arrived meanwhile.
+- **Before deleting a database**, this is the export to take (AN-212, FR-025): it holds every
+  stored event, and not the installation records and first occurrences derived from them, which
+  a profile's export ([Profiles](#profiles)) carries per installation or user.
+
+### Query slots and limits
+
+Every analytics query — the Overview, trends, an event's top values, filter values, funnel runs
+and drill-downs, profile searches and exports, the event export (a slot per page), the erasure
+preview, and cohort runs — holds one of the server's query
+slots while it runs: three by default (`INLET_ANALYTICS_QUERY_SLOTS`), one of them kept for
+signed-in users so that an agent's key never locks out the interface. Each credential and
+each signed-in user holds one slot at a time (and a second only for a funnel's trend view);
+its further queries wait behind its first. A query that finds no slot within ten seconds
+answers `503 analytics_busy` with `Retry-After`: retry shortly. Each query then runs under
+the event store's limits, 30 seconds (`INLET_ANALYTICS_QUERY_TIME_S`), a memory limit
+(`INLET_ANALYTICS_QUERY_MEMORY_BYTES`) and a thread limit (`INLET_ANALYTICS_QUERY_THREADS`);
+one that exceeds them answers `503 query_limit_exceeded`: ask for a shorter range or a
+coarser interval. Funnel runs, their drill-downs and cohort runs spill their aggregation to the
+event store's temporary disk past half the memory limit rather than fail, so a long range costs
+time before it costs an answer (the time limit still applies; the funnel trend's is 120 seconds,
+`INLET_ANALYTICS_FUNNEL_TREND_TIME_S`). The catalog list, the live feed, the Lexicon's changes and ingest never take
+a slot, and the rules are the same over MCP. A client that closes its connection before the
+answer — a chart replaced by the next one — leaves the queue at once, or has its running
+statement cancelled in the event store, and its slot is free for its next query.
+
+## Erasing an installation or user ID
+
+To honour a person's request to delete their data, a project Admin — or a database Admin, for
+the databases they administer — erases an installation ID or a user ID across a project's
+crash, feedback and analytics databases (Foundations FD-033, UX Analytics AN-183 to AN-185,
+Crash Reports CR-047, Feedback Collection FR-064A). It works whether or not the deployment
+runs the analytics event store. The project's secret key may do it too (project Admin
+authority); a publishable key may not.
+
+```
+POST /v1/projects/{projectId}/erasures/preview   {kind, id}
+POST /v1/projects/{projectId}/erasures           {kind, id, confirm, databases}
+```
+
+`kind` is `installation` (a UUID, any letter case) or `user`. First the preview:
+
+```json
+{
+  "kind": "user",
+  "id": "user-42",
+  "databases": [
+    { "type": "crash", "id": "cdb_…", "name": "Checkout crashes", "status": "counted", "counts": { "reports": 3, "groupUsers": 3 } },
+    { "type": "feedback", "id": "fdb_…", "name": "Checkout feedback", "status": "counted", "counts": { "submissions": 2, "attachments": 1 } },
+    { "type": "analytics", "id": "adb_…", "name": "Checkout app", "status": "counted", "counts": { "events": 4, "installations": 2 } },
+    { "type": "analytics", "id": "adb_…", "name": "Marketing site", "status": "unreachable", "counts": null }
+  ],
+  "notice": "The erasure matches the identity fields only — …",
+  "limits": "Erasure does not stop an application from sending the same IDs again — …"
+}
+```
+
+- **What it matches**: the identity fields only — the `installationId` and user ID the SDK
+  attaches to crash reports, submissions and events — never an ID an integrator placed in a
+  submission's `clientContext`, a crash report's `context` or an event's params.
+- **A user ID takes installations with it**: in each analytics database, its server
+  installation (the one its backend events created) and every installation on which it is the
+  only user ID ever seen. The crash reports and submissions carrying those installations' IDs
+  go too, so a report sent before the user signed in (installation ID only) is erased with its
+  user. An installation shared with another user stays; its latest user ID becomes the other
+  one.
+- **What it deletes** in each database you select: in a crash database, the reports carrying
+  one of the IDs and the user ID's group-user associations, even in groups that no longer hold
+  a report — each such group's affected users drop by one, a group whose latest report is
+  erased points to its newest remaining one, and every other figure (counts, first and last
+  seen, releases, timelines) is left as it is; in a feedback database, the submissions carrying
+  them with their screenshots, as deleting a submission does; in an analytics database, the
+  events carrying them and every record derived from them — installation records, identity
+  links, first occurrences of the installations and of the user ID.
+- **The erasure** needs `confirm`, the same ID exactly (`400 confirmation_mismatch`), and
+  `databases`, the IDs to erase in, each one you administer in this project (`403 forbidden`
+  otherwise). It answers what it deleted per database, with `erasureId`, the erasure's record (actor, time, kind and counts, never the ID). Crash reports and submissions are gone
+  when it answers; analytics events are unreadable when it answers, and the server's worker
+  deletes them from the event store within minutes, then removes them from the event store's
+  files within 30 days (`INLET_ANALYTICS_ERASURE_BOUND_DAYS`). Events the same IDs send
+  afterwards are kept.
+- **Without the event store**, or while it is unreachable, the preview counts the crash and
+  feedback databases and lists each analytics database as `unreachable`; an erasure selecting
+  one answers it as `deferred` with `deleted: null`, and applies there once the event store
+  answers.
+- **Each erasure is recorded** with its actor (the user or the key), its time, its kind and what
+  it deleted per database (`{ "deferred": 1 }` for a deferred one) — never the ID. Only the
+  analytics worker's pending record holds the ID, and only until no file of the event store
+  carries its rows.
+- **It does not** stop an application from sending the same IDs again (an application stops
+  with `setEnabled(false, {forget: true})`), and it does not reach backups, past exports or
+  Slack messages already sent.
+- A project member who administers no database of the project gets `403 forbidden`; someone
+  with no role in the project gets `404 project_not_found`.
 
 ## Errors
 
@@ -1109,7 +2415,7 @@ The codes you are most likely to handle:
 | Code | Status | Meaning |
 | --- | --- | --- |
 | `invalid_api_key`, `revoked_api_key` | 401 | The key is unknown or has been revoked. |
-| `insufficient_scope` | 403 | A publishable key was used outside the feedback flow. |
+| `insufficient_scope` | 403 | A publishable key was used outside what it may do: the feedback flow, crash reports and analytics ingest. |
 | `feedback_database_inaccessible` | 403 | Valid key, but the database belongs to another project. |
 | `form_not_published` | 409 | Nothing to render, and no new intents. |
 | `form_version_mismatch` | 409 | The `formVersion` you sent is not the pinned one. |
@@ -1133,6 +2439,19 @@ The codes you are most likely to handle:
 | `last_admin_removal` | 409 | A project must keep at least one Admin. |
 | `malware_detected` | 400 | The malware scanner rejected the upload. Retrying the same bytes will not help. |
 | `slack_delivery_failed` | 502 | Slack refused the message. Its own error string is in the message and details. |
+| `analytics_database_not_found`, `analytics_database_inaccessible` | 404, 403 | No such analytics database, or it belongs to another project. |
+| `analytics_not_enabled` | 409 | Creating an analytics database on a deployment without the event store. The message names the step that enables it. |
+| `analytics_unavailable` | 503 | The event store is unreachable or refused the call. Retry after `Retry-After`. |
+| `analytics_database_limit` | 409 | The deployment already holds its limit of analytics databases (50 unless the operator changed it). |
+| `timezone_invalid` | 400 | A missing reporting timezone, an offset, or a zone the API's or the event store's timezone data does not list. |
+| `confirmation_mismatch` | 400 | A destructive action, or a storage change that lowers a limit, whose echoed name or ID does not match. |
+| `analytics_busy`, `query_limit_exceeded` | 503 | No analytics query slot within ten seconds, or a query over its time or memory limit. |
+| `invalid_query` | 400 | An analytics query definition outside the contract; `details` carries the path. |
+| `event_not_found`, `funnel_not_found`, `cohort_not_found`, `profile_not_found` | 404 | No such event name, funnel, cohort or profile in this analytics database. |
+| `standard_cohort_immutable`, `standard_event_undeletable` | 409 | The Retention cohort cannot be edited or deleted; a standard event cannot be deleted or blocked. |
+| `storage_setting_out_of_bounds` | 400 | A storage setting outside the deployment's bounds, which the message names. |
+| `batch_too_large`, `too_many_events` | 413, 400 | An analytics batch over 256 KiB, or of more than 100 events. |
+| `malformed_json` | 400 | The body is not JSON, or an analytics batch is not `{sentAt, events}`. |
 
 ## Limits
 
@@ -1163,7 +2482,8 @@ Security rate limits also apply, and no user of the platform can configure them:
 submission-intent creation, uploads and finalization are all throttled. The public hosted
 form routes carry their own limits, applied per requesting address and per slug. A
 throttled request returns `429 rate_limit_exceeded`. The deployment operator may move the
-limits of the collection routes, and the crash retention bounds, within hard limits (see
+limits of the collection routes, the crash retention bounds and the analytics limits and
+storage settings, within hard limits (see
 "Operator limits" in [DEPLOYMENT.md](DEPLOYMENT.md)).
 
 ## MCP over HTTP
@@ -1220,4 +2540,24 @@ cross-origin request are all refused.
 | Create, rename a crash database | No | Yes | Creator or Admin |
 | Delete a crash database | No | Yes | Admin |
 | Edit or delete one crash report | No | No | Not supported |
+| List and read analytics databases | No | Yes | Viewer or above |
+| Create, rename an analytics database | No | Yes | Creator or Admin |
+| Switch an analytics database's country derivation | No | Yes | Database or project Admin |
+| Read an analytics database's deletion impact, delete it | No | Yes | Admin |
+| Ingest analytics events | Yes | Yes | Not applicable |
+| Send an analytics test event | No | Yes | Creator or Admin |
+| Read the analytics live feed | No | Yes | Viewer or above |
+| Read the Overview, the event catalog, an event's detail, filter values | No | Yes | Viewer or above |
+| Run or export a trend, funnel or cohort | No | Yes | Viewer or above |
+| List and read funnels and cohorts | No | Yes | Viewer or above |
+| Create, edit, delete a funnel or cohort | No | Yes | Creator or Admin |
+| Edit or delete the standard Retention cohort | No | No | Not supported |
+| Describe or hide an event or param (the Lexicon) | No | Yes | Creator or Admin |
+| Block, unblock, or delete an event name with its data | No | Yes | Database or project Admin |
+| Find, read, list the events of, export a profile | No | Yes | Viewer or above |
+| Read or change analytics storage settings | No | Yes | Database or project Admin |
+| Read analytics data health | No | Yes | Viewer or above |
+| Export analytics events | No | Yes | Viewer or above |
+| Edit or delete one analytics event | No | No | Not supported |
+| Preview and erase an installation or user ID across a project | No | Yes | Project Admin, or the Admin of each database included |
 | Connect an MCP client to `/v1/mcp` | No | Yes | No |

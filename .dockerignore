@@ -10,3 +10,5 @@ playwright-report
 test-results
 docs/openapi.json
 *.log
+# The IP-to-country database is fetched and checked against its pin inside the build, never copied in
+apps/api/ip-country

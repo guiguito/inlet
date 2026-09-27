@@ -1,6 +1,7 @@
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import {
   LIMITS,
+  NestingTooDeepError,
   sanitizeDeep,
   sanitizeText,
   newId,
@@ -145,8 +146,7 @@ export async function finalizeIntent(
   const { database, intent, formVersion, observedIp, identity } = input;
   // FR-062B: PostgreSQL refuses U+0000 and lone surrogates in jsonb; cleaned before the
   // hash, so a retry of the same payload still compares equal.
-  const answers = sanitizeDeep(input.answers);
-  const clientContext = sanitizeDeep(input.clientContext);
+  const { answers, clientContext } = sanitizePayload(input.answers, input.clientContext);
 
   // The comparison key for the retry contract. Canonical JSON, so key order in the
   // request body is irrelevant but any changed value is a different payload.
@@ -310,6 +310,23 @@ async function replayFinalized(
     createdAt: original.createdAt,
     formVersion: original.formVersion,
   };
+}
+
+/**
+ * FR-062B through `sanitizeDeep`, which refuses a value nested past `JSON_NESTING_MAX`
+ * rather than overflow the stack: the arbitrary `clientContext` is the one part of the
+ * body the schema leaves unwalked, so it is refused as `validation_failed` at its path
+ * (release 8 hardening; a 500 for a condition of the data before).
+ */
+function sanitizePayload(answers: AnswersInput, clientContext: unknown): { answers: AnswersInput; clientContext: unknown } {
+  try {
+    return { answers: sanitizeDeep(answers), clientContext: sanitizeDeep(clientContext) };
+  } catch (error) {
+    if (!(error instanceof NestingTooDeepError)) throw error;
+    throw apiError('validation_failed', 'clientContext is nested too deeply.', [
+      { path: error.path ? `clientContext.${error.path}` : 'clientContext', code: 'too_deep', message: error.message },
+    ]);
+  }
 }
 
 /** FR-062A: the clientContext ceiling, measured on the serialized UTF-8 form. */

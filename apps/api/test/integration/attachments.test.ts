@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { LIMITS, type FormDefinition } from '@inlet/shared';
 import { attachments } from '../../src/db/schema.js';
 import { BOUND_TAG_VALUE, PENDING_TAG } from '../../src/lib/storage.js';
+import { TEST_BUCKET } from '../setup/config.js';
 import { createHarness, ids, referenceDefinition, type Harness } from '../setup/harness.js';
 import {
   createIntent,
@@ -639,7 +640,7 @@ describe('screenshot attachments', () => {
       credentials: { accessKeyId: 'inletdev', secretAccessKey: 'inletdevsecret' },
     });
     try {
-      const { Rules } = await client.send(new GetBucketLifecycleConfigurationCommand({ Bucket: 'inlet-test' }));
+      const { Rules } = await client.send(new GetBucketLifecycleConfigurationCommand({ Bucket: TEST_BUCKET }));
       const rule = Rules?.find((candidate) => candidate.Filter?.Tag?.Key === PENDING_TAG.key);
       expect(rule).toMatchObject({
         Status: 'Enabled',
@@ -661,7 +662,7 @@ describe('screenshot attachments', () => {
     });
     try {
       const result = await client.send(
-        new GetObjectTaggingCommand({ Bucket: 'inlet-test', Key: key }),
+        new GetObjectTaggingCommand({ Bucket: TEST_BUCKET, Key: key }),
       );
       return result.TagSet?.find((tag) => tag.Key === PENDING_TAG.key)?.Value;
     } finally {
