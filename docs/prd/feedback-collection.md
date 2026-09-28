@@ -1,17 +1,15 @@
 # Inlet — Feedback Collection PRD
 
 ## Document Status
-**Status:** Shipped through Release 5, and Release 7 — SDK; requirements baseline for maintenance. Release 8 adds the shared SDK identity on submissions and a React Native adapter (FR-204 amended, FR-211 added): built on September 24, 2026 and published to npm as `inlet-sdk` 0.2.0; the installation ID is attached while an analytics client is enabled, shipped with the analytics module in `inlet-sdk` 0.3.0 (Release 8, September 27, 2026). Technical choices: `docs/DECISIONS.md` section 29.
+**Status:** Shipped: forms and their versions, intents, submissions, screenshots, hosted forms, reviewing responses, and `inlet-sdk/feedback` with browser, Node, Electron, React and React Native entries. Technical choices: `docs/DECISIONS.md`.
 **Product:** Inlet — Feedback Collection capability
 **Language:** English
 **Foundations:** Every shared rule (accounts, roles, keys, notifications plumbing, export, deletion, deployment, brand, SDK and MCP conventions) is on the Foundations PRD and is not repeated here.
 **Notion page:** https://app.notion.com/p/3ddd33dfffca81c98977df8dac6975b0
 **Repository mirror:** `docs/prd/feedback-collection.md`
-**Last revised:** September 27, 2026 (Release 8 build: FR-062A amended, a `clientContext`'s nesting is bounded). Earlier, on September 24, 2026 (Release 8: FR-211 added; FR-062, FR-062B, FR-066, FR-111, FR-190, FR-191, FR-198, FR-201, FR-204 and sections 9.2, 10.10, 25.5, 25.6 and 25.7 amended for the shared SDK identity and React Native)
+**Last revised:** September 28, 2026
 
-> **Provenance.** This page absorbs sections 7.1–7.3, 8.4, 8.5, 8.6, 8.9, 8.10, 9.1–9.4, 10.5, 10.7–10.11, 10.13, 12.4, 13, 15, 21, 22 and 24 of the unified PRD, plus the feedback-specific lines of sections 3, 4, 6, 9.6, 11, 12.2, 12.3, 14, 16 and 17. Section 23 (notifications) moved to Foundations as a shared mechanism; what a response notification contains is still defined there (FR-159 to FR-161, FR-171).
-
-> Section numbers are preserved from the unified PRD (sections 1–24) so that cross-references in the text, in `docs/DECISIONS.md`, and in the code (`FR-xxx`) stay valid. A gap in the numbering means that section lives on the other page. New sections added after the 2026-09-16 split are numbered from 25 onward; section 25 is the SDK module, added September 18, 2026.
+> Section numbers are shared with the Foundations PRD, so that cross-references in the text, in `docs/DECISIONS.md`, and in the code (`FR-xxx`) stay valid. A gap in the numbering means that section lives on the Foundations page; section 25 is the SDK module.
 
 ## 1. Summary
 Feedback Collection is Inlet's first capability. A platform user designs a reusable, multi-page form once and collects responses two ways: from their own application through the client API, or from a shared link through a hosted form the platform serves. Responses are stored immutably against the exact form version the respondent saw, read in a list built around the response itself, exported as JSON or CSV, announced in Slack, and operated through MCP.
@@ -406,7 +404,7 @@ No quantitative launch targets are required for the MVP. Success means the proje
 - Email questions have no platform-provided disclosure by default; Creators may add ordinary text around them.
 - Screenshot assets use stable authenticated URLs.
 - Email verification and password reset are outside the MVP.
-**Decisions made in the September 8, 2026 revision**
+**Decisions on intents, uploads and drafts**
 - Attachments belong to an intent and question until finalization binds them to a submission; unreferenced uploads expire through an object-storage lifecycle rule.
 - Submission intents are pinned to one published version; publishing, rollback, and unpublishing do not affect issued intents.
 - The retry contract in section 9.2 is the required behavior, including conflict on different payloads and non-consumption on validation failure.
@@ -457,7 +455,7 @@ Section 14 criteria that mention invitations, Creator or Viewer roles, feedback-
 Each of these is a Release 2 addition, not a redesign. The data model and authorization code in Release 1 are built so that Release 2 adds rows and rules rather than changing tables.
 
 ## 22. Hosted Forms
-> Added September 9, 2026. Releases 1 and 2 collect feedback only through the API, which needs a developer and a client application. A hosted form removes that requirement: the platform serves the form itself, and the platform user shares a link.
+> The client API needs a developer and a client application. A hosted form removes that requirement: the platform serves the form itself, and the platform user shares a link.
 > This section is the requirements baseline for Release 3. Endpoint naming and low-level parameters remain subject to the technical specification.
 
 ### 22.1 Rationale
@@ -555,7 +553,7 @@ Hosted forms in full: FR-130 to FR-154, data model 10.14, the matrix additions i
 Not in Release 3: custom domains, a template gallery, conditional logic, partial-response saving, and scheduled or expiring links. Each is a separate decision, and none is required to share a link.
 
 ## 24. Reviewing Responses
-> Added September 9, 2026. This section covers the screen an operator spends the most time on, and it is the first section written after looking at the built product rather than before. It supersedes nothing; it adds requirements the earlier sections left implicit by describing the list only as "compact tables".
+> This section covers the screen an operator spends the most time on. It adds requirements the earlier sections left implicit by describing the list only as "compact tables".
 
 ### 24.1 Rationale
 Sections 8.6 and 20.5 asked for a compact table of submissions, and that is what was built: received time, a one-line preview, the version number, and a screenshot count. It is correct and it is the wrong shape for the job.
@@ -629,7 +627,7 @@ Includes the response row, the read marker and its explicit mark-read operation,
 Beyond Release 5: full-text search across responses, saved filters, assigning a response to a teammate, and any notion of a response being handled rather than merely seen.
 
 ## 25. SDK — `inlet-sdk/feedback`
-> Added September 18, 2026, and shipped the same day as Release 7. Releases 1 to 5 collect feedback through the client API and the hosted form. Release 6 shipped `inlet-sdk`, with one module, `inlet-sdk/crash`, and the Crash Reports PRD left the feedback module to a later release. This section specifies it. Two points were settled in implementation and are recorded in section 25 of `docs/DECISIONS.md`: a `5xx` is not treated as the server having answered a pending finalization, since the intent is still active and the submission never happened; and `createSession({ formVersion })` refuses a version that is not the active one, because the form route serves the active definition only, and rendering one version while finalizing another is the first mistake 25.1 names.
+> The feedback module of `inlet-sdk`, beside `inlet-sdk/crash`. Two points were settled in implementation and are recorded in section 25 of `docs/DECISIONS.md`: a `5xx` is not treated as the server having answered a pending finalization, since the intent is still active and the submission never happened; and `createSession({ formVersion })` refuses a version that is not the active one, because the form route serves the active definition only, and rendering one version while finalizing another is the first mistake 25.1 names.
 
 ### 25.1 Rationale
 The client API is four calls, and the calls are not the hard part. What an integrator gets wrong, once each, is everything around them: rendering against one version and finalizing against another; the answer shape per question type; an intent that expires while the respondent is still typing; uploading a screenshot and then forgetting to reference it, or referencing one uploaded under a different intent; validating a required question differently from the server and learning the difference from a `400`; retrying a submission after a dropped connection and creating either a conflict or a duplicate; and, in Electron, shipping the key to a renderer. Each of these is a paragraph in `docs/API.md` and a bug in a client.
@@ -715,4 +713,4 @@ One platform change is required, on the Foundations PRD:
 - Server: the cross-origin hook widened to the four feedback routes and the intent-token header, with the test that pins the closed set updated to match; the answer validation rules moved into `@inlet/shared` so the SDK can bundle them (FR-195); the Integrate panel of a feedback database gains an SDK snippet beside the existing API snippet, and keeps both.
 - Package: `inlet-sdk` with the `./feedback` entries; the README gains a Feedback section of the same shape as the Crash one: install, browser, Node, Electron, a React binding and a second binding, what gets sent, delivery, options.
 - Not in Release 7: a rendered widget or component library, partial-response saving, respondent identity, a script-tag build, and official Vue or Svelte bindings. Each is a separate decision, and none is needed to integrate a form.
-- Release 8, with UX Analytics: FR-211 added; FR-062, FR-062B, FR-066, FR-111, FR-190, FR-191, FR-198, FR-201, FR-204 and sections 9.2, 10.10, 25.5 and 25.6 amended. From `inlet-sdk` 0.2.0 a submission carries a session ID, which `identity: false` removes, and a React Native application collects feedback with the same controller.
+- Release 8, with UX Analytics: the shared SDK identity on submissions (FR-204) and the React Native adapter (FR-211).

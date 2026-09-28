@@ -1,14 +1,14 @@
 # Inlet — Crash Reports PRD
 
 ## Document Status
-**Status:** Implemented as Release 6 on September 17, 2026: server, interface, MCP tools and `inlet-sdk/crash` with Node, browser and Electron adapters, published to npm as `inlet-sdk` (the `@inlet` scope belongs to an unrelated party). Technical choices and rejected alternatives: `docs/DECISIONS.md` section 24. `inlet-sdk/feedback`, which section 15 allowed to slip, is specified in Feedback Collection PRD section 25 as Release 7 — SDK. Release 8 adds the shared SDK identity and a React Native adapter (CR-118 to CR-120): built on September 24, 2026 and published to npm as `inlet-sdk` 0.2.0, except what takes effect only while an analytics client is enabled — the installation ID, the crash flags and the session and installation IDs the sentinel records — which shipped with the analytics module in `inlet-sdk` 0.3.0 (Release 8, September 27, 2026); erasure by installation or user ID (CR-047) ships in Release 8 as the project's erasure, which needs no analytics module (Foundations FD-033). Technical choices: `docs/DECISIONS.md` section 29.
+**Status:** Shipped: crash databases, ingest, grouping, regressions, notifications, the MCP tools, and `inlet-sdk/crash` with Node, browser, Electron and React Native adapters and the shared SDK identity. Technical choices and rejected alternatives: `docs/DECISIONS.md` sections 24 and 29.
 **Product:** Inlet — Crash Reports capability
 **Language:** English
 **Foundations:** Accounts, roles, keys, notifications plumbing, export, deletion, deployment, brand, SDK packaging and MCP conventions are on the Foundations PRD and are not repeated here.
 **Sources:** the HappyVibe "Crashreporting?" proposal (revised September 16, 2026), the competitor research in Appendix A, and the Inlet codebase as of Release 5.
 **Notion page:** https://app.notion.com/p/3ddd33dfffca81129df2c8a1e4af25cb
 **Repository mirror:** `docs/prd/crash-reports.md`
-**Last revised:** September 27, 2026 (Release 8 build: CR-011 and CR-119 amended: an envelope's nesting is bounded, and a report dropped for its size flags its session). Earlier, on September 26, 2026 (erasure by installation or user ID moved to the project, Foundations FD-033: CR-047, section 7.3 and the status line amended). Previously September 24, 2026 (Release 8: CR-118 to CR-120 added; CR-002, CR-011, CR-015, CR-016, CR-040, CR-047, CR-051, CR-090, CR-091, CR-092, CR-097, CR-100, CR-101, CR-109, CR-111, CR-115 and sections 3.2, 7.2, 7.3, 8.1, 8.3, 9.1, 9.2, 10, 12 and 15 amended for the shared SDK identity and React Native)
+**Last revised:** September 28, 2026
 
 > **Positioning in one line.** Collect, group, notify, hand off. Inlet tells you that your application broke, how often, on which versions and systems, and for how many users, then hands the developer a content-free report and gets out of the way. It is not Sentry: it never receives a minidump, never symbolicates, never traces, never replays, and never stores a line of your users' content.
 
@@ -34,7 +34,7 @@ The first consumer, the HappyVibe desktop application, measured the gap directly
 - Ship `inlet-sdk/crash` with adapters for Node, browsers and Electron, integrated into HappyVibe first.
 
 ### 3.2 Non-Goals for Release 6
-- Sentry-protocol compatibility. Decided with the product owner on September 16, 2026; research favours it, so it is recorded as **revisit after Release 6**, not never.
+- Sentry-protocol compatibility. Research favours it, so it is a question to revisit, not a refusal.
 - Minidump or native dump ingestion, symbol servers, and server-side symbolication. A native crash arrives as a parsed summary from the SDK or the integrator.
 - Source maps and debug-ID symbolication (candidate for a later Crash release, design note in section 14).
 - Breadcrumbs (candidate for a later Crash release, opt-in, bounded).
@@ -336,11 +336,11 @@ Indexes: unique `(database_id, fingerprint)` on groups; `(database_id, state, la
 - **Storage growth:** a popular app at its cap on many databases. Mitigation: per-database caps with platform bounds, a 12 KB budget per report, the object-storage and partitioning upgrade paths.
 - **Regression false positives:** version strings that are not monotonic (hotfix branches) reorder releases. Mitigation: first-seen ordering is documented; a resolved-in release is optional; a later Crash release may add manual release ordering.
 - **SDK trust boundary:** the SDK runs in the integrator's process and can be misconfigured. Mitigation: the server enforces every bound independently; the SDK refuses secret keys; the schema is shared so drift is a build error.
-- **Sentry-compatibility demand:** users with existing Sentry SDKs cannot switch. Mitigation: recorded as a revisit after Release 6; the envelope was designed so a mapping from Sentry events is mechanical.
+- **Sentry-compatibility demand:** users with existing Sentry SDKs cannot switch. Mitigation: recorded as a question to revisit; the envelope was designed so a mapping from Sentry events is mechanical.
 
 ## 14. Decisions
-**Confirmed with the product owner, September 16, 2026**
-- Inlet-native envelope and SDK only; no Sentry-protocol ingest in Release 6.
+**Confirmed with the product owner**
+- Inlet-native envelope and SDK only; no Sentry-protocol ingest.
 - One SDK package, `inlet-sdk`, with a crash module and node, browser and electron adapters.
 - Optional integrator-supplied user ID, stored as an opaque string, filterable and counted.
 - Full MCP parity with the interface.
@@ -357,14 +357,14 @@ Indexes: unique `(database_id, fingerprint)` on groups; `(database_id, state, la
 - Breadcrumbs, symbolication and merge deferred to a later Crash release.
 - No environment label. An environment is a project (Foundations section 17): a label on each report gave teams a second way to keep staging apart, and a default that hid what it did not name.
 
-**Decided September 21, 2026, from the first external integration review of inlet-sdk 0.1.0**
+**From the first external integration review of the SDK**
 - *Redaction emits the marker alone.* Keeping a message's first token meant `alice@corp.com is not a valid address` shipped the address behind a marker that read as redacted, and `/Users/alice/secret.docx could not be opened` shipped the path. Whether a message was protected depended on its word order, which is luck rather than a rule. The escape hatch already existed, so the gap was a default that did not deliver what its marker claimed; privacy by default stays, the mechanism is fixed, and the opt-out becomes a named export rather than a lambda documented only in a source comment. Accepted consequence: unmatched messages no longer differ by leading token, so grouping coarsens slightly. It is bounded — CR-021 normalization already replaces emails, paths, URLs and quoted strings before hashing, and in-app frames still separate distinct sites — and a team wanting finer grouping should add its own safe shapes, which is a per-shape decision rather than a blanket one.
 - *Electron main does not inherit Node's exit.* Exiting is right for a CLI and wrong for a desktop application, where it takes every renderer and child process down with it.
 - *Bounds are re-checked after the hooks.* Checking only before them let a hook breach the cap, and the server's 413 is an answer, so the report was dropped rather than retried.
 - *The IPC channel is sanitised at the boundary, not in the envelope builder.* Main-process callers legitimately set the release and user; a renderer does not. Fixing it in `completeEnvelope` would have taken the capability away from both.
 - *Minidump reading is deferred to a later Crash release.* The `native` kind exists and nothing produces it, so an Electron adopter writes the same hundred lines. It needs no symbols, no server work and no binary upload, but it is a binary-format parser, nobody is blocked on it, and it is purely additive.
 
-**Decided September 22, 2026, from the second external integration review**
+**From the second external integration review**
 - *A normal window close is not a crash.* Electron defines `clean-exit` as a zero exit code, and the adapter reported it unconditionally, so every integrator filed a crash every time a user closed a window until they wrote the same filter. The filter belongs in the SDK.
 - *A killed renderer and a killed child mean opposite things.* The operating system takes a renderer away under memory pressure, which is the crash most worth having; an application kills its own sidecar deliberately. One reason string, two defaults.
 - *The renderer's application root is derived per protocol.* Under `file:`, which is every packaged application, the document origin is a value that matches no frame, so every frame in production came back external while development looked correct.
@@ -373,7 +373,7 @@ Indexes: unique `(database_id, fingerprint)` on groups; `(database_id, state, la
 - *Every unclean exit shares one group, deliberately.* The report carries a constant reason, so the fingerprint is constant. They are one event class; a run whose sentinel could not be read is a different one and gets its own reason.
 - *The redaction default stays, and gains an alternative.* Measured over a realistic sample, the default keeps the messages a runtime generates and redacts every message an application writes about itself — the diagnostic half, which usually carries no user data. That is the wrong trade for application code, but changing what a crash reporter reports is worse than an awkward default, and this one has already moved once. The pattern-based policy is offered by name and the documentation now warns first.
 
-**Decided September 22, 2026, after the 0.1.3 follow-up review**
+**From the review of the Electron fixes**
 - *One root derivation, not a default per entry.* CR-115 named the Electron renderer entry, so the fix matched its scope and left the React helper, the browser entry and the bare-entry client each with their own broken default. A requirement that names one call site cannot catch a defect living in four; the requirement was as narrow as the code.
 - *The damage was grouping, not labelling.* The fingerprint uses in-app frames only, so an entry with no roots contributes no frame parts at all and every report sharing a message merged into one group regardless of where it threw. Fixing the roots separates them, which moves existing groups — accepted, because the alternative is leaving the grouping broken.
 - *The pattern redaction policy is a denylist and says so.* It was offered as an answer for application code without stating what it cannot do, and an integrator whose product promises content-free reports by construction correctly declined it. The policy is unchanged; the claim around it is corrected.
@@ -392,19 +392,9 @@ Indexes: unique `(database_id, fingerprint)` on groups; `(database_id, state, la
 - *Minidump reading:* an `inlet-sdk/crash/minidump` export that returns the fault type, the faulting module and the process type from a dump buffer, which the application turns into a `native` report on the next launch. No symbols, no server work, no binary upload.
 
 ## 15. Release Plan
-**Release 6 — Crash Reports.** Goal: HappyVibe reports every failure class to its own Inlet, the developer triages from Slack, the interface or an agent, and a second application can integrate with the SDK in an afternoon.
-- Foundations changes: FD-001 to FD-009 (typed databases, third scope, delivery kind, retention setting), FD-010 to FD-014 (SDK packaging), FD-020 to FD-031 (MCP and rate-limit conventions made explicit).
-- Crash: CR-001 to CR-004, CR-010 to CR-017, CR-020 to CR-030, CR-040 to CR-049, CR-050 to CR-053, CR-060 and CR-061, CR-070 and CR-071, CR-080 to CR-082, CR-090 to CR-103.
-- SDK: `inlet-sdk/crash` with node, browser and electron adapters. The feedback module of `inlet-sdk` did not ship in this release; it is specified in Feedback Collection PRD section 25 as Release 7 — SDK.
-- HappyVibe integration: Appendix B.
+**Release 6 — Crash Reports** shipped crash databases, ingest, grouping, regressions, notifications, the MCP tools and `inlet-sdk/crash` with Node, browser and Electron adapters (CR-001 to CR-117), with the Foundations requirements it needed (FD-001 to FD-014, FD-020 to FD-031). HappyVibe integration: Appendix B.
 
-**inlet-sdk 0.1.2 — crash SDK integration feedback.** Not a numbered Inlet release; the server is untouched. From the first external integration review of 0.1.0. CR-090, CR-094, CR-096 and CR-100 amended; CR-104 to CR-113 added. Four behaviours change for an application already on 0.1.0: Electron main no longer exits by default, the default redaction no longer emits a message's leading token, an envelope a hook grew past the cap is now dropped rather than refused by the server, and the IPC channel ignores renderer-supplied envelope fields it used to pass through.
-
-**inlet-sdk 0.1.3 — the Electron gaps.** Not a numbered Inlet release; the server is untouched. From the second external integration review. CR-092, CR-100, CR-113 and the section 8.1 table amended; CR-114 to CR-117 added. One behaviour change for an application already on 0.1.2: exits that are not crashes are no longer reported, so an upgraded application sees fewer reports, not more.
-
-**inlet-sdk 0.1.4 — one root derivation.** Not a numbered Inlet release; the server is untouched. CR-115 widened from one entry to every browser-side entry and CR-117 qualified. Reports from an upgraded application fingerprint differently where roots were previously empty, so groups that had merged on message alone separate by throw site; existing groups keep their reports and nothing merges them.
-
-**Release 8 — shared identity and React Native.** Specified with the UX Analytics PRD, not yet built. CR-118 to CR-120 added; CR-002, CR-011, CR-015, CR-016, CR-040, CR-047, CR-051, CR-090, CR-091, CR-092, CR-097, CR-100, CR-101, CR-109, CR-111 and CR-115 amended. An application already on 0.1.5 sees one change: its reports carry a session ID, which `identity: false` removes.
+**Release 8 — UX Analytics** shipped the shared SDK identity and the React Native adapter (CR-118 to CR-120).
 
 **A later Crash release.** Manual merge, opt-in breadcrumbs, debug-ID symbolication, minidump reading, tag indexing and filtering, object-storage envelope offload, streaming NDJSON export, manual release ordering, and the Sentry-compatibility decision.
 
