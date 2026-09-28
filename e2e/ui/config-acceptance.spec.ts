@@ -316,6 +316,8 @@ test('journey 5.1: a Creator creates and publishes, the Integrate tab’s Node s
   }
   await expect(page.getByTestId('config-defaults-ts')).toContainText('new_checkout: false');
   const copy = async (label: string) => {
+    // The previous button reads "Copied" for 1.5 seconds; wait it out so this check sees one button.
+    await expect(page.getByRole('button', { name: 'Copied' })).toHaveCount(0);
     await page.getByRole('button', { name: `Copy ${label}` }).click();
     await expect(page.getByRole('button', { name: 'Copied' })).toBeVisible();
     return page.evaluate(() => navigator.clipboard.readText());
