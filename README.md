@@ -22,6 +22,7 @@ over MCP.
 [![npm: inlet-sdk](https://img.shields.io/npm/v/inlet-sdk?label=inlet-sdk&color=C2410C)](https://www.npmjs.com/package/inlet-sdk)
 [![CI](https://github.com/guiguito/inlet/actions/workflows/ci.yml/badge.svg)](https://github.com/guiguito/inlet/actions/workflows/ci.yml)
 [![Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fguiguito%2Finlet%2Fbadges%2Fcoverage.json)](https://github.com/guiguito/inlet/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fguiguito%2Finlet%2Fbadges%2Ftests.json)](https://github.com/guiguito/inlet/actions/workflows/ci.yml)
 ![Node 22+](https://img.shields.io/badge/node-%3E%3D22-informational)
 
 <br>
