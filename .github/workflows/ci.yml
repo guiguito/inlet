@@ -52,7 +52,15 @@ jobs:
 
       - run: npm run typecheck
 
-      - run: npm test
+      # `npm test` with line coverage over each workspace's src/ (scripts/coverage.mjs).
+      - run: npm run test:coverage
+
+      - name: Keep the coverage badge
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-badge
+          path: coverage/badge.json
+          retention-days: 7
 
       - name: Install Chromium for Playwright
         run: npx playwright install --with-deps chromium
@@ -66,6 +74,41 @@ jobs:
           name: playwright-results
           path: test-results/
           retention-days: 7
+
+  # The README's coverage badge reads coverage.json on the `badges` branch through shields.io.
+  # Its own job, so that the one holding a write token runs no code from the change.
+  badge:
+    name: Publish the coverage badge
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: coverage-badge
+      - name: Commit coverage.json to the badges branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          remote="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          dir="$(mktemp -d)"
+          if git ls-remote --exit-code --heads "$remote" badges > /dev/null; then
+            git clone --quiet --depth 1 --branch badges "$remote" "$dir"
+          else
+            git init --quiet -b badges "$dir"
+            git -C "$dir" remote add origin "$remote"
+          fi
+          cp badge.json "$dir/coverage.json"
+          cd "$dir"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add coverage.json
+          if git diff --cached --quiet; then echo 'Coverage unchanged.'; exit 0; fi
+          git commit --quiet -m "Coverage for ${GITHUB_SHA}"
+          git push --quiet origin badges
 
   metro:
     name: inlet-sdk bundles with Metro on React Native 0.74

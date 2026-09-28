@@ -67,6 +67,9 @@ npm run test:all
 ```
 
 Both pass before a pull request is ready. `test:all` starts the local services it needs.
+`npm run test:coverage` runs the same suites as `npm test` and measures line coverage over each
+workspace's `src/`; CI runs it in place of `npm test` and publishes the figure behind the
+README's badge. It is reported, not enforced.
 GitHub Actions runs the same checks on every push and pull request
 (`.github/workflows/ci.yml`), plus `npm run test:metro -w inlet-sdk`, which bundles the SDK's
 React Native entries with Metro on React Native 0.74; run that one locally when you touch an
