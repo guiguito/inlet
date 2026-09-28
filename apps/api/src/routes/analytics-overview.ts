@@ -117,7 +117,7 @@ export function analyticsOverviewRoutes(ctx: AppContext): FastifyPluginAsyncZod 
         const range = analyticsRangeSchema.safeParse(raw);
         if (!range.success) throw invalidQuery(range.error.issues, ['range']);
         requireEventStore(ctx.eventStore);
-        return runOverview(ctx, database, principal, { range: range.data, apps, platforms, environments, unit }, Date.now(), clientGoneSignal(reply));
+        return runOverview(ctx, database, principal, { range: range.data, apps, platforms, environments, unit }, ctx.now(), clientGoneSignal(reply));
       },
     );
   };

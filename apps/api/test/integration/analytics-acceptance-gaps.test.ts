@@ -171,7 +171,11 @@ describe('Release 8 acceptance: what the piece tests left', () => {
   it('leaves every figure unchanged when a batch is sent again, and again after a restart (PRD 12, AN-013)', async () => {
     const p = await project(h);
     const id = await p.analytics();
-    const now = Date.now();
+    // The six events span 12 minutes and are read back by their day: if midnight falls between
+    // them, move them all into the day before, so that one day's figures hold every one of them.
+    const clock = Date.now();
+    const now = todayIn('UTC', clock - 30 * 60_000) === todayIn('UTC', clock - 18 * 60_000) ? clock : clock - 40 * 60_000;
+    const day = todayIn('UTC', now - 30 * 60_000);
     const at = (minutesAgo: number) => new Date(now - minutesAgo * 60_000).toISOString();
     const s1 = randomUUID();
     const s2 = randomUUID();
@@ -194,7 +198,7 @@ describe('Release 8 acceptance: what the piece tests left', () => {
       };
       return {
         overview: await ok('GET', `${base}/overview`),
-        trend: await ok('POST', `${base}/queries/trends`, { range: { preset: 'today' }, series: ['events', 'installations', 'users'].map((metric) => ({ event: 'checkout_completed', metric })) }),
+        trend: await ok('POST', `${base}/queries/trends`, { range: { from: day, to: day }, series: ['events', 'installations', 'users'].map((metric) => ({ event: 'checkout_completed', metric })) }),
         installation: await ok('GET', `${base}/profiles/installations/${I1}`),
         user: await ok('GET', `${base}/profiles/users/${USER}`),
         events: await ok('GET', `${base}/profiles/users/${USER}/events`),

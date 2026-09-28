@@ -104,6 +104,8 @@ describe('cohorts', () => {
     await h.close();
   });
   beforeEach(async () => {
+    // The routes answer as of Appendix B's "now" too, as `run` does for the services.
+    h.ctx.now = () => NOW;
     await h.reset();
     db = await setup(h);
   });

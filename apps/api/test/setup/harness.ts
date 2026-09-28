@@ -102,7 +102,7 @@ export async function createHarness(
   // (DECISIONS 31.3.3) would refuse every test's first batch; its own test sets it back.
   analyticsIngestTimings.warmupMs = 0;
   const eventStore = createEventStore(env, log);
-  const ctx: AppContext = { env, db: handle.db, eventStore, storage, scanner, log };
+  const ctx: AppContext = { env, db: handle.db, eventStore, storage, scanner, log, now: Date.now };
 
   // The global setup has migrated the test database, so a reachable store is ready at once.
   // One that is not keeps retrying in the background, as the server's does.

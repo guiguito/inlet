@@ -39,7 +39,7 @@ const { db, pool } = createDb(env.INLET_DATABASE_URL);
 const storage = new Storage(env);
 const scanner = new MalwareScanner(env);
 const eventStore = createEventStore(env, log);
-const ctx: AppContext = { env, db, eventStore, storage, scanner, log };
+const ctx: AppContext = { env, db, eventStore, storage, scanner, log, now: Date.now };
 
 if (env.INLET_MIGRATE_ON_START) {
   await runMigrations(db);

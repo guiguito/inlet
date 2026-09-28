@@ -213,7 +213,7 @@ export function analyticsCohortRoutes(ctx: AppContext): FastifyPluginAsyncZod {
         const { database } = await requireAnalyticsDatabase(ctx.db, principal, request.params.databaseId, 'viewer');
         const run = parsed(analyticsCohortRunSchema, request.body, request.validationError);
         requireEventStore(ctx.eventStore);
-        const answer = await runCohort(ctx, database, principal, run, Date.now(), clientGoneSignal(reply));
+        const answer = await runCohort(ctx, database, principal, run, ctx.now(), clientGoneSignal(reply));
         const format = request.query.format;
         if (format === undefined) return answer;
         const base = `inlet-${database.id}-cohort-${new Date().toISOString().slice(0, 10)}`;
