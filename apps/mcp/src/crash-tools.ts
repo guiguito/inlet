@@ -26,7 +26,6 @@ const filters = {
   release: z.string().max(64).optional().describe('A release version string exactly as the application reports it.'),
   os: z.string().max(32).optional().describe('An operating system name as reported, like macOS or Windows.'),
   arch: z.string().max(16).optional(),
-  environment: z.string().max(32).optional().describe('production by default; whatever the application sent.'),
   userId: z.string().max(128).optional().describe('An integrator-supplied opaque user ID.'),
   installationId: z.string().max(36).optional().describe('An inlet-sdk installation ID (a UUID), as a report carries it (CR-118).'),
   sessionId: z.string().max(36).optional().describe('An inlet-sdk session ID (a UUID), as a report carries it (CR-118).'),
@@ -127,8 +126,8 @@ export function registerCrashTools(server: McpServer, client: InletClient): void
     {
       title: 'Read a crash group',
       description:
-        'Aggregates, state, breakdowns by release and operating system, and its daily timeline with release markers (CR-041, CR-049). The release, os and environment filters narrow the breakdowns and the timeline.',
-      inputSchema: { crashDatabaseId, groupId, days: z.number().int().min(1).max(90).default(30), release: filters.release, os: filters.os, environment: filters.environment },
+        'Aggregates, state, breakdowns by release and operating system, and its daily timeline with release markers (CR-041, CR-049). The release and os filters narrow the breakdowns and the timeline.',
+      inputSchema: { crashDatabaseId, groupId, days: z.number().int().min(1).max(90).default(30), release: filters.release, os: filters.os },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async ({ crashDatabaseId: id, groupId: group, ...rest }) =>
@@ -145,7 +144,6 @@ export function registerCrashTools(server: McpServer, client: InletClient): void
         groupId,
         release: filters.release,
         os: filters.os,
-        environment: filters.environment,
         userId: filters.userId,
         installationId: filters.installationId,
         sessionId: filters.sessionId,
@@ -162,7 +160,7 @@ export function registerCrashTools(server: McpServer, client: InletClient): void
     {
       title: 'Read one crash report',
       description:
-        'The report with its envelope, release, OS and environment, and the SDK identity it carried (CR-118): `userId`, `installationId` and `sessionId` (the two IDs as UUIDs, lowercase and dashed), null when absent. Pass the installation ID to get_analytics_profile to see that installation’s usage, or to list_crash_groups as `installationId` (or the session ID as `sessionId`) for its other crashes.',
+        'The report with its envelope, release and OS, and the SDK identity it carried (CR-118): `userId`, `installationId` and `sessionId` (the two IDs as UUIDs, lowercase and dashed), null when absent. Pass the installation ID to get_analytics_profile to see that installation’s usage, or to list_crash_groups as `installationId` (or the session ID as `sessionId`) for its other crashes.',
       inputSchema: { crashDatabaseId, reportId },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -183,7 +181,7 @@ export function registerCrashTools(server: McpServer, client: InletClient): void
   server.registerTool(
     'list_crash_filters',
     {
-      title: 'The kinds, systems and environments this database has seen',
+      title: 'The kinds and systems this database has seen',
       description:
         'Distinct values only, so a filter you pass to list_crash_groups is one that can actually match. Cheap: use this to discover values, and get_crash_stats with `by` when you want them counted.',
       inputSchema: { crashDatabaseId },
@@ -195,10 +193,10 @@ export function registerCrashTools(server: McpServer, client: InletClient): void
   server.registerTool(
     'get_crash_stats',
     {
-      title: 'Reports and new groups per day, or per release, OS or environment',
+      title: 'Reports and new groups per day, or per release, OS or kind',
       description:
-        'The crash database timeline over 7, 30 or 90 days, honouring the list filters, with the day each release was first seen (CR-046, CR-048). Pass by=release, os, environment or kind to also get the range broken down by that dimension.',
-      inputSchema: { crashDatabaseId, ...filters, days: z.number().int().min(1).max(90).default(30), by: z.enum(['day', 'release', 'os', 'environment', 'kind']).default('day') },
+        'The crash database timeline over 7, 30 or 90 days, honouring the list filters, with the day each release was first seen (CR-046, CR-048). Pass by=release, os or kind to also get the range broken down by that dimension.',
+      inputSchema: { crashDatabaseId, ...filters, days: z.number().int().min(1).max(90).default(30), by: z.enum(['day', 'release', 'os', 'kind']).default('day') },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async ({ crashDatabaseId: id, ...rest }) => guard(async () => json(await client.request('GET', `/v1/crash-databases/${id}/stats${query(rest)}`))),
@@ -311,7 +309,6 @@ export function registerCrashTools(server: McpServer, client: InletClient): void
             platform: 'other',
             kind: 'message',
             release: { version: release ?? 'test' },
-            environment: 'development',
             exception: { type: 'TestReport', message: message ?? 'Test report from inlet-mcp', handled: true, frames: [] },
           }),
         ),

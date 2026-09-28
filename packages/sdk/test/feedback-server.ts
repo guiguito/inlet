@@ -63,7 +63,6 @@ export type FakeServerOptions = {
   form?: { code: string; message: string; status: number } | null;
   /** How long an intent lives, in milliseconds. */
   intentTtlMs?: number;
-  capabilities?: string[];
   now?: () => number;
 };
 
@@ -106,7 +105,7 @@ export class FakeInlet {
     this.calls.push({ method, url, ...(body === undefined ? {} : { body }), headers });
 
     if (url.endsWith('/v1/health')) {
-      return json(200, { status: 'ok', capabilities: this.options.capabilities ?? ['feedback', 'crash', 'feedback-cross-origin'] });
+      return json(200, { status: 'ok', capabilities: ['feedback', 'crash', 'mcp', 'config'] });
     }
     if (this.offline > 0) {
       this.offline -= 1;

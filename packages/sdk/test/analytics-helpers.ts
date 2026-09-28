@@ -27,7 +27,7 @@ export class FakeInlet {
   offline = false;
   private attempts = 0;
 
-  constructor(caps: string[] = ['analytics', 'crash', 'identity', 'feedback']) {
+  constructor(caps: string[] = ['analytics', 'crash', 'feedback']) {
     this.caps = caps;
   }
 

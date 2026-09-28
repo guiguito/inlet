@@ -55,7 +55,7 @@ class Ingest {
       const send = (status: number, type: string, body: string) => response.writeHead(status, { 'content-type': type }).end(body);
       if (path === APP_PATH) return send(200, 'text/html', FIXTURE_HTML);
       if (path === BUNDLE_PATH) return send(200, 'text/javascript', bundle);
-      if (path === '/v1/health') return send(200, 'application/json', JSON.stringify({ status: 'ok', capabilities: ['analytics', 'identity'] }));
+      if (path === '/v1/health') return send(200, 'application/json', JSON.stringify({ status: 'ok', capabilities: ['analytics'] }));
       if (/^\/v1\/analytics-databases\/[^/]+\/batch$/.test(path) && request.method === 'POST') {
         let raw = '';
         request.on('data', (chunk) => (raw += chunk));

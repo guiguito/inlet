@@ -13,7 +13,6 @@ import {
   checkInterval,
   compileFilters,
   coverageOf,
-  environmentDefault,
   installAttributionTable,
   namedEventRows,
   oldestKeptDay,
@@ -123,7 +122,6 @@ export function seriesSource(args: {
     args.series.event === ANY_EVENT ? ANY_EVENT_ROWS : namedEventRows(args.series.event, args.eventId!, p),
     compileFilters(args.globalFilters, p, args.scope, 'filters'),
     compileFilters(args.series.filters, p, args.scope, `series.${args.seriesIndex}.filters`),
-    environmentDefault([...args.globalFilters, ...args.series.filters], p),
     args.scope.skip.events(p),
   ].filter((condition) => condition !== '1');
 

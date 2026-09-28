@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.5.0 — 2026-09-28
+
+No environment label, and no compatibility with older servers. Breaking.
+
+- **No `environment` option.** It is gone from `inlet-sdk/crash` and from every
+  `inlet-sdk/analytics` entry, and envelopes no longer carry the field: a server refuses an
+  envelope that does, as `unknown_field`. An environment is a project: report a staging build
+  to a staging project's databases, with that project's publishable key. Nothing is filtered to
+  `production` any more; every event and report counts.
+- **The identity is always sent.** The crash and feedback modules attach the shared session ID,
+  and the installation ID while an analytics client is enabled, without first reading
+  `/v1/health`, which they no longer call. `identity: false` still turns the IDs off. They no
+  longer warn about deployments older than Release 6 or 7.
+- **No compatibility with 0.2.x or 0.3.x modules bundled beside this one.** The shared identity
+  is no longer upgraded in place when an older copy of the package created it, and the config
+  module expects the analytics module of this version.
+- **Needs a server of the same release.** The server dropped the `identity` and
+  `feedback-cross-origin` capabilities and the `environment` field, and this version's
+  modules do not check which server they talk to.
+
+`SDK_VERSION` is `0.5.0` in every module. The analytics and config modules still wait until
+`/v1/health` lists `analytics` or `config`.
+
 ## 0.4.0 — 2026-09-27
 
 Remote config.

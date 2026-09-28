@@ -26,11 +26,11 @@ export async function insertVolume(h: Harness, volume: Volume): Promise<void> {
   await h.ctx.eventStore!.command(
     `INSERT INTO events_ingest (database_key, local_day, effective_time, received_time, event_id, event_name_id, category, installation_id,
        installation_kind, ephemeral, user_id, session_id, platform, os_name, platform_version, runtime_name, runtime_version, app_id,
-       app_version, app_build, locale, environment, country, attribution, experiment_keys, experiment_variants, params,
+       app_version, app_build, locale, country, attribution, experiment_keys, experiment_variants, params,
        install_age_days, install_age_weeks, install_age_months, clock_corrected, credential_id, is_replay)
      SELECT {key:UInt32}, d, toDateTime64(d, 3, 'UTC') + toIntervalHour(12), toDateTime64(d, 3, 'UTC') + toIntervalHour(12), generateUUIDv4(number),
        {name:UInt32}, '', toUUID(concat('0192f5a0-0000-7000-8000-', leftPad(toString({base:UInt32} + number % {installations:UInt32}), 12, '0'))),
-       'device', false, {userId:String}, NULL, 'ios', '', '', '', '', '', {appVersion:String}, '', '', 'production', '', '', [], [], map(),
+       'device', false, {userId:String}, NULL, 'ios', '', '', '', '', '', {appVersion:String}, '', '', '', '', [], [], map(),
        NULL, NULL, NULL, false, 'cred_volume', false
      FROM (SELECT number, addDays({day:Date}, number % {days:UInt32}) AS d FROM numbers({n:UInt64}))`,
     {

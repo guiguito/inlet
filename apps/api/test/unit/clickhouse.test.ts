@@ -32,7 +32,7 @@ describe('splitStatements', () => {
     expect(() => splitStatements('SELECT 1 /* open;')).toThrow(/Unterminated/);
   });
 
-  it('splits the shipped first migration into its statements', async () => {
+  it('splits the shipped baseline into its statements', async () => {
     const { readFile } = await import('node:fs/promises');
     const sql = await readFile(new URL('../../clickhouse/0001_events.sql', import.meta.url), 'utf8');
     const statements = splitStatements(sql);
@@ -48,6 +48,13 @@ describe('splitStatements', () => {
       'CREATE MATERIALIZED VIEW IF NOT EXISTS installation_first_mv TO installation_first AS',
       'CREATE TABLE IF NOT EXISTS user_first',
       'CREATE MATERIALIZED VIEW IF NOT EXISTS user_first_mv TO user_first AS',
+      'CREATE TABLE IF NOT EXISTS version_first',
+      'CREATE MATERIALIZED VIEW IF NOT EXISTS version_first_mv TO version_first AS',
+      'CREATE TABLE IF NOT EXISTS analytics_erasure_targets',
+      'CREATE TABLE IF NOT EXISTS session_rollup',
+      'CREATE MATERIALIZED VIEW IF NOT EXISTS session_rollup_mv TO session_rollup AS',
+      'CREATE TABLE IF NOT EXISTS installation_index',
+      'CREATE MATERIALIZED VIEW IF NOT EXISTS installation_index_mv TO installation_index AS',
     ]);
   });
 });

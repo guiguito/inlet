@@ -12,8 +12,8 @@ import { asAdmin, createProject } from '../setup/api.js';
  * Funnels against a slow reference (AN-083 to AN-087, Appendix B, DECISIONS 31.4): a plain
  * TypeScript walk of the same events, written from the PRD's words rather than from the SQL,
  * compared with the event store's answers on randomised data — several hundred installations,
- * user IDs spanning installations, backend events, server installations, events outside
- * `production`, ties of effective time, repeated step names, windows that end exactly on an
+ * user IDs spanning installations, backend events, server installations, events from a second
+ * country, ties of effective time, repeated step names, windows that end exactly on an
  * occurrence — for closed and open funnels, both counting units, the steps view, the trend by
  * day, week and month, splits, and the drill-down with its cursor. Two databases, UTC and
  * Asia/Kolkata (a half-hour offset), so local days and entry groups follow the zone.
@@ -35,7 +35,7 @@ type Raw = {
   installationId: string | null;
   userId: string | null;
   platform: string;
-  environment: string;
+  country: string;
   experiment: string | null;
   plan: string | null;
 };
@@ -69,7 +69,7 @@ function generate(seed: number): Raw[] {
   const names = ['s1', 's1', 's2', 's2', 's3', 's3', 's4', 'noise'] as const;
   const user = () => `u${String(Math.floor(r() * 60)).padStart(2, '0')}`;
   const extras = () => ({
-    environment: r() < 0.08 ? 'development' : 'production',
+    country: r() < 0.08 ? 'DE' : 'FR',
     experiment: r() < 0.7 ? pick(['A', 'B']) : null,
     plan: r() < 0.8 ? `p${String(Math.floor(r() * 14)).padStart(2, '0')}` : null,
   });
@@ -128,7 +128,7 @@ function passes(filters: readonly AnalyticsFilter[], e: Raw): boolean {
   return [...groups.values()].every((list) =>
     list.some((filter) => {
       const values = (filter.values ?? []).map(String);
-      const value = { platform: e.platform, environment: e.environment, param: e.plan, experiment: e.experiment } as Record<string, string | null>;
+      const value = { platform: e.platform, country: e.country, param: e.plan, experiment: e.experiment } as Record<string, string | null>;
       const v = value[filter.field];
       if (v === undefined) throw new Error(`The reference has no filter on ${filter.field}`);
       const inList = v !== null && values.includes(v);
@@ -139,11 +139,10 @@ function passes(filters: readonly AnalyticsFilter[], e: Raw): boolean {
   );
 }
 
-/** AN-083: step k's event, its filters and the global ones; `production` unless an environment is named (AN-064). */
+/** AN-083: step k's event, its filters and the global ones. */
 function matches(def: Def, k: number, e: Raw): boolean {
   const step = def.steps[k]!;
-  const named = [...def.filters, ...step.filters].some((filter) => filter.field === 'environment');
-  return e.name === step.event && passes(def.filters, e) && passes(step.filters, e) && (named || e.environment === 'production');
+  return e.name === step.event && passes(def.filters, e) && passes(step.filters, e);
 }
 
 /** Section 10: installations are device installations; a user-ID funnel ignores events without one (AN-089). */
@@ -342,11 +341,11 @@ const DEFINITIONS: { name: string; definition: Omit<Def, 'mode' | 'unit'>; range
     range: { from: '2026-08-20', to: '2026-09-10' },
   },
   {
-    name: 'every environment, one step a same-name pair, to yesterday',
+    name: 'one country, one step a same-name pair, to yesterday',
     definition: {
       steps: [step('s3'), step('s3'), step('s4'), step('s1')],
       window: { value: 36, unit: 'hour' },
-      filters: [{ field: 'environment', op: 'is', values: ['production', 'development'] }],
+      filters: [{ field: 'country', op: 'is', values: ['FR'] }],
       defaultRange: { preset: 'last30Days' },
       defaultView: { kind: 'steps' },
     },
@@ -400,7 +399,7 @@ describe('funnels against the reference walk (randomised)', () => {
               ...(e.installationId ? { installationId: e.installationId } : {}),
               ...(e.userId ? { userId: e.userId } : {}),
               platform: e.platform,
-              environment: e.environment,
+              country: e.country,
               app: { version: '1.0.0' },
               sdk: { name: 'inlet-sdk', version: '0.3.0' },
               ...(e.experiment ? { experiments: { exp: e.experiment } } : {}),

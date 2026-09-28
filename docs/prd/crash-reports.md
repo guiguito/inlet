@@ -1,14 +1,14 @@
 # Inlet — Crash Reports PRD
 
 ## Document Status
-**Status:** Implemented as Release 6 on September 17, 2026: server, interface, MCP tools and `inlet-sdk/crash` with Node, browser and Electron adapters, published to npm as `inlet-sdk` (the `@inlet` scope belongs to an unrelated party). Technical choices and rejected alternatives: `docs/DECISIONS.md` section 24. `inlet-sdk/feedback`, which section 15 allowed to slip, is specified in Feedback Collection PRD section 25 as Release 7 — SDK. Release 8 adds the shared SDK identity and a React Native adapter (CR-118 to CR-120): built on September 24, 2026 and published to npm as `inlet-sdk` 0.2.0, except what takes effect only while an analytics client is enabled — the installation ID, the crash flags and the session and installation IDs the sentinel records — which shipped with the analytics module in `inlet-sdk` 0.3.0 (Release 8, September 27, 2026); erasure by installation or user ID (CR-047) ships in Release 8 as the project's erasure, which needs no analytics module (Foundations FD-033). Technical choices: `docs/DECISIONS.md` section 29.
+**Status:** Shipped: crash databases, ingest, grouping, regressions, notifications, the MCP tools, and `inlet-sdk/crash` with Node, browser, Electron and React Native adapters and the shared SDK identity. Technical choices and rejected alternatives: `docs/DECISIONS.md` sections 24 and 29.
 **Product:** Inlet — Crash Reports capability
 **Language:** English
 **Foundations:** Accounts, roles, keys, notifications plumbing, export, deletion, deployment, brand, SDK packaging and MCP conventions are on the Foundations PRD and are not repeated here.
 **Sources:** the HappyVibe "Crashreporting?" proposal (revised September 16, 2026), the competitor research in Appendix A, and the Inlet codebase as of Release 5.
 **Notion page:** https://app.notion.com/p/3ddd33dfffca81129df2c8a1e4af25cb
 **Repository mirror:** `docs/prd/crash-reports.md`
-**Last revised:** September 27, 2026 (Release 8 build: CR-011 and CR-119 amended: an envelope's nesting is bounded, and a report dropped for its size flags its session). Earlier, on September 26, 2026 (erasure by installation or user ID moved to the project, Foundations FD-033: CR-047, section 7.3 and the status line amended). Previously September 24, 2026 (Release 8: CR-118 to CR-120 added; CR-002, CR-011, CR-015, CR-016, CR-040, CR-047, CR-051, CR-090, CR-091, CR-092, CR-097, CR-100, CR-101, CR-109, CR-111, CR-115 and sections 3.2, 7.2, 7.3, 8.1, 8.3, 9.1, 9.2, 10, 12 and 15 amended for the shared SDK identity and React Native)
+**Last revised:** September 28, 2026
 
 > **Positioning in one line.** Collect, group, notify, hand off. Inlet tells you that your application broke, how often, on which versions and systems, and for how many users, then hands the developer a content-free report and gets out of the way. It is not Sentry: it never receives a minidump, never symbolicates, never traces, never replays, and never stores a line of your users' content.
 
@@ -27,14 +27,14 @@ The first consumer, the HappyVibe desktop application, measured the gap directly
 - Accept a content-free crash envelope from any JavaScript or TypeScript application through one SDK or one HTTP call.
 - Group reports server-side so that volume never reaches a person or a Slack channel.
 - Answer the triage questions: is this new, how many, since when, which versions, which systems, how many users, did the fix work.
-- Filter and aggregate by release, operating system, architecture, environment, kind, state and user.
+- Filter and aggregate by release, operating system, architecture, kind, state and user.
 - Notify on a new group and on a regression, never on an occurrence.
 - Make every reading and state-changing feature available through MCP.
 - Stay within one API container and one PostgreSQL, with a bounded storage footprint per database.
 - Ship `inlet-sdk/crash` with adapters for Node, browsers and Electron, integrated into HappyVibe first.
 
 ### 3.2 Non-Goals for Release 6
-- Sentry-protocol compatibility. Decided with the product owner on September 16, 2026; research favours it, so it is recorded as **revisit after Release 6**, not never.
+- Sentry-protocol compatibility. Research favours it, so it is a question to revisit, not a refusal.
 - Minidump or native dump ingestion, symbol servers, and server-side symbolication. A native crash arrives as a parsed summary from the SDK or the integrator.
 - Source maps and debug-ID symbolication (candidate for a later Crash release, design note in section 14).
 - Breadcrumbs (candidate for a later Crash release, opt-in, bounded).
@@ -53,7 +53,7 @@ The first consumer, the HappyVibe desktop application, measured the gap directly
 - **Release:** A version string as reported by the application, with an optional build and channel. Ordered per crash database by first sighting.
 - **Regression:** A report for a resolved group arriving from a release newer than the one it was resolved in.
 - **Affected Users:** The number of distinct integrator-supplied user IDs seen in a group.
-- **Environment:** A free label such as `production` or `development`, so one database can hold both without mixing signal; defaults to `production`.
+- **Environment:** Not a label on a report. An environment is a project (Foundations section 17): a staging build reports to a staging project's crash database.
 
 ## 5. Primary User Journeys
 ### 5.1 Integrate the SDK
@@ -108,7 +108,7 @@ The first consumer, the HappyVibe desktop application, measured the gap directly
 - **CR-030:** Release order shall be the order in which a crash database first saw each version string. The platform shall not parse version strings.
 
 ### 6.4 Reading
-- **CR-040:** A Viewer or above shall be able to list groups in a crash database, filtered by state, kind, release, operating system, architecture, environment, user ID, installation ID, session ID, time range and a text query over exception type and message, and sorted by last seen, first seen, count or affected users. The list shall report the total matching the filters.
+- **CR-040:** A Viewer or above shall be able to list groups in a crash database, filtered by state, kind, release, operating system, architecture, user ID, installation ID, session ID, time range and a text query over exception type and message, and sorted by last seen, first seen, count or affected users. The list shall report the total matching the filters.
 - **CR-041:** A Viewer or above shall be able to open a group and see its aggregates, its release and system breakdowns, its timeline (CR-049), and its most recent reports, with the same filters as the list.
 - **CR-042:** A Viewer or above shall be able to open a report and see its envelope rendered readably: frames as a stack, context as structured data, and the raw JSON on request.
 - **CR-043:** The interface shall present a crash database in at most four groups of work and settings, following FR-186: Groups, Releases, Collect, and Settings.
@@ -116,7 +116,7 @@ The first consumer, the HappyVibe desktop application, measured the gap directly
 - **CR-045:** The Releases tab shall list releases in order with first seen, report count, group count and new-group count.
 - **CR-046:** A Viewer or above shall be able to read statistics for a crash database: reports and new groups per day for a time range, and per release or per operating system.
 - **CR-047:** An Admin shall be able to delete a group, which deletes its reports, rollups and user associations. Individual reports are not deletable, except through the project's erasure of an installation or user ID (Foundations FD-033, UX Analytics AN-183), which deletes the reports carrying it and its group-user associations, adjusts affected users and leaves every other aggregate unchanged; otherwise they expire under retention.
-- **CR-048:** The Groups tab shall open with a timeline chart of the crash database: reports per day and new groups per day as two series over a selectable range of 7, 30 or 90 days, with a vertical marker on the day each release was first seen. The chart shall honour the list's filters, so narrowing to a release, system, environment, kind or state reshapes it. It is served from the daily rollup and never scans reports.
+- **CR-048:** The Groups tab shall open with a timeline chart of the crash database: reports per day and new groups per day as two series over a selectable range of 7, 30 or 90 days, with a vertical marker on the day each release was first seen. The chart shall honour the list's filters, so narrowing to a release, system, kind or state reshapes it. It is served from the daily rollup and never scans reports.
 - **CR-049:** The group detail shall show the same timeline for that group alone, with the same range control and release markers, in place of a fixed sparkline. Rows in the Groups list keep a small sparkline of the last 30 days.
 
 ### 6.5 Notifications
@@ -140,7 +140,7 @@ The first consumer, the HappyVibe desktop application, measured the gap directly
 
 ### 6.9 SDK — `inlet-sdk/crash`
 - **CR-090:** The module shall expose `init`, `captureException`, `captureMessage`, `captureReport`, `setUser`, `setTag`, `setTags`, `setEnabled`, `flush` and `close`, and one handler installer per adapter: `installNodeHandlers`, `installBrowserHandlers`, `installElectronMain`, `installElectronRenderer`, `installReactNativeHandlers` (CR-120). `installElectronRenderer` shall be published from its own browser-safe entry (CR-109). Beyond this list, only what CR-104 to CR-120 add.
-- **CR-091:** `init` shall take the base URL, the publishable key, the crash database ID, the release, and optionally an environment, a sample rate, a `beforeSend` hook, a queue size, a persistence directory or store, a redaction policy, and `identity` (true by default, CR-118).
+- **CR-091:** `init` shall take the base URL, the publishable key, the crash database ID, the release, and optionally a sample rate, a `beforeSend` hook, a queue size, a persistence directory or store, a redaction policy, and `identity` (true by default, CR-118).
 - **CR-092:** `captureException` shall build an envelope of kind `exception` from an `Error`, with frames parsed from its stack, and accept optional kind, tags, context and fingerprint overrides. `captureMessage` shall build a kind `message` envelope with no frames. `captureReport` shall accept a complete envelope the integrator built, for failure classes the SDK cannot observe itself, such as a parsed native crash summary, and the option `previousRun: true` for a report that describes the application's previous run, so that it carries that run's identity rather than the current one (CR-119). The Electron adapter produces the unclean-exit report itself (CR-116); an integrator on another platform still builds it by hand.
 - **CR-093:** The SDK shall mark frames inside the application bundle as in-app and shall replace the file of every other frame with `<external>`. The application bundle is detected per adapter and may be overridden at `init`.
 - **CR-094:** The SDK shall pass exception messages through a redaction policy before sending. The default policy keeps messages matching a small set of known-safe shapes and replaces every other message with `<redacted>`. It shall keep the leading token only where that token is errno-shaped — all capitals, digits and underscores, optionally followed by a colon, as in `ENOENT:` or `ERR_MODULE_NOT_FOUND` — which carries triage value and cannot carry a payload. It shall never ship the leading token otherwise: whether a message was protected must not depend on its word order. Integrators may replace the policy, and the policies ship as named exports so that relaxing redaction is a deliberate choice (CR-113): `keepMessages` sends messages verbatim, `redactExcept` takes the integrator's own safe shapes.
@@ -167,7 +167,7 @@ The first consumer, the HappyVibe desktop application, measured the gap directly
 - **CR-115:** Every entry that runs in a browser or an Electron renderer shall detect the application's own code from one shared derivation, and shall not each carry its own default. The derivation shall handle the `file:` protocol, which is how a packaged application loads: taking the root from the document's origin yields a value that matches no frame and marks the whole stack external, a failure that appears only in packaged builds. This binds the Electron renderer entry, the browser entry, the React error-boundary helper and the client used by the bare entry alike, and the derivation shall be exported so an integrator can reuse it. Frames that are wrongly external are absent from the fingerprint, which does not merely mislabel them: it collapses every report sharing a message into one group whatever code threw it. The React Native entry shall parse Hermes stack frames and treat every frame from the application's JavaScript bundle — `index.android.bundle`, `main.jsbundle` or a development server address — as in-app.
 - **CR-116:** The Electron adapter shall offer to report a previous run that ended without quitting cleanly — a hang, a forced quit, a power loss, an out-of-memory kill — none of which run any handler in the dying process. It shall do so by keeping a file while the application is alive and removing it on a clean quit, reporting kind `unclean-exit` when one survives, with the uptime the previous run managed. It shall be off unless asked for, and shall arm only in a packaged build, because a development runner restarts the main process constantly and would report the development loop itself. A file that cannot be read shall still be reported, without an uptime: the crash happened either way, and discarding it is the only outcome that loses information.
 - **CR-117:** The SDK shall offer an application-oriented redaction policy alongside the default, redacting by pattern — paths, addresses, URLs and opaque tokens — rather than allowlisting by shape, because the default's allowlist fits messages a runtime generates and is inverted for the messages an application writes about itself. It shall not replace the default. Being a denylist it is best effort, and both it and its documentation shall say so: it removes the shapes it knows and cannot promise a message carries no content, since a workspace name, a project title or a bare filename matches nothing. An application that must guarantee content-free reports by construction needs an allowlist. The documentation shall also state plainly, where an integrator will read it first, that an application's own messages are redacted by default, so that a first run showing only markers is not mistaken for a broken integration.
-- **CR-118:** Unless initialised with `identity: false`, the crash module shall attach the shared SDK identity (Foundations FD-016) to every report: the session ID as `sessionId`, the shared user ID as `user.id`, and, only while an analytics client of the same application is enabled, the installation ID as `installationId`. Without an enabled analytics client the session ID lives in memory: it rotates as Foundations FD-016 says, a new process or page load begins a new one, and nothing is written to the device for it, the unclean-exit sentinel included (CR-119). Both IDs are sent as lowercase dashed UUIDs, and the server stores them in that form whatever form a client sends (UX Analytics §9.1). The fields are sent only to a deployment whose `/v1/health` lists `identity`, checked when the module sends and again after a failed probe, and left out otherwise. The server stores both IDs, lets reports and groups be filtered by them (CR-040), and never announces them.
+- **CR-118:** Unless initialised with `identity: false`, the crash module shall attach the shared SDK identity (Foundations FD-016) to every report: the session ID as `sessionId`, the shared user ID as `user.id`, and, only while an analytics client of the same application is enabled, the installation ID as `installationId`. Without an enabled analytics client the session ID lives in memory: it rotates as Foundations FD-016 says, a new process or page load begins a new one, and nothing is written to the device for it, the unclean-exit sentinel included (CR-119). Both IDs are sent as lowercase dashed UUIDs, and the server stores them in that form whatever form a client sends (UX Analytics §9.1). The server stores both IDs, lets reports and groups be filtered by them (CR-040), and never announces them.
 - **CR-119:** When a report of a crashing kind — `exception` with `handled` false, `unhandled-rejection`, `native`, `unclean-exit` or `renderer-gone`, and in a browser (platform `browser`) only an unhandled exception or rejection whose stack has an in-app frame — is captured while an analytics client of the same application is enabled, the crash module shall flag its session as crashed in the shared identity, after `beforeSendSync` and before dedupe and sampling, so that the analytics module can send `session_crashed` (UX Analytics AN-150). A report of a crashing kind that the module drops for its size flags its session too: while an analytics client is enabled, `beforeSendSync` runs on it for that decision alone, and the report stays unsent. The unclean-exit sentinel (CR-116) shall record the release of the run it watches and, only while an analytics client of the same application is enabled, its session ID and installation ID, rewriting them when the session rotates, so that its report and the session it flags belong to the run that died. A report describing a previous run — the sentinel's, or one passed to `captureReport` with `previousRun: true` (CR-092) — shall carry the session and installation IDs the sentinel recorded for that run, or none, never those of the current run, and shall flag that recorded session, or none. In a browser the module shall tell the analytics module whether any of the page's scripts lies within its app roots (CR-093), and `app_started` reports `crashReporting` false when none does, so that an application served from origins the roots miss reads as unmeasured rather than crash-free.
 - **CR-120:** `inlet-sdk/crash/react-native` shall export `init` and `installReactNativeHandlers`, taking React Native's `ErrorUtils`, `AppState` and `Platform`, an injected store and optionally a source of random values as parameters, and importing nothing. It shall install the handlers of CR-100, report the platform `other` with the runtime `react-native` and the operating system `iOS` or `Android` with its version (`Platform.Version` on iOS, `Platform.constants.Release` on Android), persist its queue as CR-097 says, one report per key and at most 2 MB in all by default, adjustable at `init`, dropping the oldest report, write crash flags to that store on its fatal path (Foundations FD-016), flush when the application moves to the background, generate IDs and fingerprints as UX Analytics AN-239 says, without relying on `crypto`, time requests out without `AbortSignal.timeout`, and require the release at `init`. It needs React Native 0.74 or later and is published so that Metro resolves it without package-exports support (UX Analytics AN-239). It shall not install the unclean-exit sentinel and does not observe native crashes; a native crash summary reaches the server only through `captureReport`.
 
@@ -182,7 +182,7 @@ Endpoint paths are proposals; the flows are requirements.
 - **Errors:** `unknown_field`, `envelope_too_large`, `invalid_envelope` with the field path, `unknown_crash_database`, `rate_limit_exceeded` with `Retry-After`.
 
 ### 7.2 Reading
-- `GET /v1/crash-databases/{id}/groups?state&kind&release&os&arch&environment&userId&installationId&sessionId&since&until&q&sort&cursor&limit`
+- `GET /v1/crash-databases/{id}/groups?state&kind&release&os&arch&userId&installationId&sessionId&since&until&q&sort&cursor&limit`
 - `GET /v1/crash-databases/{id}/groups/{groupId}` including breakdowns and its daily timeline for the requested range
 - `GET /v1/crash-databases/{id}/groups/{groupId}/reports?...` with the list filters
 - `GET /v1/crash-databases/{id}/reports/{reportId}`
@@ -210,7 +210,7 @@ Endpoint paths are proposals; the flows are requirements.
 
 ## 8. Interfaces
 ### 8.1 Management Interface
-- **Groups tab.** The work. A timeline chart across the top (CR-048): reports per day and new groups per day, 7, 30 or 90 days, release markers, reshaped by the active filters. Below it, a list where each row is a group: exception type and top frame or module as the title, kind and release badges, state, count, affected users, first and last seen, a small sparkline. Filter chips for state and kind; selects for release, operating system, environment; a text query; sort control. Multi-select with resolve and ignore. Empty state explains the SDK in one sentence and links to Collect.
+- **Groups tab.** The work. A timeline chart across the top (CR-048): reports per day and new groups per day, 7, 30 or 90 days, release markers, reshaped by the active filters. Below it, a list where each row is a group: exception type and top frame or module as the title, kind and release badges, state, count, affected users, first and last seen, a small sparkline. Filter chips for state and kind; selects for release and operating system; a text query; sort control. Multi-select with resolve and ignore. Empty state explains the SDK in one sentence and links to Collect.
 - **Group detail.** Header with title, state control (resolve in release, ignore, reopen), delete for Admins. Aggregates row. The group's timeline with range control and release markers (CR-049). Two breakdown tables: by release and by operating system. Recent reports list; opening one shows frames as a stack, tags and context as key-value pairs, a raw JSON toggle, and, where UX Analytics AN-154 applies, a Usage profile link. The message is shown with a note when the SDK redacted it.
 - **Releases tab.** Releases in order with first seen, reports, groups, new groups, and a link that filters the Groups tab to that release.
 - **Collect tab.** Database ID, the project's publishable keys, and an install snippet per adapter (Node, browser, Electron main and renderer, React Native) with the base URL and key filled in. A "send a test report" button that posts one envelope of kind `message` and shows the result.
@@ -239,14 +239,13 @@ The server accepts exactly these fields and rejects any other top-level key.
 | `platform` | no | `node`, `browser`, `electron`, `other` | Defaults from the adapter |
 | `kind` | yes | ≤ 32 chars, lowercase, `-` allowed | Built-in kinds in section 4 or a custom kind |
 | `release` | yes | `{version ≤ 64, build? ≤ 64, channel? ≤ 32}` | Orders releases |
-| `environment` | no | ≤ 32 | Defaults to `production` |
 | `exception` | conditional | `{type ≤ 128, message ≤ 200 (truncated), handled: bool, frames[≤ 30]}` | Frame: `{function ≤ 128, file ≤ 128, line?, col?, inApp: bool}` |
 | `native` | conditional | `{process ≤ 32, fault ≤ 32, module ≤ 128, dumpBytes?}` | Parsed on the client; the dump never travels |
 | `exit` | conditional | `{code?, signal? ≤ 16, reason? ≤ 64, name? ≤ 64, lastUptimeMs?}` | For process-gone and exit kinds |
 | `os` | no | `{name ≤ 32, version ≤ 64, arch ≤ 16}` | |
 | `runtime` | no | `{name ≤ 32, version ≤ 32}` | Node, Chromium, Electron, browser |
 | `user` | no | `{id ≤ 128}` | Only `id` is accepted |
-| `installationId` | no | UUID | Shared SDK identity (CR-118); accepted by deployments whose health lists `identity` |
+| `installationId` | no | UUID | Shared SDK identity (CR-118) |
 | `sessionId` | no | UUID | Shared SDK identity (CR-118) |
 | `tags` | no | ≤ 20 pairs, key ≤ 64, value ≤ 256 | Flat strings; indexed for filtering in a later Crash release |
 | `context` | no | ≤ 16 KiB JSON | Stored verbatim; the integrator is responsible for its contents |
@@ -260,8 +259,8 @@ Total envelope ≤ 64 KiB. Every HappyVibe §5 field maps onto this table: its `
 - **Release:** ID, database ID, version, build, channel, order (per-database sequence), first seen. Unique on `(database, version, build, channel)`.
 - **Group:** ID (`cgr_`), database ID, fingerprint (unique per database), title fields (kind, exception type, top frame, module), state, regressed flag, resolved-in release ID, resolved by, resolved at, count, first seen, last seen, first release ID, last release ID, affected-user count, latest report ID, timestamps.
 - **Group User:** group ID, user ID. Unique pair; its cardinality is the affected-user count.
-- **Group Daily:** group ID, day, release ID, OS name, environment, count. The rollup behind sparklines and breakdowns. Environment was added to the key at implementation so the CR-048 timeline can honour the environment filter without scanning reports.
-- **Report:** ID (`crp_`), database ID, group ID, event ID (unique per database), received at, effective at, clock-skew flag, kind, release ID, environment, OS name, OS version, arch, user ID (nullable), installation ID (nullable), session ID (nullable), credential ID, envelope (`jsonb`, ≤ 64 KiB). Immutable.
+- **Group Daily:** group ID, day, release ID, OS name, count. The rollup behind sparklines, breakdowns and the CR-048 timeline.
+- **Report:** ID (`crp_`), database ID, group ID, event ID (unique per database), received at, effective at, clock-skew flag, kind, release ID, OS name, OS version, arch, user ID (nullable), installation ID (nullable), session ID (nullable), credential ID, envelope (`jsonb`, ≤ 64 KiB). Immutable.
 - **Notification Delivery:** shared table with kind `crash_group_opened` or `crash_group_regressed` and a group ID as source (Foundations FD-006). The Slack settings row is keyed on the database ID of either type; it carries no foreign key and is removed by the deletion service.
 
 Indexes: unique `(database_id, fingerprint)` on groups; `(database_id, state, last_seen desc)`, `(database_id, last_seen desc)`, `(database_id, count desc)` on groups; unique `(database_id, event_id)` on reports; `(database_id, group_id, received_at desc)`, `(database_id, release_id)`, `(database_id, user_id)`, `(database_id, installation_id)`, `(database_id, session_id)` on reports; `(group_id, day)` on the daily rollup. No index on the envelope.
@@ -304,7 +303,7 @@ Indexes: unique `(database_id, fingerprint)` on groups; `(database_id, state, la
 - A group resolved in release 1.4.0 counts a report from 1.4.0 silently, and reopens as regressed with one Slack message on a report from 1.4.1 whose version was first seen after 1.4.0.
 - A group resolved without a release reopens on the next report.
 - An ignored group receiving a thousand reports produces no message.
-- Filtering groups by release, operating system, environment, state, kind, user ID and text query each narrow the list and report the matching total.
+- Filtering groups by release, operating system, state, kind, user ID and text query each narrow the list and report the matching total.
 - Ten reports carrying six distinct user IDs show an affected-user count of six; ten reports with no user ID show zero.
 - The group detail shows a timeline whose daily totals equal the reports received per day, and a release breakdown whose counts sum to the group count.
 - The Groups tab timeline shows, for each day in the selected range, the number of reports and of new groups received that day, matching the list's totals for that day; filtering to one release reshapes it, and each release first seen in the range is marked on the day it appeared.
@@ -323,9 +322,10 @@ Indexes: unique `(database_id, fingerprint)` on groups; `(database_id, state, la
 - A crash loop that restarts the application five times in a minute results in one report accepted server-side and one Slack message.
 - A Viewer sees groups and reports but cannot change state, retention or settings; a Creator can change state; only an Admin can delete.
 - The crash database appears on the project page under its own heading, and the switcher moves from a feedback database to it.
-- With no analytics client in the application, a report from `inlet-sdk` 0.2.0 carries the fields a report from 0.1.5 carries plus a session ID that a new process or page load replaces, and nothing is written to the device for it, the unclean-exit sentinel included; with `identity: false` it carries exactly the 0.1.5 fields.
+- With no analytics client in the application, a report carries a session ID that a new process or page load replaces, and nothing is written to the device for it, the unclean-exit sentinel included; with `identity: false` it carries no session or installation ID.
+- A report carrying an `environment` field is refused as `unknown_field`.
 - A report whose message contains U+0000 or a lone surrogate is stored cleaned, and the request log of the ingest routes contains no client address or port.
-- With the analytics module enabled, a report carries the installation and session IDs of the analytics events of the same session; against a deployment whose `/v1/health` does not list `identity`, the fields are left out and the report is accepted.
+- With the analytics module enabled, a report carries the installation and session IDs of the analytics events of the same session.
 - A report passed to `captureReport` with `previousRun: true` carries the session and installation IDs the sentinel recorded for the previous run, or none when analytics was not enabled then, and never those of the current run.
 - The React Native adapter captures an error reaching the global handler, calls the handler it replaced, and with a synchronous store has written the report before the handler returns.
 
@@ -336,11 +336,11 @@ Indexes: unique `(database_id, fingerprint)` on groups; `(database_id, state, la
 - **Storage growth:** a popular app at its cap on many databases. Mitigation: per-database caps with platform bounds, a 12 KB budget per report, the object-storage and partitioning upgrade paths.
 - **Regression false positives:** version strings that are not monotonic (hotfix branches) reorder releases. Mitigation: first-seen ordering is documented; a resolved-in release is optional; a later Crash release may add manual release ordering.
 - **SDK trust boundary:** the SDK runs in the integrator's process and can be misconfigured. Mitigation: the server enforces every bound independently; the SDK refuses secret keys; the schema is shared so drift is a build error.
-- **Sentry-compatibility demand:** users with existing Sentry SDKs cannot switch. Mitigation: recorded as a revisit after Release 6; the envelope was designed so a mapping from Sentry events is mechanical.
+- **Sentry-compatibility demand:** users with existing Sentry SDKs cannot switch. Mitigation: recorded as a question to revisit; the envelope was designed so a mapping from Sentry events is mechanical.
 
 ## 14. Decisions
-**Confirmed with the product owner, September 16, 2026**
-- Inlet-native envelope and SDK only; no Sentry-protocol ingest in Release 6.
+**Confirmed with the product owner**
+- Inlet-native envelope and SDK only; no Sentry-protocol ingest.
 - One SDK package, `inlet-sdk`, with a crash module and node, browser and electron adapters.
 - Optional integrator-supplied user ID, stored as an opaque string, filterable and counted.
 - Full MCP parity with the interface.
@@ -355,15 +355,16 @@ Indexes: unique `(database_id, fingerprint)` on groups; `(database_id, state, la
 - Notifications on new group and regression only, headline without message text.
 - No request IP on crash reports.
 - Breadcrumbs, symbolication and merge deferred to a later Crash release.
+- No environment label. An environment is a project (Foundations section 17): a label on each report gave teams a second way to keep staging apart, and a default that hid what it did not name.
 
-**Decided September 21, 2026, from the first external integration review of inlet-sdk 0.1.0**
+**From the first external integration review of the SDK**
 - *Redaction emits the marker alone.* Keeping a message's first token meant `alice@corp.com is not a valid address` shipped the address behind a marker that read as redacted, and `/Users/alice/secret.docx could not be opened` shipped the path. Whether a message was protected depended on its word order, which is luck rather than a rule. The escape hatch already existed, so the gap was a default that did not deliver what its marker claimed; privacy by default stays, the mechanism is fixed, and the opt-out becomes a named export rather than a lambda documented only in a source comment. Accepted consequence: unmatched messages no longer differ by leading token, so grouping coarsens slightly. It is bounded — CR-021 normalization already replaces emails, paths, URLs and quoted strings before hashing, and in-app frames still separate distinct sites — and a team wanting finer grouping should add its own safe shapes, which is a per-shape decision rather than a blanket one.
 - *Electron main does not inherit Node's exit.* Exiting is right for a CLI and wrong for a desktop application, where it takes every renderer and child process down with it.
 - *Bounds are re-checked after the hooks.* Checking only before them let a hook breach the cap, and the server's 413 is an answer, so the report was dropped rather than retried.
-- *The IPC channel is sanitised at the boundary, not in the envelope builder.* Main-process callers legitimately set the release, environment and user; a renderer does not. Fixing it in `completeEnvelope` would have taken the capability away from both.
+- *The IPC channel is sanitised at the boundary, not in the envelope builder.* Main-process callers legitimately set the release and user; a renderer does not. Fixing it in `completeEnvelope` would have taken the capability away from both.
 - *Minidump reading is deferred to a later Crash release.* The `native` kind exists and nothing produces it, so an Electron adopter writes the same hundred lines. It needs no symbols, no server work and no binary upload, but it is a binary-format parser, nobody is blocked on it, and it is purely additive.
 
-**Decided September 22, 2026, from the second external integration review**
+**From the second external integration review**
 - *A normal window close is not a crash.* Electron defines `clean-exit` as a zero exit code, and the adapter reported it unconditionally, so every integrator filed a crash every time a user closed a window until they wrote the same filter. The filter belongs in the SDK.
 - *A killed renderer and a killed child mean opposite things.* The operating system takes a renderer away under memory pressure, which is the crash most worth having; an application kills its own sidecar deliberately. One reason string, two defaults.
 - *The renderer's application root is derived per protocol.* Under `file:`, which is every packaged application, the document origin is a value that matches no frame, so every frame in production came back external while development looked correct.
@@ -372,7 +373,7 @@ Indexes: unique `(database_id, fingerprint)` on groups; `(database_id, state, la
 - *Every unclean exit shares one group, deliberately.* The report carries a constant reason, so the fingerprint is constant. They are one event class; a run whose sentinel could not be read is a different one and gets its own reason.
 - *The redaction default stays, and gains an alternative.* Measured over a realistic sample, the default keeps the messages a runtime generates and redacts every message an application writes about itself — the diagnostic half, which usually carries no user data. That is the wrong trade for application code, but changing what a crash reporter reports is worse than an awkward default, and this one has already moved once. The pattern-based policy is offered by name and the documentation now warns first.
 
-**Decided September 22, 2026, after the 0.1.3 follow-up review**
+**From the review of the Electron fixes**
 - *One root derivation, not a default per entry.* CR-115 named the Electron renderer entry, so the fix matched its scope and left the React helper, the browser entry and the bare-entry client each with their own broken default. A requirement that names one call site cannot catch a defect living in four; the requirement was as narrow as the code.
 - *The damage was grouping, not labelling.* The fingerprint uses in-app frames only, so an entry with no roots contributes no frame parts at all and every report sharing a message merged into one group regardless of where it threw. Fixing the roots separates them, which moves existing groups — accepted, because the alternative is leaving the grouping broken.
 - *The pattern redaction policy is a denylist and says so.* It was offered as an answer for application code without stating what it cannot do, and an integrator whose product promises content-free reports by construction correctly declined it. The policy is unchanged; the claim around it is corrected.
@@ -391,19 +392,9 @@ Indexes: unique `(database_id, fingerprint)` on groups; `(database_id, state, la
 - *Minidump reading:* an `inlet-sdk/crash/minidump` export that returns the fault type, the faulting module and the process type from a dump buffer, which the application turns into a `native` report on the next launch. No symbols, no server work, no binary upload.
 
 ## 15. Release Plan
-**Release 6 — Crash Reports.** Goal: HappyVibe reports every failure class to its own Inlet, the developer triages from Slack, the interface or an agent, and a second application can integrate with the SDK in an afternoon.
-- Foundations changes: FD-001 to FD-009 (typed databases, third scope, delivery kind, retention setting), FD-010 to FD-014 (SDK packaging), FD-020 to FD-031 (MCP and rate-limit conventions made explicit).
-- Crash: CR-001 to CR-004, CR-010 to CR-017, CR-020 to CR-030, CR-040 to CR-049, CR-050 to CR-053, CR-060 and CR-061, CR-070 and CR-071, CR-080 to CR-082, CR-090 to CR-103.
-- SDK: `inlet-sdk/crash` with node, browser and electron adapters. The feedback module of `inlet-sdk` did not ship in this release; it is specified in Feedback Collection PRD section 25 as Release 7 — SDK.
-- HappyVibe integration: Appendix B.
+**Release 6 — Crash Reports** shipped crash databases, ingest, grouping, regressions, notifications, the MCP tools and `inlet-sdk/crash` with Node, browser and Electron adapters (CR-001 to CR-117), with the Foundations requirements it needed (FD-001 to FD-014, FD-020 to FD-031). HappyVibe integration: Appendix B.
 
-**inlet-sdk 0.1.2 — crash SDK integration feedback.** Not a numbered Inlet release; the server is untouched. From the first external integration review of 0.1.0. CR-090, CR-094, CR-096 and CR-100 amended; CR-104 to CR-113 added. Four behaviours change for an application already on 0.1.0: Electron main no longer exits by default, the default redaction no longer emits a message's leading token, an envelope a hook grew past the cap is now dropped rather than refused by the server, and the IPC channel ignores renderer-supplied envelope fields it used to pass through.
-
-**inlet-sdk 0.1.3 — the Electron gaps.** Not a numbered Inlet release; the server is untouched. From the second external integration review. CR-092, CR-100, CR-113 and the section 8.1 table amended; CR-114 to CR-117 added. One behaviour change for an application already on 0.1.2: exits that are not crashes are no longer reported, so an upgraded application sees fewer reports, not more.
-
-**inlet-sdk 0.1.4 — one root derivation.** Not a numbered Inlet release; the server is untouched. CR-115 widened from one entry to every browser-side entry and CR-117 qualified. Reports from an upgraded application fingerprint differently where roots were previously empty, so groups that had merged on message alone separate by throw site; existing groups keep their reports and nothing merges them.
-
-**Release 8 — shared identity and React Native.** Specified with the UX Analytics PRD, not yet built. CR-118 to CR-120 added; CR-002, CR-011, CR-015, CR-016, CR-040, CR-047, CR-051, CR-090, CR-091, CR-092, CR-097, CR-100, CR-101, CR-109, CR-111 and CR-115 amended. An application already on 0.1.5 sees one change: its reports carry a session ID, which `identity: false` removes.
+**Release 8 — UX Analytics** shipped the shared SDK identity and the React Native adapter (CR-118 to CR-120).
 
 **A later Crash release.** Manual merge, opt-in breadcrumbs, debug-ID symbolication, minidump reading, tag indexing and filtering, object-storage envelope offload, streaming NDJSON export, manual release ordering, and the Sentry-compatibility decision.
 

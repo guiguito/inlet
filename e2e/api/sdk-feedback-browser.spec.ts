@@ -238,7 +238,6 @@ test('collects from another origin with no proxy, and sends only what the contra
   }, E2E.baseUrl);
   expect(reading).toBe('blocked');
 
-  expect(await debugMessages(page)).not.toContainEqual(expect.stringContaining('predates Release 7'));
 });
 
 test('keeps a submission in IndexedDB while the server is unreachable and delivers it after a reload', async ({ page, request }) => {

@@ -24,7 +24,7 @@ describe('cohort SQL binds every value', () => {
       [],
       [{ field: 'platform', op: 'is', values: [`${HOSTILE}5`] }],
       [
-        { field: 'environment', op: 'isNot', values: [`${HOSTILE}6`] },
+        { field: 'country', op: 'isNot', values: [`${HOSTILE}6`] },
         { field: 'experiment', key: 'k_hostile', op: 'is', values: [`${HOSTILE}7`] },
         { field: 'attribution', op: 'isSet' },
       ],

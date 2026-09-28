@@ -38,7 +38,7 @@ describe('crash groups, reports, releases and stats', () => {
 
   async function seed() {
     for (let i = 0; i < 3; i += 1) await send('loadUser', '1.0.0', { user: { id: `u${i}` } });
-    await send('saveUser', '1.0.0', { os: { name: 'Windows', arch: 'x64' }, environment: 'development' });
+    await send('saveUser', '1.0.0', { os: { name: 'Windows', arch: 'x64' } });
     await send('loadUser', '1.1.0');
   }
 
@@ -54,7 +54,7 @@ describe('crash groups, reports, releases and stats', () => {
 
     expect((await get('/groups?release=1.1.0')).json().total).toBe(1);
     expect((await get('/groups?os=Windows')).json().total).toBe(1);
-    expect((await get('/groups?environment=development')).json().groups[0].topFrame).toBe('saveUser (a.js)');
+    expect((await get('/groups?os=Windows')).json().groups[0].topFrame).toBe('saveUser (a.js)');
     expect((await get('/groups?userId=u2')).json().total).toBe(1);
     expect((await get('/groups?arch=x64')).json().total).toBe(1);
     expect((await get('/groups?q=save')).json().total).toBe(1);
@@ -69,7 +69,6 @@ describe('crash groups, reports, releases and stats', () => {
     expect(filters.json()).toEqual({
       kinds: ['exception'],
       operatingSystems: ['Windows', 'macOS'],
-      environments: ['development', 'production'],
     });
 
     // A value that has never been seen is not offered, which is the point: a select that
@@ -82,7 +81,6 @@ describe('crash groups, reports, releases and stats', () => {
     expect((await asAdmin(h, 'GET', `/v1/crash-databases/${empty}/filters`)).json()).toEqual({
       kinds: [],
       operatingSystems: [],
-      environments: [],
     });
   });
 
@@ -98,15 +96,14 @@ describe('crash groups, reports, releases and stats', () => {
     expect(detail.json().timeline.releases.map((r: { version: string }) => r.version).sort()).toEqual(['1.0.0', '1.1.0']);
   });
 
-  it('breaks the range down by release, operating system and environment (CR-046)', async () => {
+  it('breaks the range down by release, operating system and kind (CR-046)', async () => {
     await seed();
     const byOs = (await get('/stats?days=7&by=os')).json();
     expect(byOs.days).toHaveLength(7);
     expect(byOs.breakdown).toEqual({ by: 'os', rows: [{ key: 'macOS', reports: 4, groups: 1 }, { key: 'Windows', reports: 1, groups: 1 }] });
     const byRelease = (await get('/stats?days=7&by=release')).json().breakdown;
     expect(byRelease.rows).toEqual([{ key: '1.0.0', reports: 4, groups: 2 }, { key: '1.1.0', reports: 1, groups: 1 }]);
-    const byEnvironment = (await get('/stats?days=7&by=environment&os=Windows')).json().breakdown;
-    expect(byEnvironment.rows).toEqual([{ key: 'development', reports: 1, groups: 1 }]);
+    expect((await get('/stats?days=7&by=environment')).statusCode).toBe(400);
     const byKind = (await get('/stats?days=7&by=kind')).json().breakdown;
     expect(byKind.rows).toEqual([{ key: 'exception', reports: 5, groups: 2 }]);
   });
@@ -187,12 +184,13 @@ describe('crash groups, reports, releases and stats', () => {
     expect(lines[0]).toContain('id,state,regressed,kind');
     expect(lines[1]).toContain('1.0.0=3 1.1.0=1');
 
-    const ndjson = await get('/reports/export?environment=development');
+    const ndjson = await get('/reports/export?os=Windows');
     expect(ndjson.statusCode).toBe(200);
     expect(ndjson.headers['content-type']).toContain('application/x-ndjson');
     const rows = ndjson.body.split('\n').filter(Boolean).map((line: string) => JSON.parse(line));
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ environment: 'development', release: '1.0.0', envelope: { kind: 'exception' } });
+    expect(rows[0]).toMatchObject({ release: '1.0.0', os: { name: 'Windows' }, envelope: { kind: 'exception' } });
+    expect(rows[0]).not.toHaveProperty('environment');
     expect((await get('/reports/export')).body.split('\n').filter(Boolean)).toHaveLength(5);
     expect((await get('/reports/export?q=save')).body.split('\n').filter(Boolean)).toHaveLength(1);
   });

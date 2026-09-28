@@ -8,7 +8,6 @@ import {
   checkInterval,
   compileFilters,
   coverageOf,
-  environmentDefault,
   isoWeekLabel,
   mondayOf,
   offsetMinutes,
@@ -68,7 +67,6 @@ describe('the filter compiler (AN-062)', () => {
       [{ field: 'runtime', op: 'isSet' }, /^runtime_name != ''$/],
       [{ field: 'app', op: 'isNotSet' }, /^app_id = ''$/],
       [{ field: 'appVersion', op: 'isNot', values: ['1.0'] }, /^app_version NOT IN \{p0:Array\(String\)\}$/],
-      [{ field: 'environment', op: 'is', values: ['staging'] }, /^environment IN/],
       [{ field: 'country', op: 'is', values: ['FR'] }, /^country IN/],
       [{ field: 'userId', op: 'is', values: ['u1'] }, /^user_id IN/],
       [{ field: 'attribution', op: 'is', values: ['spring'] }, /^attribution IN/],
@@ -116,13 +114,6 @@ describe('the filter compiler (AN-062)', () => {
       expect((error as ApiError).code).toBe('invalid_query');
       expect((error as ApiError).details?.[0]?.path).toBe('series.1.filters.0.values.0');
     }
-  });
-
-  it('reads production only unless a definition names an environment (AN-064)', () => {
-    const p = new SqlParams();
-    expect(environmentDefault([], p)).toBe('environment = {p0:String}');
-    expect(p.values.p0).toBe('production');
-    expect(environmentDefault([{ field: 'environment', op: 'isNot', values: ['production'] }], new SqlParams())).toBe('1');
   });
 
   it('skips pending erasures received before their time, and deleted names, only when there are any (AN-184, AN-056)', () => {

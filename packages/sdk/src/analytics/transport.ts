@@ -372,8 +372,8 @@ export class AnalyticsTransport {
     // Written first, whatever is sent: no timer runs after an unload, so an event queued
     // within the debounce would otherwise be lost with the page.
     void this.persistNow();
-    // Only to a deployment whose health answer listed `analytics`: one that predates it has
-    // no batch route, and its 404 would drop every event as refused.
+    // Only to a deployment whose health answer listed `analytics`: one without the event store
+    // answers 503, and an unload's request is never retried.
     if (this.closed || this.paused || this.options.now() < this.pausedUntil || !this.listed) return;
     // `visibilitychange` and `pagehide` both fire on a close: the second call sends only what
     // the first did not.

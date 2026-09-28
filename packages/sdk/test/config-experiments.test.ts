@@ -212,19 +212,6 @@ describe('experiments into analytics (RC-129)', () => {
     expect(nextEvent()).toBeUndefined();
   });
 
-  it('beside an analytics module without the hook (0.3.0), activating changes nothing and throws nothing', async () => {
-    const server = new FakeConfig();
-    const store = new MemoryStore();
-    const old = { track: vi.fn() };
-    (globalThis as unknown as Record<symbol, unknown>)[Symbol.for('inlet-sdk.analytics.current')] = old;
-    server.publish({ version: 1, values: { paywall: 'annual' }, experiments: { paywall_copy: 'annual_first' } });
-    const client = initConfig(server, store);
-    await flush();
-    expect(client.get('paywall')).toBe('annual');
-    expect(client.getExperiments()).toEqual({ paywall_copy: 'annual_first' });
-    delete (globalThis as unknown as Record<symbol, unknown>)[Symbol.for('inlet-sdk.analytics.current')];
-  });
-
   it('forget drops what the config module set; enabling again records the active answer’s experiments', async () => {
     const server = new FakeConfig();
     const store = new MemoryStore();

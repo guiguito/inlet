@@ -1,11 +1,6 @@
 import http from 'node:http';
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { eq, sql } from 'drizzle-orm';
-import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { Client } from 'pg';
 import { configActivity, configDatabases, configDrafts, configReach, configVersions, notificationDeliveries, projectCredentials, slackNotifications } from '../../src/db/schema.js';
 import { requireClientConfigDatabase } from '../../src/services/access.js';
@@ -482,63 +477,7 @@ describe('config databases', () => {
       expect(await refusedBy(h.ctx.db.update(configDrafts).set({ updatedByUserId: null }).where(eq(configDrafts.configDatabaseId, id)))).toBe('config_drafts_one_actor');
     });
 
-    it('upgrades a database at 0007 holding data of every earlier type, and the new delivery kinds work once committed', async () => {
-      const name = `${TEST_DATABASE}_upgrade`;
-      const admin = new Client({ connectionString: 'postgresql://inlet:inlet@127.0.0.1:5433/inlet' });
-      await admin.connect();
-      await admin.query(`drop database if exists ${name}`);
-      await admin.query(`create database ${name}`);
-      // The migrations as they stood before Release 9: 0000 to 0007, and the journal cut there.
-      const source = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../drizzle');
-      const before = await mkdtemp(path.join(tmpdir(), 'inlet-0007-'));
-      await mkdir(path.join(before, 'meta'));
-      const journal = JSON.parse(await readFile(path.join(source, 'meta/_journal.json'), 'utf8')) as { entries: { idx: number; tag: string }[] };
-      journal.entries = journal.entries.filter((entry) => entry.idx <= 7);
-      expect(journal.entries.at(-1)?.tag).toBe('0007_analytics_piece12_name_deletion_files');
-      await writeFile(path.join(before, 'meta/_journal.json'), JSON.stringify(journal));
-      for (const entry of journal.entries) await copyFile(path.join(source, `${entry.tag}.sql`), path.join(before, `${entry.tag}.sql`));
-
-      const old = createDb(`postgresql://inlet:inlet@127.0.0.1:5433/${name}`);
-      try {
-        await migrate(old.db, { migrationsFolder: before, migrationsTable: 'inlet_migrations' });
-        await old.pool.query(`
-          insert into users (id, email, password_hash, display_name) values ('usr_old', 'old@example.com', 'x', 'Old');
-          insert into projects (id, name) values ('prj_old', 'Old');
-          insert into feedback_databases (id, project_id, name) values ('fdb_old', 'prj_old', 'Feedback');
-          insert into crash_databases (id, project_id, name, grouping_version, retention_cap) values ('cdb_old', 'prj_old', 'Crashes', 1, 1000);
-          insert into analytics_databases (id, project_id, name, timezone, max_age_days, max_events, lateness_days, installation_secret)
-            values ('adb_old', 'prj_old', 'Usage', 'UTC', 395, 500000000, 30, 's');
-          insert into invitations (id, token_hash, project_id, role, expires_at) values ('inv_old', 'h', 'prj_old', 'viewer', now() + interval '1 day');
-          insert into slack_notifications (feedback_database_id) values ('fdb_old');
-          insert into notification_deliveries (kind, feedback_database_id) values ('submission_received', 'fdb_old');`);
-
-        await runMigrations(old.db);
-        const kept = await old.pool.query(`
-          select (select count(*) from feedback_databases)::int as feedback, (select count(*) from crash_databases)::int as crash,
-                 (select count(*) from analytics_databases)::int as analytics,
-                 (select config_database_id from invitations where id = 'inv_old') as invitation_scope,
-                 (select config_activity_id from notification_deliveries) as delivery_source,
-                 (select count(*) from slack_notifications)::int as settings`);
-        expect(kept.rows[0]).toEqual({ feedback: 1, crash: 1, analytics: 1, invitation_scope: null, delivery_source: null, settings: 1 });
-
-        // The kinds added inside the migration's transaction are usable after it commits.
-        await old.pool.query(`
-          insert into config_databases (id, project_id, name, refresh_interval_minutes) values ('cfg_old', 'prj_old', 'Config', 60);
-          insert into config_activity (config_database_id, kind, actor_user_id) values ('cfg_old', 'publish', 'usr_old');
-          insert into notification_deliveries (kind, feedback_database_id, config_activity_id)
-            select 'config_published', 'cfg_old', id from config_activity;`);
-        await old.pool.query(`delete from projects where id = 'prj_old'`);
-        const gone = await old.pool.query(`select (select count(*) from config_activity)::int as activity, (select count(*) from notification_deliveries where config_activity_id is not null)::int as deliveries`);
-        expect(gone.rows[0]).toEqual({ activity: 0, deliveries: 0 });
-      } finally {
-        await old.pool.end();
-        await rm(before, { recursive: true, force: true });
-        await admin.query(`drop database if exists ${name}`);
-        await admin.end();
-      }
-    });
-
-    it('applies every migration to a fresh database', async () => {
+    it('applies the baseline to a fresh database', async () => {
       const name = `${TEST_DATABASE}_fresh`;
       const admin = new Client({ connectionString: 'postgresql://inlet:inlet@127.0.0.1:5433/inlet' });
       await admin.connect();

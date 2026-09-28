@@ -153,7 +153,7 @@ async function readPage(ctx: AppContext, store: ReadStore, settings: QuerySettin
       `SELECT event_id, event_name_id, category, toString(local_day) AS day, effective_time, received_time,
               installation_id, toString(installation_kind) AS kind, ephemeral, user_id, session_id,
               platform, os_name, platform_version, runtime_name, runtime_version, app_id, app_version, app_build,
-              locale, environment, country, attribution, experiment_keys, experiment_variants, params,
+              locale, country, attribution, experiment_keys, experiment_variants, params,
               install_age_days, install_age_weeks, install_age_months, clock_corrected, credential_id
        FROM events
        WHERE ${parts.join(' AND ')}

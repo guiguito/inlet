@@ -725,19 +725,18 @@ docker compose up -d --build
 Migrations apply at startup. **Back up the database first** — Inlet does not roll
 migrations back for you.
 
-The schema starts from one baseline migration, `0000_initial_schema`, as of September 25,
-2026. **An installation from before that date cannot be upgraded**: it has the earlier
-migration history and the earlier object store (MinIO). Reinstall it instead, which
-deletes its data:
+Until Inlet's first external installation, each store has one baseline migration, edited in
+place, so a change of schema is not an upgrade: a deployment is reinstalled from scratch,
+which deletes its data. Read the release notes; when they say to reinstall, export what you
+want to keep first (responses, crash reports, config templates), then:
 
 ```bash
 git pull
-docker compose down -v        # removes the database and object-store volumes
-docker volume rm <project>_miniodata 2>/dev/null   # the old store's volume, if left
-docker compose up -d --build
+docker compose --profile analytics down -v   # removes every volume: PostgreSQL, object store, ClickHouse
+docker compose --profile analytics up -d --build
 ```
 
-From the baseline on, migrations are additive: read the release notes before upgrading.
+Drop `--profile analytics` from both commands on a deployment without analytics.
 
 ## Backups and what is where
 

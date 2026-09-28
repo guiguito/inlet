@@ -164,7 +164,6 @@ describe('analytics tools', () => {
     for (const phrase of [
       'the last 30 days by day',
       'end today and include it',
-      'reads `production` only',
       'unique installations',
       'never a sum of daily counts',
       'ISO weeks',

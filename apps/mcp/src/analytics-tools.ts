@@ -24,7 +24,7 @@ const PAGE = 1_000;
  * AN-201: what every query tool's description states, so an agent reads it once per tool.
  */
 const QUERY_SEMANTICS = [
-  'Defaults: the last 30 days by day. Presets (today, yesterday, last7Days, last30Days, last90Days, last12Months = this calendar month and the 11 before it, thisMonth, thisYear) end today and include it, today being computed in the database’s reporting timezone; explicit ranges are { from, to } dates in that zone, both included. A definition that names no `environment` filter reads `production` only.',
+  'Defaults: the last 30 days by day. Presets (today, yesterday, last7Days, last30Days, last90Days, last12Months = this calendar month and the 11 before it, thisMonth, thisYear) end today and include it, today being computed in the database’s reporting timezone; explicit ranges are { from, to } dates in that zone, both included.',
   'Counting (each series names its metric): `installations` counts unique installations (one install of an app on one device or browser profile; server installations, made for events that carry a user ID alone, and the test installation never count, while a background event naming a device installation counts it), `users` unique non-empty user IDs, `events` all events, `perInstallation` events divided by unique installations in the period. A unique count counts each unit once per period, never a sum of daily counts. `*` is any event of a device installation that is not a background event (platform server).',
   'Periods are calendar days, ISO weeks (labelled 2026-W38), months (2026-09) and years in the reporting timezone; hours (at most 7 days) are labelled with the zone’s offset, so a daylight-saving day has 23 or 25. Every series has one point per period, zeros included; a point is `incomplete` when its period contains now or the covered range cuts it.',
   'Every answer covers the storage window and states the range it `covered` (from the oldest day kept to today); a range wholly before the window answers an empty series with notice `range_outside_retention`. An unknown or deleted event answers an empty series. Holds one analytics query slot: `analytics_busy` after ten seconds without one, `query_limit_exceeded` past 30 seconds or the memory limit — then ask for a shorter range or a coarser interval.',
@@ -132,7 +132,7 @@ export function registerAnalyticsTools(server: McpServer, client: InletClient): 
     {
       title: 'Send an analytics test event',
       description:
-        'Sends one `test_event`, category `test`, environment `development`, through the same ingest path an application uses (AN-025), attributed to the database’s test installation. It proves the database accepts events; it counts in no unique, active, new-installation, session or cohort figure, takes no slot of the event-name limit, and appears in get_analytics_live_events within seconds. Answers like ingest: `accepted`, `duplicates`, `rejected`, `warnings`, and the `eventId` sent. Needs Creator or Admin, which a secret key has.',
+        'Sends one `test_event`, category `test`, through the same ingest path an application uses (AN-025), attributed to the database’s test installation. It proves the database accepts events; it counts in no unique, active, new-installation, session or cohort figure, takes no slot of the event-name limit, and appears in get_analytics_live_events within seconds. Answers like ingest: `accepted`, `duplicates`, `rejected`, `warnings`, and the `eventId` sent. Needs Creator or Admin, which a secret key has.',
       inputSchema: { analyticsDatabaseId },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
@@ -144,7 +144,7 @@ export function registerAnalyticsTools(server: McpServer, client: InletClient): 
     {
       title: 'Read the analytics live feed',
       description:
-        'The most recent events the database accepted, newest first, each with its name, effective time (RFC 3339, UTC), installation ID, platform and app version (AN-058). Held in memory: the last 500 events since the server started, all environments, duplicates never repeated; empty after a restart. Returns at most `limit` events per call (500 at most, the whole feed) and a `cursor`: pass it back as `after` to get only the events accepted since, so polling every few seconds shows each event once. Takes no query slot. For stored history use the query tools instead.',
+        'The most recent events the database accepted, newest first, each with its name, effective time (RFC 3339, UTC), installation ID, platform and app version (AN-058). Held in memory: the last 500 events since the server started, duplicates never repeated; empty after a restart. Returns at most `limit` events per call (500 at most, the whole feed) and a `cursor`: pass it back as `after` to get only the events accepted since, so polling every few seconds shows each event once. Takes no query slot. For stored history use the query tools instead.',
       inputSchema: {
         analyticsDatabaseId,
         after: z.string().max(200).optional().describe('The `cursor` a previous call returned. Omit for everything the feed holds.'),
@@ -197,7 +197,7 @@ export function registerAnalyticsTools(server: McpServer, client: InletClient): 
     {
       title: 'Read an analytics event',
       description:
-        'One event (AN-052): its catalog entry, categories, and params with observed types, descriptions and the ten most frequent values of each over the last seven days, today included, in every environment. Works for a hidden event too. Holds an analytics query slot for the top values. For its counts over time use query_analytics_trends.',
+        'One event (AN-052): its catalog entry, categories, and params with observed types, descriptions and the ten most frequent values of each over the last seven days, today included. Works for a hidden event too. Holds an analytics query slot for the top values. For its counts over time use query_analytics_trends.',
       inputSchema: { analyticsDatabaseId, name: eventName },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -209,11 +209,11 @@ export function registerAnalyticsTools(server: McpServer, client: InletClient): 
     {
       title: 'List the values of an analytics filter',
       description:
-        'Distinct values to filter or split by, without counts, sorted, at most 1,000 (`truncated` when there are more) (AN-057). Either `dimension` — platform, platformVersion, runtime, app, appVersion, environment, country, attribution, installAttribution, category, or experiment (the experiment keys; with `key`, that experiment’s variants) — over the whole storage window; or `param` with `event`: that param’s values on that event over the last seven days. Holds an analytics query slot.',
+        'Distinct values to filter or split by, without counts, sorted, at most 1,000 (`truncated` when there are more) (AN-057). Either `dimension` — platform, platformVersion, runtime, app, appVersion, country, attribution, installAttribution, category, or experiment (the experiment keys; with `key`, that experiment’s variants) — over the whole storage window; or `param` with `event`: that param’s values on that event over the last seven days. Holds an analytics query slot.',
       inputSchema: {
         analyticsDatabaseId,
         dimension: z
-          .enum(['platform', 'platformVersion', 'runtime', 'app', 'appVersion', 'environment', 'country', 'attribution', 'installAttribution', 'category', 'experiment'])
+          .enum(['platform', 'platformVersion', 'runtime', 'app', 'appVersion', 'country', 'attribution', 'installAttribution', 'category', 'experiment'])
           .optional(),
         key: z.string().max(40).optional().describe('With dimension experiment: the experiment whose variants to list.'),
         param: z.string().max(40).optional(),
@@ -234,7 +234,7 @@ export function registerAnalyticsTools(server: McpServer, client: InletClient): 
       title: 'Read the analytics Overview',
       description: [
         'The home screen of an analytics database (AN-140 to AN-144), one answer holding one analytics query slot. Read it first to see how the product is used.',
-        'Defaults: the last 30 days (`preset`, or `from` and `to` dates in the reporting timezone, both included, at most 1,000 days); presets (today, yesterday, last7Days, last30Days, last90Days, last12Months, thisMonth, thisYear) end today and include it. Every app, every client platform (web, ios, android, macos, windows, linux, other; never server) and environment `production` unless `apps`, `platforms` or `environments` say otherwise. `unit` is `installation` (the default) or `user`, and changes the active figures only.',
+        'Defaults: the last 30 days (`preset`, or `from` and `to` dates in the reporting timezone, both included, at most 1,000 days); presets (today, yesterday, last7Days, last30Days, last90Days, last12Months, thisMonth, thisYear) end today and include it. Every app and every client platform (web, ios, android, macos, windows, linux, other; never server) unless `apps` or `platforms` say otherwise. `unit` is `installation` (the default) or `user`, and changes the active figures only.',
         'Figures, each with `value`, `previous` (the previous period: the range of the same length just before, or for anchored figures the same figure an hour, a day, 7 or 30 days earlier; null when that period begins before the oldest event kept, never computed from part of it) and `covered` (the range the storage window holds for it). Anchored to now, whatever the range: `activeLastHour` (units with an event in the last 60 minutes, by event time; previous the 60 before), `dailyActiveLastDay` (yesterday), `dailyActiveToday` (today so far; previous yesterday up to the same time), `weeklyActive` and `monthlyActive` (the 7 and 30 days ending today), `stickiness` (mean daily active units over those 30 days ÷ monthly active units). Over the range: `newInstallations` (installations installed then, by their install day and install dimensions; never ephemeral, server or test ones), `sessions` (distinct session IDs of stored app_started events, each on the day, version and dimensions of its first app_started), `d1`, `d7`, `d30` (of installations installed in the range whose Nth day after installing has ended, the share that sent app_started on that day; `installations` is the denominator, null value while none has), each with a `perDay` where relevant.',
         'Active means an event that is not a background event (platform server) from a device installation: server installations (a user ID without an installation ID) and the test installation count in no active or unique figure, and ephemeral installations count everywhere except new installations and retention. The user unit counts distinct non-empty user IDs of the same events.',
         '`crashFree`: sessions whose app_started falls in the range and reports a crash module (crashReporting true), `rate` = 1 − sessions flagged by a session_crashed (however late it arrived) ÷ sessions, overall and for the five app versions with the most sessions; `measured` false ("not measured") when no session of it reported a crash module, `lowConfidence` below 100 sessions. `shares`: installations active in the last 7 days by app version, platform and country, each counted once by its latest dimensions, ten values and Other, adding up to 1. `topEvents`: the ten events with the most occurrences in the last 24 hours, hidden ones excluded, from the catalog as of `computedAt`. `dailyActive`: daily active units over the range, a point a day, `incomplete` for today; `versionsFirstSeen`: the day each app version was first seen, for markers. `notices`: `no_events` (nothing has arrived yet) or `no_app_started` (events but no app_started in 24 hours, so sessions, retention and crash-free sessions have no data).',
@@ -247,12 +247,11 @@ export function registerAnalyticsTools(server: McpServer, client: InletClient): 
         to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
         apps: z.array(z.string().max(256)).max(50).optional().describe('App IDs; every app when omitted.'),
         platforms: z.array(z.enum(['web', 'ios', 'android', 'macos', 'windows', 'linux', 'other'])).max(7).optional().describe('Client platforms; every one when omitted.'),
-        environments: z.array(z.string().max(256)).max(50).optional().describe('`production` when omitted.'),
         unit: z.enum(['installation', 'user']).optional(),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ analyticsDatabaseId: id, preset, from, to, apps, platforms, environments, unit }) =>
+    async ({ analyticsDatabaseId: id, preset, from, to, apps, platforms, unit }) =>
       guard(async () => {
         const query = new URLSearchParams();
         if (preset) query.set('preset', preset);
@@ -260,7 +259,6 @@ export function registerAnalyticsTools(server: McpServer, client: InletClient): 
         if (to) query.set('to', to);
         for (const app of apps ?? []) query.append('app', app);
         for (const platform of platforms ?? []) query.append('platform', platform);
-        for (const environment of environments ?? []) query.append('environment', environment);
         if (unit) query.set('unit', unit);
         const qs = query.toString();
         return json(await client.request('GET', `/v1/analytics-databases/${id}/overview${qs ? `?${qs}` : ''}`));
@@ -272,7 +270,7 @@ export function registerAnalyticsTools(server: McpServer, client: InletClient): 
     {
       title: 'Chart analytics trends',
       description: [
-        'One to five series over a range (AN-060 to AN-067), the same definition as POST /queries/trends: each series an event name or `*`, a metric (events, installations, users, perInstallation), optional filters and a label; global `filters` apply to every series. Filters: fields platform, platformVersion, runtime, app, appVersion, environment, country, userId, installationId, attribution, installAttribution, category, installAgeDays/Weeks/Months (between), experiment and param (with `key`); operators is, isNot, isSet, isNotSet, startsWith (versions), contains, gt, lt (params). Same field → or, different fields → and.',
+        'One to five series over a range (AN-060 to AN-067), the same definition as POST /queries/trends: each series an event name or `*`, a metric (events, installations, users, perInstallation), optional filters and a label; global `filters` apply to every series. Filters: fields platform, platformVersion, runtime, app, appVersion, country, userId, installationId, attribution, installAttribution, category, installAgeDays/Weeks/Months (between), experiment and param (with `key`); operators is, isNot, isSet, isNotSet, startsWith (versions), contains, gt, lt (params). Same field → or, different fields → and.',
         'A `split` (one series only) by a dimension, an experiment or a param key answers a line per value for the ten values with the largest metric over the range, then `Other` (every remaining value as one set) and `None` (events without a value, only when non-zero). This is how to compare versions or read an experiment.',
         QUERY_SEMANTICS,
         'Answers `series`, each with `label`, `event`, `metric`, `value`/`group` for a split, `covered`, `notice` and `points` (start, label, value, incomplete). `format` csv or json returns the export instead: one row per period and series.',

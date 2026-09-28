@@ -39,7 +39,7 @@ function overviewAnswer(timezone: string) {
     unit: 'installation',
     timezone,
     keptFrom: '2026-09-01',
-    filters: { apps: [], platforms: [], environments: ['production'] },
+    filters: { apps: [], platforms: [] },
     figures: {
       activeLastHour: figure(3),
       dailyActiveLastDay: figure(10),

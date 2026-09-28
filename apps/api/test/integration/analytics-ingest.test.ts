@@ -40,7 +40,6 @@ type Row = {
   installation_kind: string;
   user_id: string;
   country: string;
-  environment: string;
   platform: string;
   params: Record<string, string>;
   install_age_days: number | null;
@@ -98,7 +97,7 @@ function sender(h: Harness, db: { id: string; key: string }) {
 async function storedRows(h: Harness, databaseKey: number): Promise<Row[]> {
   return h.ctx.eventStore!.query<Row>(
     `SELECT toString(event_id) AS event_id, event_name_id, category, toString(installation_id) AS installation_id,
-            toString(installation_kind) AS installation_kind, user_id, country, environment, platform, params,
+            toString(installation_kind) AS installation_kind, user_id, country, platform, params,
             install_age_days, install_age_weeks, install_age_months, clock_corrected,
             toUnixTimestamp64Milli(effective_time) AS effective_ms, toUnixTimestamp64Milli(received_time) AS received_ms,
             toString(local_day) AS local_day
@@ -220,6 +219,11 @@ describe('analytics ingest', () => {
         warnings: [],
       });
       expect(await storedRows(h, db.databaseKey)).toHaveLength(98);
+    });
+
+    it('refuses an environment label as an unknown field: an environment is a project (Foundations section 17)', async () => {
+      const response = await send([event(), { ...event(), environment: 'production' } as never]);
+      expect(response.json()).toMatchObject({ accepted: 1, rejected: [{ index: 1, code: 'unknown_field', field: 'environment' }] });
     });
 
     it('refuses a batch of 101 events, one over 256 KiB, and a malformed body whole', async () => {
@@ -727,12 +731,12 @@ describe('analytics ingest', () => {
   });
 
   describe('the test event and the live feed (AN-025, AN-037, AN-058)', () => {
-    it('stores a test_event in development under the test installation, and shows it in the live feed', async () => {
+    it('stores a test_event under the test installation, and shows it in the live feed', async () => {
       const response = await asAdmin(h, 'POST', `/v1/analytics-databases/${db.id}/test-event`);
       expect(response.statusCode, response.body).toBe(200);
       expect(response.json()).toMatchObject({ accepted: 1, duplicates: 0, rejected: [], eventId: expect.any(String) });
       const [row] = await storedRows(h, db.databaseKey);
-      expect(row).toMatchObject({ category: 'test', environment: 'development', installation_kind: 'test', installation_id: testInstallationId(db.secret) });
+      expect(row).toMatchObject({ category: 'test', installation_kind: 'test', installation_id: testInstallationId(db.secret) });
       expect(await installation(h, db.databaseKey, row!.installation_id)).toMatchObject({ kind: 'test' });
 
       const live = await asAdmin(h, 'GET', `/v1/analytics-databases/${db.id}/live`);

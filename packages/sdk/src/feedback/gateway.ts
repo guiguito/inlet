@@ -1,5 +1,5 @@
 import { isReactNativeFile, sniffImageMediaType } from './controller.js';
-import { capabilities, timeoutSignal } from '../health.js';
+import { timeoutSignal } from '../health.js';
 import { PendingQueue, type PendingSubmission, type SendOutcome } from './transport.js';
 import type {
   FeedbackError,
@@ -51,14 +51,10 @@ export type HttpGatewayOptions = {
 
 const INTENT_TOKEN_HEADER = 'x-inlet-intent-token';
 
-/** FR-210: what `/v1/health` must name for this deployment to serve a browser client. */
-export const CROSS_ORIGIN_CAPABILITY = 'feedback-cross-origin';
-
 export class HttpGateway implements FeedbackGateway {
   readonly queue: PendingQueue;
   private readonly base: string;
   private readonly upload_: Uploader;
-  private warnedServer = false;
   private form: Promise<Result<PublishedForm>> | null = null;
 
   constructor(private readonly options: HttpGatewayOptions) {
@@ -107,12 +103,10 @@ export class HttpGateway implements FeedbackGateway {
   }
 
   private async readForm(): Promise<Result<PublishedForm>> {
-    await this.checkServer();
     return this.json<PublishedForm>('GET', `${this.db}/form`, this.headers());
   }
 
   async createIntent(formVersion: number): Promise<Result<SubmissionIntent>> {
-    await this.checkServer();
     return this.json<SubmissionIntent>('POST', `${this.db}/submission-intents`, {
       ...this.headers(),
       'content-type': 'application/json',
@@ -238,7 +232,6 @@ export class HttpGateway implements FeedbackGateway {
 
   /** One finalization attempt, mapped onto what the queue does next (FR-201). */
   private async send(pending: PendingSubmission): Promise<SendOutcome> {
-    const identity = await this.checkServer();
     const url = `${this.db}/submission-intents/${pending.intentId}/submit`;
     let response: Response;
     try {
@@ -249,8 +242,7 @@ export class HttpGateway implements FeedbackGateway {
           [INTENT_TOKEN_HEADER]: pending.token,
           'content-type': 'application/json',
         },
-        // FR-204: the identity only to a deployment whose health lists `identity`.
-        body: JSON.stringify({ ...pending.payload, ...(identity && pending.identity ? pending.identity : {}) }),
+        body: JSON.stringify({ ...pending.payload, ...(pending.identity ?? {}) }),
         ...this.timeout(),
       });
     } catch (error) {
@@ -321,30 +313,6 @@ export class HttpGateway implements FeedbackGateway {
   private timeout(): { signal?: AbortSignal } {
     const { signal } = timeoutSignal(this.options.timeoutMs ?? 20_000);
     return signal ? { signal } : {};
-  }
-
-  /**
-   * FR-210, FD-016: what the deployment can do, from the probe every module shares, asked
-   * again after a failed probe. Returns whether the identity fields may be sent.
-   *
-   * A deployment older than Release 7 serves the four collection routes but refuses a
-   * browser's preflight, which reaches `fetch` as an indistinguishable network failure.
-   * Saying so once through `debug` is the difference between "upgrade your Inlet" and an
-   * afternoon spent looking at the wrong thing.
-   */
-  private async checkServer(): Promise<boolean> {
-    const caps = await capabilities(this.base, this.options.fetch, this.options.timeoutMs ?? 20_000);
-    if (caps === null) {
-      this.options.debug('Inlet is not reachable for a health check.');
-      return false;
-    }
-    if (!caps.includes(CROSS_ORIGIN_CAPABILITY) && !this.warnedServer) {
-      this.warnedServer = true;
-      this.options.debug(
-        'This Inlet deployment predates Release 7; it does not answer feedback requests from another origin. Upgrade the server, or serve your application from the same origin.',
-      );
-    }
-    return caps.includes('identity');
   }
 }
 

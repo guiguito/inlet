@@ -344,7 +344,7 @@ export async function deleteEventName(ctx: AppContext, database: AnalyticsDataba
 export const FILTER_VALUES_MAX = 1_000;
 
 export const FILTER_VALUE_DIMENSIONS = [
-  'platform', 'platformVersion', 'runtime', 'app', 'appVersion', 'environment', 'country', 'attribution', 'installAttribution', 'category', 'experiment',
+  'platform', 'platformVersion', 'runtime', 'app', 'appVersion', 'country', 'attribution', 'installAttribution', 'category', 'experiment',
 ] as const;
 export type FilterValueDimension = (typeof FILTER_VALUE_DIMENSIONS)[number];
 
@@ -354,7 +354,6 @@ const DIMENSION_COLUMNS: Record<Exclude<FilterValueDimension, 'installAttributio
   runtime: 'runtime_name',
   app: 'app_id',
   appVersion: 'app_version',
-  environment: 'environment',
   country: 'country',
   attribution: 'attribution',
   category: 'category',
@@ -572,7 +571,7 @@ async function refreshFigures(
 
 // --- The event-name deletion job (AN-056, 9.4) -----------------------------------------------------------
 
-/** The event-store tables that hold rows by event-name ID (piece 1; the session rollup, 0004, AN-035). */
+/** The event-store tables that hold rows by event-name ID (piece 1; the session rollup, AN-035). */
 export const NAME_TABLES = ['events', 'installation_first', 'user_first', 'session_rollup'] as const;
 
 /**

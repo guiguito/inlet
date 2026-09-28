@@ -56,7 +56,6 @@ export type OverviewQuery = {
   /** Every client platform when empty: `server` is never a client platform. */
   platforms: string[];
   /** `production` when empty (AN-064). */
-  environments: string[];
   unit: OverviewUnit;
 };
 
@@ -73,7 +72,7 @@ export type OverviewAnswer = {
   timezone: string;
   /** The oldest day the database keeps (AN-065), null while it holds no event. */
   keptFrom: string | null;
-  filters: { apps: string[]; platforms: string[]; environments: string[] };
+  filters: { apps: string[]; platforms: string[] };
   figures: {
     activeLastHour: TimeFigure;
     dailyActiveLastDay: Figure;
@@ -107,7 +106,7 @@ export const RETENTION_DAYS = [1, 7, 30] as const;
  * The days either side of a range over which sessions' `app_started` are read: a session lasts
  * at most 24 hours (section 4), so two `app_started` of one session more than a day apart come
  * only from a client clock error. The read is widened to the whole ISO weeks those days fall in,
- * the grain of `session_rollup` (0004), so the rollup and the events answer alike.
+ * the grain of `session_rollup`, so the rollup and the events answer alike.
  */
 const SESSION_MARGIN_DAYS = 1;
 const HOUR_MS = 3_600_000;
@@ -160,12 +159,11 @@ function days(window: { from: string; to: string }): string[] {
   return out;
 }
 
-/** AN-140's filters as 9.2 filters: app and platform only when named, environment `production` by default. */
-export function overviewFilters(query: Pick<OverviewQuery, 'apps' | 'platforms' | 'environments'>): AnalyticsFilter[] {
+/** AN-140's filters as 9.2 filters: app and platform only when named. */
+export function overviewFilters(query: Pick<OverviewQuery, 'apps' | 'platforms'>): AnalyticsFilter[] {
   return [
     ...(query.apps.length > 0 ? [{ field: 'app' as const, op: 'is' as const, values: query.apps }] : []),
     ...(query.platforms.length > 0 ? [{ field: 'platform' as const, op: 'is' as const, values: query.platforms }] : []),
-    { field: 'environment', op: 'is', values: query.environments.length > 0 ? query.environments : ['production'] },
   ];
 }
 
@@ -201,8 +199,8 @@ export function sessionWeeks(from: string, to: string): { first: string; last: s
   return { first: mondayOf(addDays(from, -SESSION_MARGIN_DAYS)), last: mondayOf(addDays(to, SESSION_MARGIN_DAYS)) };
 }
 
-/** The values of a session's first `app_started` (after the two times that order it, as 0001's "first"). */
-const SESSION_FIRST = 'f.3 AS day, f.4 AS app_id, f.5 AS platform, f.6 AS environment, f.7 AS app_version, f.8 AS crash_reporting';
+/** The values of a session's first `app_started` (after the two times that order it, as the store's "first"). */
+const SESSION_FIRST = 'f.3 AS day, f.4 AS app_id, f.5 AS platform, f.6 AS app_version, f.7 AS crash_reporting';
 
 /**
  * AN-043, AN-046: sessions are the distinct session IDs of stored `app_started` events of device
@@ -212,7 +210,7 @@ const SESSION_FIRST = 'f.3 AS day, f.4 AS app_id, f.5 AS platform, f.6 AS enviro
  * test the session's own dimensions, those of that first `app_started`. Rows:
  * `(session_id, day, app_version, crash_reporting)` for sessions whose day is in the window.
  *
- * Read from `session_rollup` (0004), an internal rollup (AN-035) holding about one row per session
+ * Read from `session_rollup`, an internal rollup (AN-035) holding about one row per session
  * (`rollupSessions`), where grouping every `app_started` of the range by session
  * took seconds and gigabytes at the reference workload (DECISIONS 33.12c); from the events while
  * an erasure is pending, since the rollup keeps no received time to hide exactly the rows received
@@ -226,7 +224,7 @@ export function sessionsSource(scope: FilterScope, filters: AnalyticsFilter[], p
   const first = p.add(weeks.first, 'Date');
   const last = p.add(weeks.last, 'Date');
   const perSession = scope.skip.erasing
-    ? `SELECT session_id, min((received_time, effective_time, local_day, app_id, platform, environment, app_version, params['crashReporting'] = 'true')) AS f
+    ? `SELECT session_id, min((received_time, effective_time, local_day, app_id, platform, app_version, params['crashReporting'] = 'true')) AS f
        FROM events
        WHERE database_key = ${key} AND ${started}
          AND installation_kind = 'device' AND platform != 'server'
@@ -388,7 +386,7 @@ export async function overviewFigures(store: ReadStore, slot: QuerySettings, inp
   // --- New installations and D1, D7, D30, over the range and the one before, when available.
   // AN-140, AN-107: D1, D7 and D30 are the standard Retention cohort by day, computed by the one
   // retention computation cohorts use (piece 8's `cohortCounts`): a member returned on day N when
-  // its installation sent `app_started` on that local day, on any platform and in any environment
+  // its installation sent `app_started` on that local day, on any platform
   // (population filters do not apply to returns, AN-103); a background `app_started` counts (AN-047).
   // Its members per day (N = 0) are the new installations: the install start's members, device
   // installations that are not ephemeral, filtered by their install dimensions (AN-031, AN-047).
@@ -424,7 +422,7 @@ export async function overviewFigures(store: ReadStore, slot: QuerySettings, inp
 
   // --- Shares of the installations active in the last 7 days, by their latest dimensions.
   const shares = new SqlParams();
-  // The latest dimensions from `installation_index` (0004, `indexRecords`), for the installations
+  // The latest dimensions from `installation_index` (`indexRecords`), for the installations
   // active in the week only: the same records as `installations`' states, without deserialising
   // every installation's (DECISIONS 33.12c: 1.3 GiB at 917,000).
   const sharesRead = store.query<{ appVersion: string; platform: string; country: string; n: string; gv: number; gp: number }>(
@@ -438,7 +436,7 @@ export async function overviewFigures(store: ReadStore, slot: QuerySettings, inp
     settings,
   );
 
-  // --- Versions first seen (AN-142), from `version_first` (0002), within the range.
+  // --- Versions first seen (AN-142), from `version_first`, within the range.
   const first = new SqlParams();
   const firstRead = store.query<{ v: string; d: string }>(
     `SELECT app_version AS v, toString(min(first)) AS d FROM version_first
@@ -616,7 +614,7 @@ export async function runOverview(
     unit: query.unit,
     timezone,
     keptFrom: parts.keptFrom,
-    filters: { apps: query.apps, platforms: query.platforms, environments: filters.find((filter) => filter.field === 'environment')!.values as string[] },
+    filters: { apps: query.apps, platforms: query.platforms },
     figures: parts.figures,
     crashFree: parts.crashFree,
     shares: parts.shares,

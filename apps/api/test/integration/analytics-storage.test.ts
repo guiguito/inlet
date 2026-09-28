@@ -385,7 +385,7 @@ describe('storage and data health', () => {
       await h.ctx.db.update(analyticsDatabases).set({ maxEvents: 100_000 }).where(eq(analyticsDatabases.id, db.id));
       await runAnalyticsRetention(h.ctx, NOW);
       expect((await row(h, db)).keptFrom).toBe(addDays(MONDAY, -14));
-      const answer = await runOverview(h.ctx, await row(h, db), { kind: 'user', userId: 'storage-test', email: 's@example.com' }, { range: { preset: 'last90Days' }, apps: [], platforms: [], environments: [], unit: 'installation' }, NOW);
+      const answer = await runOverview(h.ctx, await row(h, db), { kind: 'user', userId: 'storage-test', email: 's@example.com' }, { range: { preset: 'last90Days' }, apps: [], platforms: [], unit: 'installation' }, NOW);
       expect(answer.versionsFirstSeen).toEqual([
         { version: '1.0.0', day: addDays(MONDAY, -21) },
         { version: '2.0.0', day: MONDAY },

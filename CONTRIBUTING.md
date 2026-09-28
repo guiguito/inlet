@@ -47,10 +47,6 @@ no system log tables). The tests use its `inlet_test` database and the end-to-en
 `inlet_e2e`. To use analytics with `npm run dev`, uncomment the `INLET_CLICKHOUSE_*` lines
 in `.env`.
 
-A local event store seeded before ClickHouse migration 0004 lacks its internal rollups, which
-Release 8 ships without a backfill: drop the local database (`.dev/bin/clickhouse client --port 9124
---user inlet --password inlet --query "DROP DATABASE inlet"`) and restart the API, which recreates it.
-
 The suites, one at a time:
 
 ```bash
@@ -120,17 +116,28 @@ they point at [docs/PRD.md](docs/PRD.md). If you implement something the PRD cov
 cite it. If you implement something it does not cover, say so in the pull request so
 the PRD can catch up.
 
-**Migrations are generated, then named.** `npm run db:generate` after a schema change,
-then rename the file to something a human can read (`0005_saved_filters.sql`) and
-update the tag in `apps/api/drizzle/meta/_journal.json` to match. Migrations are
-additive: adding tables and columns, not rewriting or dropping data.
+**One baseline migration per store, edited in place.** Until Inlet's first external
+installation, PostgreSQL and ClickHouse each have exactly one migration that creates the
+whole schema, and every deployment is reinstalled from scratch when it changes: there is no
+upgrade path, backfill or compatibility shim to write. For PostgreSQL, change
+`apps/api/src/db/schema.ts`, delete `apps/api/drizzle/`, and run `npx drizzle-kit generate --name
+initial_schema` in `apps/api` to regenerate `0000_initial_schema.sql`, its snapshot and the
+journal. Then
+drop your local databases (below). The rule and its end are in
+[DECISIONS.md](docs/DECISIONS.md) §35.
 
-**ClickHouse migrations are written by hand.** Drizzle manages PostgreSQL only. The event
-store's schema is numbered SQL files in `apps/api/clickhouse/` (`0002_something.sql`), applied
-in order at start and recorded in its `inlet_migrations` table. A file may hold several
-statements separated by `;`; each must be idempotent (`IF NOT EXISTS`), because a file
-interrupted part-way is applied again from the start. Every value in a query is a bound
-parameter (`{name:Type}`), never text pasted into the SQL.
+**The ClickHouse baseline is written by hand.** Drizzle manages PostgreSQL only. The event
+store's schema is `apps/api/clickhouse/0001_events.sql`, applied at start and recorded in its
+`inlet_migrations` table. It holds several statements separated by `;`; each must be
+idempotent (`IF NOT EXISTS`), because a file interrupted part-way is applied again from the
+start. Every value in a query is a bound parameter (`{name:Type}`), never text pasted into the
+SQL.
+
+After a change to either baseline, drop the local databases and let the API and the test
+suites recreate them: the PostgreSQL databases `inlet`, `inlet_test*` and `inlet_e2e*` on port
+5433 (recreate an empty `inlet` for `npm run dev`), and the ClickHouse databases of the same
+names (`.dev/bin/clickhouse client --port 9124 --user inlet --password inlet --query "DROP
+DATABASE inlet_test SYNC"`, and so on).
 
 **Match the surrounding code.** This codebase comments the *why*, not the *what*, and
 it is fairly consistent about it. A comment explaining that a loop iterates is noise; a
@@ -231,9 +238,10 @@ Commit the result alongside a route or schema change.
 ## Publishing `inlet-sdk`
 
 The SDK is the one package in this repository that ships to a registry. It is versioned
-independently of the server, because an integrator upgrades the two on their own schedule;
-the compatibility check is at runtime, where the SDK reads `capabilities` from `/v1/health`
-and warns if a deployment predates the capability it is reporting to.
+independently of the server. It matches the server of the same commit: until the first
+external installation there is no compatibility with older servers to keep. The analytics
+and config modules read `capabilities` from `/v1/health` to learn whether a deployment serves
+them, which depends on its configuration, not on its version.
 
 ```
 npm version <patch|minor|major> -w inlet-sdk   # tag the SDK, not the repo

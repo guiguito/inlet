@@ -134,12 +134,10 @@ describe('cross-origin collection', () => {
     expect(wrongKey.statusCode).toBe(401);
     expect(wrongKey.headers['access-control-allow-origin']).toBe('*');
 
-    // FD-013: the SDK reads this before its first send to tell an old deployment from an
-    // unreachable one, so it has to be readable cross-origin too.
+    // FD-013: the analytics and config modules read this before they send, so it has to be
+    // readable cross-origin too.
     const health = await h.app.inject({ method: 'GET', url: '/v1/health' });
     expect(health.headers['access-control-allow-origin']).toBe('*');
-    // FR-210: and it has to say that this deployment answers feedback cross-origin.
-    expect(health.json().capabilities).toContain('feedback-cross-origin');
   });
 
   /**

@@ -25,8 +25,8 @@ type RandomSource = (bytes: Uint8Array) => void;
  *   `IDENTITY_KEYS.installationId` in the storage, which the analytics module creates or
  *   adopts and a config module may create first. `installationId` below is the field the
  *   crash and feedback modules attach, which only an enabled analytics client fills, so that a
- *   published 0.2.x module bundled beside a config module never attaches a config-created ID.
- *   The modules of this version decide by `analyticsEnabled`, never by an ID being present.
+ *   crash report or a submission never carries a config-created ID. The modules decide by
+ *   `analyticsEnabled`, never by an ID being present.
  * - **crash flags** (AN-151): raised by the crash module, recorded in the storage
  *   synchronously where it can, and sent by the analytics module as `session_crashed`.
  *
@@ -330,17 +330,7 @@ const SLOT = Symbol.for('inlet-sdk.identity');
 export function sharedIdentity(): Identity {
   const holder = globalThis as unknown as { [SLOT]?: Identity };
   const current = holder[SLOT];
-  if (!current) return (holder[SLOT] = new Identity());
-  // An application can bundle two versions of the package, and an older one's crash module
-  // (0.2.x) may have created the identity first, without the methods this version calls.
-  // Upgraded in place rather than replaced, so the older module keeps sharing it: its
-  // fields (session, user ID, attached installation ID) mean the same here.
-  if (Object.getOwnPropertyNames(Identity.prototype).some((name) => typeof (current as unknown as Record<string, unknown>)[name] !== 'function')) {
-    const fresh = new Identity() as unknown as Record<string, unknown>;
-    for (const key of Object.keys(fresh)) if (!(key in current)) (current as unknown as Record<string, unknown>)[key] = fresh[key];
-    Object.setPrototypeOf(current, Identity.prototype);
-  }
-  return current;
+  return current ?? (holder[SLOT] = new Identity());
 }
 
 /** Tests start each case with a fresh identity. */

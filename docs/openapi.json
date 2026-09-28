@@ -4,7 +4,7 @@
     "title": "Inlet API",
     "version": "1.0.0",
     "summary": "The self-hosted feedback collector.",
-    "description": "Inlet separates form definition from form rendering and response storage. Your\napplication fetches a published form definition, renders it however it likes, and\nposts the answers back in one call.\n\n## Collecting feedback in four calls\n\n```bash\nBASE=http://localhost:3000\nKEY=ipk_your_publishable_client_key\nDB=fdb_your_feedback_database_id\n\n# 1. Read the published form\ncurl -s \"$BASE/v1/feedback-databases/$DB/form\" -H \"Authorization: Bearer $KEY\"\n\n# 2. Open a submission intent\ncurl -s -X POST \"$BASE/v1/feedback-databases/$DB/submission-intents\" \\\n  -H \"Authorization: Bearer $KEY\"\n\n# 3. Optionally attach a screenshot\ncurl -s -X POST \"$BASE/v1/feedback-databases/$DB/submission-intents/$INTENT/attachments\" \\\n  -H \"Authorization: Bearer $KEY\" -H \"X-Inlet-Intent-Token: $TOKEN\" \\\n  -F questionId=el_xxxxxxxxxxxx -F file=@screenshot.png\n\n# 4. Submit everything at once\ncurl -s -X POST \"$BASE/v1/feedback-databases/$DB/submission-intents/$INTENT/submit\" \\\n  -H \"Authorization: Bearer $KEY\" -H \"X-Inlet-Intent-Token: $TOKEN\" \\\n  -H 'content-type: application/json' \\\n  -d '{\"formVersion\":1,\"answers\":{\"el_xxxxxxxxxxxx\":{\"value\":\"It works\"}}}'\n```\n\n## Two kinds of key\n\nA **publishable client key** (`ipk_…`) is safe to embed in a browser or mobile\napp. It authorizes only the four calls above.\n\nA **secret server key** (`isk_…`) carries project Admin authority: it can read\nand export submissions, manage forms, and delete data within its own project.\nKeep it on a server. It is shown once, when you create it.\n\nSend either as `Authorization: Bearer <key>`. The management interface uses a\nsession cookie instead, obtained from `POST /v1/auth/sign-in`.\n\n## Answers\n\nAnswers are keyed by stable question ID. The shape follows the question type in\nthe pinned form version, so you never repeat the type:\n\n| Question type | Answer |\n| --- | --- |\n| single-select choice | `{\"optionId\": \"op_…\"}` |\n| multi-select choice | `{\"optionIds\": [\"op_…\", \"op_…\"]}` |\n| single- or multi-line text | `{\"value\": \"…\"}` |\n| email | `{\"value\": \"someone@example.com\"}` |\n| screenshot upload | `{\"attachmentIds\": [\"att_…\"]}` |\n\nOmit a question entirely to leave an optional question unanswered. An empty\nstring never satisfies a required question.\n\n## Retrying safely\n\nEvery submission starts with a server-issued intent, which makes retries safe.\nRepeating a finalization with the same payload returns the original result;\nrepeating it with a different payload is a conflict and stores nothing; and a\nvalidation failure leaves the intent usable so you can correct and resend.\n\n## Limits\n\n- `clientContext`: 16384 bytes serialized as UTF-8.\n- Screenshots: JPEG, PNG or WebP, 10 MB and 25 megapixels per file, 5 per submission, 10 uploads per intent. Animated images are rejected.\n- Every accepted image is re-encoded to WebP and brought inside 2 MB of storage, giving up quality before pixels. The width, height and bytes in an upload response describe what was stored, which may be smaller than what was sent.\n- Security rate limits apply to sign-in, intent creation, uploads and\n  finalization. They are not configurable.\n\n## Errors\n\nEvery failure returns `{\"error\":{\"code\",\"message\",\"details?\"}}`. The `code` is\nstable and safe to branch on; `details` carries `questionId` for answer problems\nand `path` for request-shape problems.",
+    "description": "Inlet separates form definition from form rendering and response storage. Your\napplication fetches a published form definition, renders it however it likes, and\nposts the answers back in one call.\n\n## Collecting feedback in four calls\n\n```bash\nBASE=http://192.168.0.19:3000\nKEY=ipk_your_publishable_client_key\nDB=fdb_your_feedback_database_id\n\n# 1. Read the published form\ncurl -s \"$BASE/v1/feedback-databases/$DB/form\" -H \"Authorization: Bearer $KEY\"\n\n# 2. Open a submission intent\ncurl -s -X POST \"$BASE/v1/feedback-databases/$DB/submission-intents\" \\\n  -H \"Authorization: Bearer $KEY\"\n\n# 3. Optionally attach a screenshot\ncurl -s -X POST \"$BASE/v1/feedback-databases/$DB/submission-intents/$INTENT/attachments\" \\\n  -H \"Authorization: Bearer $KEY\" -H \"X-Inlet-Intent-Token: $TOKEN\" \\\n  -F questionId=el_xxxxxxxxxxxx -F file=@screenshot.png\n\n# 4. Submit everything at once\ncurl -s -X POST \"$BASE/v1/feedback-databases/$DB/submission-intents/$INTENT/submit\" \\\n  -H \"Authorization: Bearer $KEY\" -H \"X-Inlet-Intent-Token: $TOKEN\" \\\n  -H 'content-type: application/json' \\\n  -d '{\"formVersion\":1,\"answers\":{\"el_xxxxxxxxxxxx\":{\"value\":\"It works\"}}}'\n```\n\n## Two kinds of key\n\nA **publishable client key** (`ipk_…`) is safe to embed in a browser or mobile\napp. It authorizes only the four calls above.\n\nA **secret server key** (`isk_…`) carries project Admin authority: it can read\nand export submissions, manage forms, and delete data within its own project.\nKeep it on a server. It is shown once, when you create it.\n\nSend either as `Authorization: Bearer <key>`. The management interface uses a\nsession cookie instead, obtained from `POST /v1/auth/sign-in`.\n\n## Answers\n\nAnswers are keyed by stable question ID. The shape follows the question type in\nthe pinned form version, so you never repeat the type:\n\n| Question type | Answer |\n| --- | --- |\n| single-select choice | `{\"optionId\": \"op_…\"}` |\n| multi-select choice | `{\"optionIds\": [\"op_…\", \"op_…\"]}` |\n| single- or multi-line text | `{\"value\": \"…\"}` |\n| email | `{\"value\": \"someone@example.com\"}` |\n| screenshot upload | `{\"attachmentIds\": [\"att_…\"]}` |\n\nOmit a question entirely to leave an optional question unanswered. An empty\nstring never satisfies a required question.\n\n## Retrying safely\n\nEvery submission starts with a server-issued intent, which makes retries safe.\nRepeating a finalization with the same payload returns the original result;\nrepeating it with a different payload is a conflict and stores nothing; and a\nvalidation failure leaves the intent usable so you can correct and resend.\n\n## Limits\n\n- `clientContext`: 16384 bytes serialized as UTF-8.\n- Screenshots: JPEG, PNG or WebP, 10 MB and 25 megapixels per file, 5 per submission, 10 uploads per intent. Animated images are rejected.\n- Every accepted image is re-encoded to WebP and brought inside 2 MB of storage, giving up quality before pixels. The width, height and bytes in an upload response describe what was stored, which may be smaller than what was sent.\n- Security rate limits apply to sign-in, intent creation, uploads and\n  finalization. They are not configurable.\n\n## Errors\n\nEvery failure returns `{\"error\":{\"code\",\"message\",\"details?\"}}`. The `code` is\nstable and safe to branch on; `details` carries `questionId` for answer problems\nand `path` for request-shape problems.",
     "license": {
       "name": "MIT"
     }
@@ -15948,15 +15948,6 @@
           {
             "schema": {
               "type": "string",
-              "maxLength": 32
-            },
-            "in": "query",
-            "name": "environment",
-            "required": false
-          },
-          {
-            "schema": {
-              "type": "string",
               "maxLength": 128
             },
             "in": "query",
@@ -16323,15 +16314,6 @@
             },
             "in": "query",
             "name": "arch",
-            "required": false
-          },
-          {
-            "schema": {
-              "type": "string",
-              "maxLength": 32
-            },
-            "in": "query",
-            "name": "environment",
             "required": false
           },
           {
@@ -17213,15 +17195,6 @@
           {
             "schema": {
               "type": "string",
-              "maxLength": 32
-            },
-            "in": "query",
-            "name": "environment",
-            "required": false
-          },
-          {
-            "schema": {
-              "type": "string",
               "maxLength": 128
             },
             "in": "query",
@@ -17315,9 +17288,6 @@
                           "release": {
                             "type": "string"
                           },
-                          "environment": {
-                            "type": "string"
-                          },
                           "os": {
                             "type": "object",
                             "properties": {
@@ -17380,7 +17350,6 @@
                           "clockSkew",
                           "kind",
                           "release",
-                          "environment",
                           "os",
                           "userId",
                           "installationId",
@@ -17502,9 +17471,6 @@
                     "release": {
                       "type": "string"
                     },
-                    "environment": {
-                      "type": "string"
-                    },
                     "os": {
                       "type": "object",
                       "properties": {
@@ -17567,7 +17533,6 @@
                     "clockSkew",
                     "kind",
                     "release",
-                    "environment",
                     "os",
                     "userId",
                     "installationId",
@@ -17734,7 +17699,7 @@
     },
     "/v1/crash-databases/{databaseId}/filters": {
       "get": {
-        "summary": "The kinds, systems and environments this database has actually seen",
+        "summary": "The kinds and systems this database has actually seen",
         "tags": [
           "Crash groups"
         ],
@@ -17769,18 +17734,11 @@
                       "items": {
                         "type": "string"
                       }
-                    },
-                    "environments": {
-                      "type": "array",
-                      "items": {
-                        "type": "string"
-                      }
                     }
                   },
                   "required": [
                     "kinds",
-                    "operatingSystems",
-                    "environments"
+                    "operatingSystems"
                   ],
                   "additionalProperties": false
                 }
@@ -17826,7 +17784,7 @@
         "tags": [
           "Crash groups"
         ],
-        "description": "CR-046, CR-048: served from the daily rollup, never from reports. `days` is 7, 30 or 90. With `by=release|os|environment` the response also carries the range broken down by that dimension.",
+        "description": "CR-046, CR-048: served from the daily rollup, never from reports. `days` is 7, 30 or 90. With `by=release|os|kind` the response also carries the range broken down by that dimension.",
         "parameters": [
           {
             "schema": {
@@ -17876,15 +17834,6 @@
             },
             "in": "query",
             "name": "arch",
-            "required": false
-          },
-          {
-            "schema": {
-              "type": "string",
-              "maxLength": 32
-            },
-            "in": "query",
-            "name": "environment",
             "required": false
           },
           {
@@ -17963,7 +17912,6 @@
                 "day",
                 "release",
                 "os",
-                "environment",
                 "kind"
               ]
             },
@@ -18044,7 +17992,6 @@
                           "enum": [
                             "release",
                             "os",
-                            "environment",
                             "kind"
                           ]
                         },
@@ -18197,15 +18144,6 @@
           {
             "schema": {
               "type": "string",
-              "maxLength": 32
-            },
-            "in": "query",
-            "name": "environment",
-            "required": false
-          },
-          {
-            "schema": {
-              "type": "string",
               "maxLength": 128
             },
             "in": "query",
@@ -18346,15 +18284,6 @@
             },
             "in": "query",
             "name": "arch",
-            "required": false
-          },
-          {
-            "schema": {
-              "type": "string",
-              "maxLength": 32
-            },
-            "in": "query",
-            "name": "environment",
             "required": false
           },
           {
@@ -19936,7 +19865,7 @@
         "tags": [
           "Analytics ingest"
         ],
-        "description": "AN-025. Creator or Admin, not a publishable key. Sends `test_event`, category `test`, environment `development`, through the ingest path, attributed to the database’s test installation, which counts in no unique, active, new-installation, session or cohort figure. It takes no slot of the event-name limit and appears in the live feed.",
+        "description": "AN-025. Creator or Admin, not a publishable key. Sends `test_event`, category `test`, through the ingest path, attributed to the database’s test installation, which counts in no unique, active, new-installation, session or cohort figure. It takes no slot of the event-name limit and appears in the live feed.",
         "parameters": [
           {
             "schema": {
@@ -20533,7 +20462,7 @@
         "tags": [
           "Analytics catalog"
         ],
-        "description": "AN-052. Viewer or above. The catalog entry, its categories, and its params with their observed types, descriptions and the ten most frequent values of each over the last seven days (`topValuesFrom` to `topValuesTo`, all environments). The top values read the event store and hold a query slot. A hidden event is readable by name.",
+        "description": "AN-052. Viewer or above. The catalog entry, its categories, and its params with their observed types, descriptions and the ten most frequent values of each over the last seven days (`topValuesFrom` to `topValuesTo`). The top values read the event store and hold a query slot. A hidden event is readable by name.",
         "parameters": [
           {
             "schema": {
@@ -21428,7 +21357,6 @@
                 "runtime",
                 "app",
                 "appVersion",
-                "environment",
                 "country",
                 "attribution",
                 "installAttribution",
@@ -21564,7 +21492,7 @@
         "tags": [
           "Analytics queries"
         ],
-        "description": "AN-060 to AN-069. Viewer or above; holds a query slot (`503 analytics_busy` after ten seconds without one, `503 query_limit_exceeded` past the per-query limits).\n\nThe definition of section 9.2, with its defaults: the last 30 days by day; presets end today and include it; a definition naming no `environment` filter reads `production` only. 1 to 5 series, each an event name or `*` (any event of a device installation that is not a background event), a metric (`events`, `installations`, `users`, `perInstallation`) and filters; a `split` only with one series (the ten values with the largest metric over the range, then `Other` and `None`). The hour interval covers at most seven days.\n\nEach series has one point per period of the range, zeros included, and states the range it `covered`: from the oldest day kept to today. A range wholly before it answers an empty series marked `range_outside_retention`. A period is `incomplete` when it contains now or the covered range cuts it. An unknown or deleted event answers an empty series. `?format=csv` or `?format=json` downloads one row per period and series.",
+        "description": "AN-060 to AN-069. Viewer or above; holds a query slot (`503 analytics_busy` after ten seconds without one, `503 query_limit_exceeded` past the per-query limits).\n\nThe definition of section 9.2, with its defaults: the last 30 days by day; presets end today and include it. 1 to 5 series, each an event name or `*` (any event of a device installation that is not a background event), a metric (`events`, `installations`, `users`, `perInstallation`) and filters; a `split` only with one series (the ten values with the largest metric over the range, then `Other` and `None`). The hour interval covers at most seven days.\n\nEach series has one point per period of the range, zeros included, and states the range it `covered`: from the oldest day kept to today. A range wholly before it answers an empty series marked `range_outside_retention`. A period is `incomplete` when it contains now or the covered range cuts it. An unknown or deleted event answers an empty series. `?format=csv` or `?format=json` downloads one row per period and series.",
         "requestBody": {
           "required": true,
           "content": {
@@ -21678,7 +21606,6 @@
                                   "runtime",
                                   "app",
                                   "appVersion",
-                                  "environment",
                                   "country",
                                   "userId",
                                   "installationId",
@@ -21758,7 +21685,6 @@
                             "runtime",
                             "app",
                             "appVersion",
-                            "environment",
                             "country",
                             "userId",
                             "installationId",
@@ -21826,7 +21752,6 @@
                           "runtime",
                           "app",
                           "appVersion",
-                          "environment",
                           "country",
                           "attribution",
                           "installAttribution",
@@ -22316,7 +22241,7 @@
         "tags": [
           "Analytics queries"
         ],
-        "description": "AN-140 to AN-144. Viewer or above; holds one query slot for the whole answer (`503 analytics_busy` after ten seconds without one, `503 query_limit_exceeded` past the per-query limits).\n\nThe range is `preset` (default `last30Days`; presets end today and include it) or `from` and `to` (dates in the reporting timezone, both included, at most 1,000 days). `app` (every app by default), `platform` (every client platform by default; `server` is never one) and `environment` (`production` by default) filter every figure; each may be repeated for several values. `unit` (`installation` by default, or `user`) is what the active figures count.\n\nEach figure has its `value`, its `previous` (null when the previous period begins before the oldest event kept) and the range it `covered`. Active figures are anchored to now, not the range: the last 60 minutes, the last complete day and today, the 7 and 30 days ending today, and stickiness. New installations, sessions, D1, D7 and D30 and crash-free sessions cover the range; shares cover the last 7 days; top events come from the catalog’s last 24 hours.",
+        "description": "AN-140 to AN-144. Viewer or above; holds one query slot for the whole answer (`503 analytics_busy` after ten seconds without one, `503 query_limit_exceeded` past the per-query limits).\n\nThe range is `preset` (default `last30Days`; presets end today and include it) or `from` and `to` (dates in the reporting timezone, both included, at most 1,000 days). `app` (every app by default), and `platform` (every client platform by default; `server` is never one) filter every figure; each may be repeated for several values. `unit` (`installation` by default, or `user`) is what the active figures count.\n\nEach figure has its `value`, its `previous` (null when the previous period begins before the oldest event kept) and the range it `covered`. Active figures are anchored to now, not the range: the last 60 minutes, the last complete day and today, the 7 and 30 days ending today, and stickiness. New installations, sessions, D1, D7 and D30 and crash-free sessions cover the range; shares cover the last 7 days; top events come from the catalog’s last 24 hours.",
         "parameters": [
           {
             "schema": {
@@ -22388,24 +22313,6 @@
             },
             "in": "query",
             "name": "platform",
-            "required": false
-          },
-          {
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  }
-                }
-              ]
-            },
-            "in": "query",
-            "name": "environment",
             "required": false
           },
           {
@@ -22487,18 +22394,11 @@
                           "items": {
                             "type": "string"
                           }
-                        },
-                        "environments": {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          }
                         }
                       },
                       "required": [
                         "apps",
-                        "platforms",
-                        "environments"
+                        "platforms"
                       ],
                       "additionalProperties": false,
                       "description": "The filters applied; an empty list is every value."
@@ -23583,7 +23483,7 @@
         "tags": [
           "Analytics profiles"
         ],
-        "description": "AN-120. Viewer or above; holds a query slot.\n\nWith `q`: the installations whose ID is `q` or starts with it, and the user IDs equal to it or starting with it (`users`) with every installation they were seen on (in `installations`). A prefix needs at least six characters; shorter text matches exact IDs only and says `notice: prefix_too_short`. At most `limit` of each, `truncated` when more match.\n\nWithout `q`: the installations seen most recently, newest first then by installation ID, 50 a page, filtered by their latest `platform`, `appVersion`, `country` and `environment`. `nextCursor` carries the position and the first page’s time, so an installation active while you page is not listed twice. Device and server installations are listed; the test installation is not.",
+        "description": "AN-120. Viewer or above; holds a query slot.\n\nWith `q`: the installations whose ID is `q` or starts with it, and the user IDs equal to it or starting with it (`users`) with every installation they were seen on (in `installations`). A prefix needs at least six characters; shorter text matches exact IDs only and says `notice: prefix_too_short`. At most `limit` of each, `truncated` when more match.\n\nWithout `q`: the installations seen most recently, newest first then by installation ID, 50 a page, filtered by their latest `platform`, `appVersion` and `country`. `nextCursor` carries the position and the first page’s time, so an installation active while you page is not listed twice. Device and server installations are listed; the test installation is not.",
         "parameters": [
           {
             "schema": {
@@ -23620,15 +23520,6 @@
             },
             "in": "query",
             "name": "country",
-            "required": false
-          },
-          {
-            "schema": {
-              "type": "string",
-              "maxLength": 64
-            },
-            "in": "query",
-            "name": "environment",
             "required": false
           },
           {
@@ -23722,12 +23613,6 @@
                               "null"
                             ]
                           },
-                          "environment": {
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          },
                           "firstSeen": {
                             "type": [
                               "string",
@@ -23755,7 +23640,6 @@
                           "platformVersion",
                           "appVersion",
                           "country",
-                          "environment",
                           "firstSeen",
                           "lastSeen",
                           "lastEvent"
@@ -24021,12 +23905,6 @@
                                 "null"
                               ]
                             },
-                            "environment": {
-                              "type": [
-                                "string",
-                                "null"
-                              ]
-                            },
                             "country": {
                               "type": [
                                 "string",
@@ -24059,7 +23937,6 @@
                             "appVersion",
                             "appBuild",
                             "locale",
-                            "environment",
                             "country",
                             "attribution",
                             "experiments"
@@ -24123,12 +24000,6 @@
                                 "null"
                               ]
                             },
-                            "environment": {
-                              "type": [
-                                "string",
-                                "null"
-                              ]
-                            },
                             "country": {
                               "type": [
                                 "string",
@@ -24161,7 +24032,6 @@
                             "appVersion",
                             "appBuild",
                             "locale",
-                            "environment",
                             "country",
                             "attribution",
                             "experiments"
@@ -24576,12 +24446,6 @@
                               "null"
                             ]
                           },
-                          "environment": {
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          },
                           "firstSeen": {
                             "type": [
                               "string",
@@ -24615,7 +24479,6 @@
                           "platformVersion",
                           "appVersion",
                           "country",
-                          "environment",
                           "firstSeen",
                           "lastSeen",
                           "lastEvent",
@@ -25053,12 +24916,6 @@
                                   "null"
                                 ]
                               },
-                              "environment": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              },
                               "country": {
                                 "type": [
                                   "string",
@@ -25091,7 +24948,6 @@
                               "appVersion",
                               "appBuild",
                               "locale",
-                              "environment",
                               "country",
                               "attribution",
                               "experiments"
@@ -25375,12 +25231,6 @@
                                   "null"
                                 ]
                               },
-                              "environment": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              },
                               "country": {
                                 "type": [
                                   "string",
@@ -25413,7 +25263,6 @@
                               "appVersion",
                               "appBuild",
                               "locale",
-                              "environment",
                               "country",
                               "attribution",
                               "experiments"
@@ -27280,7 +27129,6 @@
                                       "runtime",
                                       "app",
                                       "appVersion",
-                                      "environment",
                                       "country",
                                       "userId",
                                       "installationId",
@@ -27402,7 +27250,6 @@
                                 "runtime",
                                 "app",
                                 "appVersion",
-                                "environment",
                                 "country",
                                 "userId",
                                 "installationId",
@@ -27470,7 +27317,6 @@
                               "runtime",
                               "app",
                               "appVersion",
-                              "environment",
                               "country",
                               "attribution",
                               "installAttribution",
@@ -27848,7 +27694,6 @@
                                       "runtime",
                                       "app",
                                       "appVersion",
-                                      "environment",
                                       "country",
                                       "userId",
                                       "installationId",
@@ -27970,7 +27815,6 @@
                                 "runtime",
                                 "app",
                                 "appVersion",
-                                "environment",
                                 "country",
                                 "userId",
                                 "installationId",
@@ -28038,7 +27882,6 @@
                               "runtime",
                               "app",
                               "appVersion",
-                              "environment",
                               "country",
                               "attribution",
                               "installAttribution",
@@ -28403,7 +28246,6 @@
                                       "runtime",
                                       "app",
                                       "appVersion",
-                                      "environment",
                                       "country",
                                       "userId",
                                       "installationId",
@@ -28525,7 +28367,6 @@
                                 "runtime",
                                 "app",
                                 "appVersion",
-                                "environment",
                                 "country",
                                 "userId",
                                 "installationId",
@@ -28593,7 +28434,6 @@
                               "runtime",
                               "app",
                               "appVersion",
-                              "environment",
                               "country",
                               "attribution",
                               "installAttribution",
@@ -30773,7 +30613,6 @@
                                       "runtime",
                                       "app",
                                       "appVersion",
-                                      "environment",
                                       "country",
                                       "userId",
                                       "installationId",
@@ -30895,7 +30734,6 @@
                                 "runtime",
                                 "app",
                                 "appVersion",
-                                "environment",
                                 "country",
                                 "userId",
                                 "installationId",
@@ -30963,7 +30801,6 @@
                               "runtime",
                               "app",
                               "appVersion",
-                              "environment",
                               "country",
                               "attribution",
                               "installAttribution",
@@ -31580,7 +31417,6 @@
                                         "runtime",
                                         "app",
                                         "appVersion",
-                                        "environment",
                                         "country",
                                         "userId",
                                         "installationId",
@@ -31691,7 +31527,6 @@
                                         "runtime",
                                         "app",
                                         "appVersion",
-                                        "environment",
                                         "country",
                                         "userId",
                                         "installationId",
@@ -31789,7 +31624,6 @@
                                 "runtime",
                                 "app",
                                 "appVersion",
-                                "environment",
                                 "country",
                                 "userId",
                                 "installationId",
@@ -32200,7 +32034,6 @@
                                         "runtime",
                                         "app",
                                         "appVersion",
-                                        "environment",
                                         "country",
                                         "userId",
                                         "installationId",
@@ -32311,7 +32144,6 @@
                                         "runtime",
                                         "app",
                                         "appVersion",
-                                        "environment",
                                         "country",
                                         "userId",
                                         "installationId",
@@ -32409,7 +32241,6 @@
                                 "runtime",
                                 "app",
                                 "appVersion",
-                                "environment",
                                 "country",
                                 "userId",
                                 "installationId",
@@ -32747,7 +32578,7 @@
         "tags": [
           "Analytics queries"
         ],
-        "description": "AN-100 to AN-109. Viewer or above; one query slot. A saved cohort’s `cohortId` or an inline `definition` (section 9.2), computed identically; a run of a saved cohort may give `granularity` and population `filters`, which replace the saved ones for that run only, and a `range` of start periods, which replaces the definition’s `defaultRange` (without either, the last 12 periods of the granularity).\n\nMembership: a unit belongs to the cohort of the calendar period (day, ISO week, month or year in the reporting timezone) containing its start, provided that period lies in the range. An unfiltered start — the install, the first event of any name, or a named event without filters — is the first time the unit ever performed it, from installation records and first occurrences that outlive their events, so membership does not move as data ages; a unit whose first start falls before the range belongs to no cohort of it. A named start with filters is its first matching occurrence among the events kept, and the answer says `firstInWindow`. Population filters test the unit’s context at its start (the install dimensions and install attribution for the install; the first occurrence’s dimensions otherwise); `production` only unless an `environment` filter is named. Units: installations (device installations; ephemeral, server and test installations never count) or user IDs.\n\nReturns: a member returned in period N (N ≥ 1) if it performed the return event, matching the return’s own filters, in the calendar period N periods after its cohort’s; population filters do not apply to returns; `anyEvent` is any event of a device installation that is not a background event.\n\nThe table: a row per cohort period with members, oldest first, its `size` as period 0 (100%), and a cell per later period that has begun with `returned` and `share`; `incomplete` while the period has not ended, `covered` false when it begins before the oldest event kept. At most 60 rows by day, 52 by week, 36 by month and 10 by year (`truncated` when the oldest are left out). The `summary`, per N: returned ÷ members of the cohorts whose period N has ended and is covered; where none has ended yet, the incomplete value, marked `incomplete`. A start or return whose event was deleted answers no units for it, with the warning `event_deleted`. `?format=csv` or `?format=json` downloads the result.",
+        "description": "AN-100 to AN-109. Viewer or above; one query slot. A saved cohort’s `cohortId` or an inline `definition` (section 9.2), computed identically; a run of a saved cohort may give `granularity` and population `filters`, which replace the saved ones for that run only, and a `range` of start periods, which replaces the definition’s `defaultRange` (without either, the last 12 periods of the granularity).\n\nMembership: a unit belongs to the cohort of the calendar period (day, ISO week, month or year in the reporting timezone) containing its start, provided that period lies in the range. An unfiltered start — the install, the first event of any name, or a named event without filters — is the first time the unit ever performed it, from installation records and first occurrences that outlive their events, so membership does not move as data ages; a unit whose first start falls before the range belongs to no cohort of it. A named start with filters is its first matching occurrence among the events kept, and the answer says `firstInWindow`. Population filters test the unit’s context at its start (the install dimensions and install attribution for the install; the first occurrence’s dimensions otherwise). Units: installations (device installations; ephemeral, server and test installations never count) or user IDs.\n\nReturns: a member returned in period N (N ≥ 1) if it performed the return event, matching the return’s own filters, in the calendar period N periods after its cohort’s; population filters do not apply to returns; `anyEvent` is any event of a device installation that is not a background event.\n\nThe table: a row per cohort period with members, oldest first, its `size` as period 0 (100%), and a cell per later period that has begun with `returned` and `share`; `incomplete` while the period has not ended, `covered` false when it begins before the oldest event kept. At most 60 rows by day, 52 by week, 36 by month and 10 by year (`truncated` when the oldest are left out). The `summary`, per N: returned ÷ members of the cohorts whose period N has ended and is covered; where none has ended yet, the incomplete value, marked `incomplete`. A start or return whose event was deleted answers no units for it, with the warning `event_deleted`. `?format=csv` or `?format=json` downloads the result.",
         "requestBody": {
           "required": true,
           "content": {
@@ -32822,7 +32653,6 @@
                                         "runtime",
                                         "app",
                                         "appVersion",
-                                        "environment",
                                         "country",
                                         "userId",
                                         "installationId",
@@ -32933,7 +32763,6 @@
                                         "runtime",
                                         "app",
                                         "appVersion",
-                                        "environment",
                                         "country",
                                         "userId",
                                         "installationId",
@@ -33031,7 +32860,6 @@
                                 "runtime",
                                 "app",
                                 "appVersion",
-                                "environment",
                                 "country",
                                 "userId",
                                 "installationId",
@@ -33203,7 +33031,6 @@
                             "runtime",
                             "app",
                             "appVersion",
-                            "environment",
                             "country",
                             "userId",
                             "installationId",
@@ -33974,7 +33801,7 @@
         "tags": [
           "Analytics"
         ],
-        "description": "AN-210. Viewer or above. Every stored event matching the filters, one JSON object per line, ordered by effective time then event ID: its ID, name, category, effective and received times (RFC 3339), local day, installation ID and kind, the ephemeral flag, user ID, session ID, context (the platform, OS, runtime, app, locale, environment, country, attribution and experiments), params, install ages, whether the clock was corrected, and the key that sent it. Params, attribution, experiments and the user ID are the integrator’s. Read in pages of 5,000 events, each holding a query slot while it is read (AN-205); only events that had arrived when the export started. Events an erasure has taken are never exported. It holds every stored event, and not the installation records and first occurrences derived from them (AN-212). With `limit`, one JSON page `{ events, nextCursor }`.",
+        "description": "AN-210. Viewer or above. Every stored event matching the filters, one JSON object per line, ordered by effective time then event ID: its ID, name, category, effective and received times (RFC 3339), local day, installation ID and kind, the ephemeral flag, user ID, session ID, context (the platform, OS, runtime, app, locale, country, attribution and experiments), params, install ages, whether the clock was corrected, and the key that sent it. Params, attribution, experiments and the user ID are the integrator’s. Read in pages of 5,000 events, each holding a query slot while it is read (AN-205); only events that had arrived when the export started. Events an erasure has taken are never exported. It holds every stored event, and not the installation records and first occurrences derived from them (AN-212). With `limit`, one JSON page `{ events, nextCursor }`.",
         "parameters": [
           {
             "schema": {
@@ -39951,7 +39778,7 @@
   },
   "servers": [
     {
-      "url": "http://localhost:3000",
+      "url": "http://192.168.0.19:3000",
       "description": "This deployment"
     }
   ],

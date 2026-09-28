@@ -63,12 +63,11 @@ describe('shares (AN-140)', () => {
 });
 
 describe('filters (AN-140)', () => {
-  it('reads every app and client platform and production by default', () => {
-    expect(overviewFilters({ apps: [], platforms: [], environments: [] })).toEqual([{ field: 'environment', op: 'is', values: ['production'] }]);
-    expect(overviewFilters({ apps: ['a'], platforms: ['ios', 'web'], environments: ['development'] })).toEqual([
+  it('reads every app and client platform by default', () => {
+    expect(overviewFilters({ apps: [], platforms: [] })).toEqual([]);
+    expect(overviewFilters({ apps: ['a'], platforms: ['ios', 'web'] })).toEqual([
       { field: 'app', op: 'is', values: ['a'] },
       { field: 'platform', op: 'is', values: ['ios', 'web'] },
-      { field: 'environment', op: 'is', values: ['development'] },
     ]);
   });
 });

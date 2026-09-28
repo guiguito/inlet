@@ -15,7 +15,7 @@ import { asAdmin, createProject } from '../setup/api.js';
  * rather than from the SQL, compared with the event store's answers on randomised data — about
  * 400 device installations born over fifteen months, ephemeral ones, installations whose first
  * event is a background event and some that only ever send background events, user IDs spanning
- * installations, a backend's server installations, events outside `production`, late events that
+ * installations, a backend's server installations, events from a second country, late events that
  * lower a first occurrence without moving the install, and ties of effective time within a batch —
  * for every start kind, both return kinds, both units, the four granularities (a range longer than
  * the rows allowed included), population filters, and after the oldest weeks are dropped. Two
@@ -41,7 +41,7 @@ type Raw = {
   installationId: string | null;
   userId: string | null;
   platform: string;
-  environment: string;
+  country: string;
   ephemeral: boolean;
   attribution: string | null;
   experiment: string | null;
@@ -81,7 +81,7 @@ function generate(seed: number): Raw[] {
     const installationId = uuid();
     const ephemeral = r() < 0.08;
     const home = pick(DIMENSION_PLATFORMS);
-    const devOnly = r() < 0.05;
+    const abroad = r() < 0.05;
     const users = r() < 0.45 ? (r() < 0.3 ? [user(), user()] : [user()]) : [];
     const birth = r() < 0.2 ? start2025 + Math.floor(r() * (start2026 - start2025)) : start2026 + Math.floor(r() * (last - start2026));
     const onlyBackground = r() < 0.03;
@@ -109,7 +109,7 @@ function generate(seed: number): Raw[] {
           installationId,
           userId: users.length > 0 && r() < 0.7 ? pick(users) : null,
           platform,
-          environment: devOnly ? 'development' : r() < 0.08 ? 'development' : 'production',
+          country: abroad ? 'DE' : r() < 0.08 ? 'DE' : 'FR',
           ephemeral,
           ...extras(name),
         };
@@ -128,7 +128,7 @@ function generate(seed: number): Raw[] {
         installationId,
         userId: users.length > 0 ? users[0]! : null,
         platform: r() < 0.3 ? pick(DIMENSION_PLATFORMS) : home,
-        environment: devOnly ? 'development' : 'production',
+        country: abroad ? 'DE' : 'FR',
         ephemeral,
         ...extras(name),
       });
@@ -138,7 +138,7 @@ function generate(seed: number): Raw[] {
   for (let j = 0; j < 70; j += 1) {
     const ms = start2026 + Math.floor(r() * (last - start2026));
     const name = pick(['purchase', 'signup', 'app_started']);
-    add({ ms, receivedMs: batchAfter(ms), name, installationId: null, userId: user(), platform: r() < 0.8 ? 'server' : 'web', environment: r() < 0.1 ? 'development' : 'production', ephemeral: false, ...extras(name) });
+    add({ ms, receivedMs: batchAfter(ms), name, installationId: null, userId: user(), platform: r() < 0.8 ? 'server' : 'web', country: r() < 0.1 ? 'DE' : 'FR', ephemeral: false, ...extras(name) });
   }
   return events;
 }
@@ -147,7 +147,7 @@ function generate(seed: number): Raw[] {
 
 /** An event as stored: its local day and the order of its batch (received times follow the ingest calls). */
 type Ev = Raw & { day: string; batch: number };
-type Ctx = { platform: string; environment: string; attribution: string; experiment: string | null; plan: string | null; installAttribution?: string };
+type Ctx = { platform: string; country: string; attribution: string; experiment: string | null; plan: string | null; installAttribution?: string };
 type Def = AnalyticsCohortDefinition;
 type Range = { from: string; to: string };
 
@@ -190,8 +190,8 @@ function compare(a: readonly unknown[], b: readonly unknown[]): number {
   return a.length - b.length;
 }
 /** The stored dimensions in the order the installation and first-occurrence tuples carry them. */
-const dims = (e: Ev) => [e.platform, e.environment, e.attribution ?? '', e.experiment ? ['exp'] : [], e.experiment ? [e.experiment] : []];
-const ctxOf = (e: Ev): Ctx => ({ platform: e.platform, environment: e.environment, attribution: e.attribution ?? '', experiment: e.experiment, plan: e.plan });
+const dims = (e: Ev) => [e.platform, e.country, e.attribution ?? '', e.experiment ? ['exp'] : [], e.experiment ? [e.experiment] : []];
+const ctxOf = (e: Ev): Ctx => ({ platform: e.platform, country: e.country, attribution: e.attribution ?? '', experiment: e.experiment, plan: e.plan });
 function minBy(events: Ev[], key: (e: Ev) => unknown[]): Ev | undefined {
   let best: Ev | undefined;
   for (const e of events) if (!best || compare(key(e), key(best)) < 0) best = e;
@@ -215,7 +215,7 @@ function passes(filters: readonly AnalyticsFilter[], ctx: Ctx): boolean {
       const values = (filter.values ?? []).map(String);
       const value: string | null | undefined = {
         platform: ctx.platform,
-        environment: ctx.environment,
+        country: ctx.country,
         attribution: ctx.attribution,
         installAttribution: ctx.installAttribution,
         experiment: ctx.experiment,
@@ -311,15 +311,12 @@ function reference(def: Def, range: Range, today: string, all: Ev[], kept: Ev[])
   const current = periodIndex(today, g);
   const keptFrom = kept.length === 0 ? null : kept.map((e) => e.day).sort()[0]!;
 
-  // Membership, with population filters tested at the start and `production` unless an
-  // environment is named among them or the start's own filters (AN-064).
-  const startFilters = def.start.kind === 'event' ? def.start.filters : [];
-  const environmentNamed = [...def.filters, ...startFilters].some((filter) => filter.field === 'environment');
+  // Membership, with population filters tested at the start (AN-102).
   const members = new Map<string, number>();
   for (const [id, { day, ctx }] of startsOf(def, all, kept)) {
     const index = periodIndex(day, g);
     if (index < first || index > lastShown) continue;
-    if (!passes(def.filters, ctx) || (!environmentNamed && ctx.environment !== 'production')) continue;
+    if (!passes(def.filters, ctx)) continue;
     members.set(id, index);
   }
 
@@ -394,7 +391,7 @@ const STARTS: { name: string; unit: Def['unit']; start: Start }[] = [
   { name: 'the first event', unit: 'installation', start: { kind: 'firstSeen' } },
   { name: 'purchase, unfiltered', unit: 'installation', start: { kind: 'event', event: 'purchase', filters: [] } },
   { name: 'purchase of plan pro (firstInWindow)', unit: 'installation', start: { kind: 'event', event: 'purchase', filters: [f('param', 'is', ['pro'], 'plan')] } },
-  { name: 'view in development or on web (firstInWindow)', unit: 'installation', start: { kind: 'event', event: 'view', filters: [f('environment', 'is', ['development']), f('platform', 'is', ['web'])] } },
+  { name: 'view in DE or on web (firstInWindow)', unit: 'installation', start: { kind: 'event', event: 'view', filters: [f('country', 'is', ['DE']), f('platform', 'is', ['web'])] } },
   { name: 'the first event, by user', unit: 'user', start: { kind: 'firstSeen' } },
   { name: 'purchase, unfiltered, by user', unit: 'user', start: { kind: 'event', event: 'purchase', filters: [] } },
   { name: 'signup, unfiltered, by user', unit: 'user', start: { kind: 'event', event: 'signup', filters: [] } },
@@ -417,11 +414,11 @@ const RANGES: { name: string; granularity: AnalyticsGranularity; range: Range }[
 const POPULATIONS: { name: string; filters: AnalyticsFilter[]; installationsOnly?: true }[] = [
   { name: 'no population filter', filters: [] },
   { name: 'platform ios', filters: [f('platform', 'is', ['ios'])] },
-  { name: 'every environment', filters: [f('environment', 'is', ['production', 'development'])] },
+  { name: 'either country', filters: [f('country', 'is', ['FR', 'DE'])] },
   { name: 'experiment A', filters: [f('experiment', 'is', ['A'], 'exp')] },
   { name: 'install attribution ads', filters: [f('installAttribution', 'is', ['ads'])], installationsOnly: true },
   { name: 'attribution set, not android', filters: [f('attribution', 'isSet'), f('platform', 'isNot', ['android'])] },
-  { name: 'development only', filters: [f('environment', 'is', ['development'])] },
+  { name: 'DE only', filters: [f('country', 'is', ['DE'])] },
 ];
 
 describe('cohorts against the reference (randomised)', () => {
@@ -466,7 +463,7 @@ describe('cohorts against the reference (randomised)', () => {
             ...(e.installationId ? { installationId: e.installationId } : {}),
             ...(e.userId ? { userId: e.userId } : {}),
             platform: e.platform,
-            environment: e.environment,
+            country: e.country,
             ...(e.ephemeral ? { ephemeral: true } : {}),
             ...(e.attribution ? { attribution: e.attribution } : {}),
             ...(e.experiment ? { experiments: { exp: e.experiment } } : {}),
@@ -538,10 +535,10 @@ describe('cohorts against the reference (randomised)', () => {
       const installs = startsOf({ start: { kind: 'install' }, return: { kind: 'anyEvent' }, granularity: 'day', unit: 'installation', filters: [] }, events, events);
       const started = new Set(events.filter((e) => e.name === 'app_started' && e.installationId !== null).map((e) => `${e.installationId}|${e.day}`));
       for (const preset of ['last30Days', 'last90Days'] as const) {
-        const answer = await runOverview(h.ctx, row, ADMIN, { range: { preset }, apps: [], platforms: [], environments: [], unit: 'installation' }, NOW);
+        const answer = await runOverview(h.ctx, row, ADMIN, { range: { preset }, apps: [], platforms: [], unit: 'installation' }, NOW);
         const days = preset === 'last30Days' ? 30 : 90;
         const windows = { current: { from: dayOf(dayNumber(t) - days + 1), to: t }, previous: { from: dayOf(dayNumber(t) - 2 * days + 1), to: dayOf(dayNumber(t) - days) } };
-        const inWindow = (w: Range) => [...installs].filter(([id, s]) => counted.has(id) && s.ctx.environment === 'production' && s.day >= w.from && s.day <= w.to);
+        const inWindow = (w: Range) => [...installs].filter(([id, s]) => counted.has(id) && s.day >= w.from && s.day <= w.to);
         expect(answer.figures.newInstallations.value, `${timezone} ${preset} new installations`).toBe(inWindow(windows.current).length);
         expect(answer.figures.newInstallations.previous, `${timezone} ${preset} new installations before`).toBe(inWindow(windows.previous).length);
         for (const n of [1, 7, 30] as const) {

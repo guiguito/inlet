@@ -198,7 +198,6 @@ function GroupsTab({ databaseId }: { databaseId: string }) {
     kind: params.get('kind') ?? undefined,
     release: params.get('release') ?? undefined,
     os: params.get('os') ?? undefined,
-    environment: params.get('environment') ?? undefined,
     userId: params.get('userId') ?? undefined,
     installationId: params.get('installationId') ?? undefined,
     sessionId: params.get('sessionId') ?? undefined,
@@ -330,19 +329,6 @@ function GroupsTab({ databaseId }: { databaseId: string }) {
             {withCurrent(seen.data?.operatingSystems, filters.os).map((os) => (
               <SelectItem key={os} value={os}>
                 {os}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Select value={filters.environment ?? ANY} onValueChange={(value) => setFilter('environment', value)}>
-          <SelectTrigger className="w-40" aria-label="Environment">
-            <SelectValue placeholder="Any environment" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={ANY}>Any environment</SelectItem>
-            {withCurrent(seen.data?.environments, filters.environment).map((environment) => (
-              <SelectItem key={environment} value={environment}>
-                {environment}
               </SelectItem>
             ))}
           </SelectContent>

@@ -113,7 +113,6 @@ SELECT
     app_version,
     toString(100 + cityHash64(app_version) % 1000) AS app_build,
     ['en-US', 'en-GB', 'fr-FR', 'de-DE', 'es-ES', 'it-IT', 'pt-BR', 'ja-JP', 'nl-NL', 'sv-SE', 'pl-PL', 'tr-TR'][1 + bitShiftRight(h_inst, 11) % 12] AS locale,
-    if(h_inst % 100 = 0, 'development', 'production') AS environment,
     ['US','GB','FR','DE','ES','IT','BR','JP','NL','SE','PL','TR','CA','AU','IN','MX','BE','CH','AT','DK',
      'NO','FI','IE','PT','CZ','RO','HU','GR','IL','ZA','AR','CL','CO','KR','SG','NZ','UA','EG','NG','ID'][1 + bitShiftRight(h_inst, 13) % 40] AS country,
     ['', '', '', 'organic', 'google-ads', 'facebook', 'newsletter', 'app-store', 'referral', 'tiktok'][1 + bitShiftRight(h_inst, 19) % 10] AS attribution,
@@ -260,7 +259,7 @@ async function measure() {
   const names = await rows('SELECT event_name_id, count() AS n FROM events GROUP BY event_name_id ORDER BY n DESC LIMIT 3');
   const [a, b, c] = names.map((r) => r.event_name_id);
   const p = { k: DB_KEY, e: a, from, to };
-  const where = 'database_key = {k:UInt32} AND event_name_id = {e:UInt32} AND local_day BETWEEN {from:Date} AND {to:Date} AND environment = \'production\'';
+  const where = 'database_key = {k:UInt32} AND event_name_id = {e:UInt32} AND local_day BETWEEN {from:Date} AND {to:Date}';
 
   const queries = {
     'trend by day, unique installations (two levels, rollup)': `
@@ -282,14 +281,14 @@ async function measure() {
     'DAU, any event (rollup by_day)': `
       SELECT local_day, count() AS installations FROM
         (SELECT local_day, installation_id, count() AS events FROM events
-         WHERE database_key = {k:UInt32} AND local_day BETWEEN {from:Date} AND {to:Date} AND environment = 'production'
+         WHERE database_key = {k:UInt32} AND local_day BETWEEN {from:Date} AND {to:Date}
            AND platform != 'server' AND installation_kind = 'device'
          GROUP BY local_day, installation_id)
       GROUP BY local_day ORDER BY local_day`,
     'trend with a param filter (events)': `
       SELECT local_day, uniqExact(installation_id) AS installations FROM events
       WHERE database_key = {k:UInt32} AND event_name_id = {e1:UInt32} AND local_day BETWEEN {from:Date} AND {to:Date}
-        AND environment = 'production' AND params['plan'] = 'pro'
+        AND params['plan'] = 'pro'
       GROUP BY local_day ORDER BY local_day`,
     'funnel of three steps over 14 days, steps view (events)': `
       SELECT countIf(t1 != 0) AS step1, countIf(t2 != 0) AS step2, countIf(t3 != 0) AS step3 FROM (
@@ -300,7 +299,7 @@ async function measure() {
           if(t2 = 0, 0, arrayFirst(x -> x.1 = 3 AND x.2 > t2 AND x.2 <= t1 + 7 * 86400000, occ).2) AS t3
         FROM events
         WHERE database_key = {k:UInt32} AND event_name_id IN ({e:UInt32}, {eb:UInt32}, {ec:UInt32})
-          AND local_day BETWEEN {funnelFrom:Date} AND {to:Date} AND environment = 'production'
+          AND local_day BETWEEN {funnelFrom:Date} AND {to:Date}
         GROUP BY installation_id)`,
     'weekly cohort from installations, returns from the rollup': `
       SELECT m.cohort, r.week, count() AS returning FROM

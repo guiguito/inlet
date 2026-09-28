@@ -6508,3 +6508,65 @@ limit refuses it at `heavy_0` with the schema message; the exponential schema is
 two seconds while the main thread's timer keeps firing. The wall-clock test of the heaviest
 template now asserts under ten seconds, a bound for a tenfold regression that no runner's speed
 decides, and logs its time. PRD: RC-015 and section 11 say what the two seconds cover.
+
+## 35. No environment label, and no migration or compatibility path
+
+September 28, 2026. Inlet has no users and one running instance, its owner's. Two things
+existed only to carry old data, old clients or a second way of doing something forward, and
+both go.
+
+### 35.1 An environment is a project, and nothing else
+
+Foundations section 17 already said that an environment is a project, for every capability,
+and Remote Config had no environment of its own. Analytics events and crash reports still
+carried an `environment` label, defaulting to `production`, and every analytics read (trends,
+funnels, cohorts and their start rule, Overview, profiles, filter values) left out events not
+labelled `production` unless a filter named an environment. That gave a team two ways to keep
+staging apart from production, and the default hid data: a build that set `environment:
+'staging'` in a production project vanished from every chart.
+
+**Decision: the label is removed end to end.** The field is gone from both envelopes, so an
+event or a report carrying it is refused as `unknown_field`; the SDK has no `environment`
+option; ClickHouse drops the column from `events`, the installation and first-occurrence
+tuples, `version_first`, `session_rollup` and `installation_index`; PostgreSQL drops it from
+`crash_reports` and from `crash_group_daily`, whose key is now (group, day, release, OS);
+the filter field, the `environments` Overview query, the crash filter, `by=environment`,
+the interface's selects and chips and the MCP arguments are gone. `test_event` keeps out of
+every count through the test installation and its `test` category, as before; its
+`environment: 'development'` was never what excluded it. Neither grouping nor regression
+detection ever read the label.
+
+### 35.2 One baseline migration per store, edited in place
+
+Until the first external installation, PostgreSQL and ClickHouse each have exactly one
+migration that creates today's schema: `apps/api/drizzle/0000_initial_schema.sql` (regenerated
+from `schema.ts`, with a one-entry journal) and `apps/api/clickhouse/0001_events.sql` (0002 to
+0004 folded in). A schema change edits the baseline, and every deployment, the running one
+included, is reinstalled from scratch. This replaces the rule that migrations are additive
+(30.3 had already reset PostgreSQL once). The migrators stay, since a fresh install still
+applies the baseline and a start cut short applies it again.
+
+Folding was checked, not assumed: the old chain and the new baseline were applied to scratch
+databases and their catalogs compared. PostgreSQL differed only by the two `environment`
+columns and the crash rollup's key; ClickHouse only by the column and its tuple elements, and
+by `events_mv`, which now names `EXCEPT (is_replay, session_event)` where it had relied on
+being created before 0004 added `session_event`.
+
+### 35.3 No compatibility with older servers or SDKs
+
+The SDK matches the server of the same commit. Removed:
+
+- the `identity` and `feedback-cross-origin` capabilities of `/v1/health`, and with them the
+  crash and feedback modules' health probe: they sent identity fields only to a deployment
+  that listed `identity`, and warned when one predated Release 6 or 7. They now send the
+  identity whenever `identity` is not `false`, and never ask `/v1/health`;
+- the in-place upgrade of a shared identity created by a 0.2.x module bundled beside this one,
+  and the tolerance of a 0.3.x analytics module without the config module's experiments hook;
+- the tests and acceptance criteria that pinned any of it, the one that installed
+  `inlet-sdk@0.2.0` from npm among them, and the upgrade notes tied to past versions.
+
+Kept, because they depend on a deployment's configuration and not its version: the analytics
+and config modules still wait until `/v1/health` lists `analytics` or `config`.
+
+`inlet-sdk` 0.5.0 carries the change. The PRDs were rewritten in the same change to describe
+the product as it is; this file and `docs/plans/` remain the record of how it got here.

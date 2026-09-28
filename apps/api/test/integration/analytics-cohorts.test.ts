@@ -348,17 +348,6 @@ describe('cohorts', () => {
       expect(table(variantB)).toEqual([['2026-08-31', 1, [1, 0, 0]]]);
     });
 
-    it('reads production only unless an environment is named, at the start only (AN-064)', async () => {
-      await store(h, db, [
-        ev('app_started', unit(10), at(9, 1), { environment: 'development' }),
-        ev('app_started', unit(11), at(9, 1)),
-        ev('app_started', unit(11), at(9, 8), { environment: 'development' }),
-      ]);
-      const answer = await run(h, db, { definition: def(), range: B5_RANGE });
-      expect(table(answer)).toEqual([['2026-08-31', 1, [1, 0, 0]]]);
-      expect((await run(h, db, { definition: def({ filters: [{ field: 'environment', op: 'is', values: ['development'] }] }), range: B5_RANGE })).size).toBe(1);
-    });
-
     it('answers a deleted start or return with no units and event_deleted, and a name never seen with none (AN-056)', async () => {
       await store(h, db, [ev('purchase_completed', unit(10), at(9, 1)), ev('purchase_completed', unit(10), at(9, 8)), ev('app_started', unit(10), at(9, 8))]);
       const deleted = await asAdmin(h, 'DELETE', `/v1/analytics-databases/${db.id}/events/purchase_completed?confirm=purchase_completed`);
@@ -547,9 +536,9 @@ describe('cohorts within the per-query memory limit (9.5, DECISIONS 33.8)', () =
     const [{ id }] = await h.ctx.eventStore!.query<{ id: string }>('SELECT toString(max(event_name_id)) AS id FROM events WHERE database_key = {k:UInt32}', { k: database.key });
     // 10,000 installations, installed over 12 weeks from June 1, each starting the app on its install day and a week later.
     await h.ctx.eventStore!.command(
-      `INSERT INTO events_ingest (database_key, local_day, effective_time, received_time, event_id, event_name_id, installation_id, installation_kind, platform, environment, app_version, country, attribution)
+      `INSERT INTO events_ingest (database_key, local_day, effective_time, received_time, event_id, event_name_id, installation_id, installation_kind, platform, app_version, country, attribution)
        SELECT {key:UInt32}, toDate(t), t, t + toIntervalMinute(1), generateUUIDv4(number), {id:UInt32},
-              toUUID(concat('0192f5a0-0000-7000-9000-', leftPad(toString(intDiv(number, 2)), 12, '0'))), 'device', 'ios', 'production', '1.4.0', 'FR', 'campaign-with-a-long-name'
+              toUUID(concat('0192f5a0-0000-7000-9000-', leftPad(toString(intDiv(number, 2)), 12, '0'))), 'device', 'ios', '1.4.0', 'FR', 'campaign-with-a-long-name'
        FROM (SELECT number, toDateTime64('2026-06-01 08:00:00', 3, 'UTC') + toIntervalMinute((intDiv(number, 2) * 12) % 120960) + toIntervalDay(7 * (number % 2)) AS t FROM numbers(20000))`,
       { key: database.key, id: Number(id) },
     );

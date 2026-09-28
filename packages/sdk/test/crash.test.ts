@@ -141,7 +141,7 @@ describe('redaction (CR-094)', () => {
 
 describe('envelopes and bounds (CR-092, CR-096, CR-101)', () => {
   it('builds an exception envelope with the release, user, tags and marked frames', async () => {
-    const { c, sent } = client({ environment: 'staging', tags: { engine: 'pi' } });
+    const { c, sent } = client({ tags: { engine: 'pi' } });
     c.setUser('user-1');
     c.setTag('window', 'main');
     const error = new Error('boom');
@@ -154,7 +154,6 @@ describe('envelopes and bounds (CR-092, CR-096, CR-101)', () => {
       eventId: id,
       kind: 'exception',
       release: { version: '1.0.0' },
-      environment: 'staging',
       user: { id: 'user-1' },
       tags: { engine: 'pi', window: 'main' },
       context: { pins: 2 },

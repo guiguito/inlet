@@ -163,7 +163,7 @@ describe('profiles', () => {
 
       const ios = await ok(h, `${base()}?platform=ios`);
       expect(ios.installations.map((row: { installationId: string }) => row.installationId)).toEqual([INSTALLATION]);
-      const de = await ok(h, `${base()}?country=DE&environment=production`);
+      const de = await ok(h, `${base()}?country=DE`);
       expect(de.installations.map((row: { installationId: string }) => row.installationId)).toEqual([OTHER]);
     });
 

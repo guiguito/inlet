@@ -35,7 +35,7 @@ describe('get_analytics_overview', () => {
     for (const phrase of [
       'the last 30 days',
       'end today and include it',
-      'environment `production`',
+      'Every app and every client platform',
       'never server',
       '`unit` is `installation` (the default) or `user`',
       'null when that period begins before the oldest event kept',
@@ -59,11 +59,11 @@ describe('get_analytics_overview', () => {
     const tool = handlers.get('get_analytics_overview')!;
     await tool({ analyticsDatabaseId: 'adb_1' });
     await tool({ analyticsDatabaseId: 'adb_1', preset: 'last7Days', unit: 'user' });
-    await tool({ analyticsDatabaseId: 'adb_1', from: '2026-09-01', to: '2026-09-30', apps: ['com.a'], platforms: ['ios', 'web'], environments: ['production', 'staging'] });
+    await tool({ analyticsDatabaseId: 'adb_1', from: '2026-09-01', to: '2026-09-30', apps: ['com.a'], platforms: ['ios', 'web'] });
     expect(paths).toEqual([
       '/v1/analytics-databases/adb_1/overview',
       '/v1/analytics-databases/adb_1/overview?preset=last7Days&unit=user',
-      '/v1/analytics-databases/adb_1/overview?from=2026-09-01&to=2026-09-30&app=com.a&platform=ios&platform=web&environment=production&environment=staging',
+      '/v1/analytics-databases/adb_1/overview?from=2026-09-01&to=2026-09-30&app=com.a&platform=ios&platform=web',
     ]);
   });
 });

@@ -47,7 +47,6 @@ export type Dims = {
   app_version: string;
   app_build: string;
   locale: string;
-  environment: string;
   country: string;
   attribution: string;
   experiment_keys: string[];
@@ -64,7 +63,6 @@ export type Dimensions = {
   appVersion: string | null;
   appBuild: string | null;
   locale: string | null;
-  environment: string | null;
   country: string | null;
   attribution: string | null;
   experiments: Record<string, string>;
@@ -94,7 +92,6 @@ export function dimensions(dims: Dims): Dimensions {
     appVersion: orNull(dims.app_version),
     appBuild: orNull(dims.app_build),
     locale: orNull(dims.locale),
-    environment: orNull(dims.environment),
     country: orNull(dims.country),
     attribution: orNull(dims.attribution),
     experiments,
@@ -141,7 +138,6 @@ export type InstallationSummary = {
   platformVersion: string | null;
   appVersion: string | null;
   country: string | null;
-  environment: string | null;
   firstSeen: string | null;
   /** From events that are not background events; null for a server installation. */
   lastSeen: string | null;
@@ -207,7 +203,6 @@ export function presentSummary(row: SummaryRow, users: Map<string, string>): Ins
     platformVersion: orNull(row.latest.platform_version),
     appVersion: orNull(row.latest.app_version),
     country: orNull(row.latest.country),
-    environment: orNull(row.latest.environment),
     firstSeen: rfc3339(row.first_seen_at),
     lastSeen: rfc3339(row.last_seen_at),
     lastEvent: rfc3339(row.last_event_at)!,
@@ -234,12 +229,11 @@ export type ProfileListQuery = {
   platform?: string | undefined;
   appVersion?: string | undefined;
   country?: string | undefined;
-  environment?: string | undefined;
   cursor?: string | undefined;
   limit?: number | undefined;
 };
 
-const LATEST_FILTERS = { platform: 'platform', appVersion: 'app_version', country: 'country', environment: 'environment' } as const;
+const LATEST_FILTERS = { platform: 'platform', appVersion: 'app_version', country: 'country' } as const;
 
 /**
  * AN-120. With `q`: installations whose ID is `q` or starts with it, and user IDs equal to it or
@@ -264,7 +258,7 @@ export async function findProfiles(ctx: AppContext, database: AnalyticsDatabaseR
 
     if (q === '') {
       // Two reads. First the page's installations, ordered by "seen", from `installation_index`
-      // (0004, `indexRecords`): the same records as `installations` in plain columns, without
+      // (`indexRecords`): the same records as `installations` in plain columns, without
       // deserialising any state (DECISIONS 33.12c: the one-read list took half a second and
       // 1.3 GiB at 917,000 installations). Then those rows' list columns from `installations`.
       const having = ['has_qualifying = 1', "installation_kind != 'test'", ...filters];
@@ -627,7 +621,7 @@ async function readEvents(ctx: AppContext, store: ReadStore, settings: QuerySett
     `SELECT event_id, event_name_id, category, effective_time, received_time,
             installation_id, user_id, session_id,
             platform, os_name, platform_version, runtime_name, runtime_version, app_id, app_version, app_build,
-            locale, environment, country, attribution, experiment_keys, experiment_variants, params,
+            locale, country, attribution, experiment_keys, experiment_variants, params,
             max(received_time) OVER () AS horizon
      FROM events
      WHERE ${parts.join(' AND ')}

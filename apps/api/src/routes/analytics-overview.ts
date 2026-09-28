@@ -46,7 +46,7 @@ const overviewSchema = z.object({
   unit: z.enum(['installation', 'user']),
   timezone: z.string(),
   keptFrom: z.string().nullable().describe('The oldest day the database keeps (AN-065); null while it holds no event.'),
-  filters: z.object({ apps: z.array(z.string()), platforms: z.array(z.string()), environments: z.array(z.string()) }).describe('The filters applied; an empty list is every value.'),
+  filters: z.object({ apps: z.array(z.string()), platforms: z.array(z.string()) }).describe('The filters applied; an empty list is every value.'),
   figures: z.object({
     activeLastHour: figureSchema.extend({ covered: z.object({ from: z.string(), to: z.string() }).describe('RFC 3339 times.') }),
     dailyActiveLastDay: figureSchema,
@@ -78,7 +78,6 @@ const overviewQuerystring = z.object({
   to: z.string().optional().describe('YYYY-MM-DD, with `from`.'),
   app: list(z.string().max(256)),
   platform: list(z.enum(CLIENT_PLATFORMS)),
-  environment: list(z.string().max(256)),
   unit: z.enum(['installation', 'user']).default('installation'),
 });
 
@@ -94,7 +93,7 @@ export function analyticsOverviewRoutes(ctx: AppContext): FastifyPluginAsyncZod 
           summary: 'Read the Overview',
           description: [
             'AN-140 to AN-144. Viewer or above; holds one query slot for the whole answer (`503 analytics_busy` after ten seconds without one, `503 query_limit_exceeded` past the per-query limits).',
-            'The range is `preset` (default `last30Days`; presets end today and include it) or `from` and `to` (dates in the reporting timezone, both included, at most 1,000 days). `app` (every app by default), `platform` (every client platform by default; `server` is never one) and `environment` (`production` by default) filter every figure; each may be repeated for several values. `unit` (`installation` by default, or `user`) is what the active figures count.',
+            'The range is `preset` (default `last30Days`; presets end today and include it) or `from` and `to` (dates in the reporting timezone, both included, at most 1,000 days). `app` (every app by default), and `platform` (every client platform by default; `server` is never one) filter every figure; each may be repeated for several values. `unit` (`installation` by default, or `user`) is what the active figures count.',
             'Each figure has its `value`, its `previous` (null when the previous period begins before the oldest event kept) and the range it `covered`. Active figures are anchored to now, not the range: the last 60 minutes, the last complete day and today, the 7 and 30 days ending today, and stickiness. New installations, sessions, D1, D7 and D30 and crash-free sessions cover the range; shares cover the last 7 days; top events come from the catalog’s last 24 hours.',
           ].join('\n\n'),
           params: databaseIdParam,
@@ -109,7 +108,7 @@ export function analyticsOverviewRoutes(ctx: AppContext): FastifyPluginAsyncZod 
           const parsed = overviewQuerystring.safeParse(request.query);
           throw parsed.success ? apiError('invalid_query', request.validationError.message) : invalidQuery(parsed.error.issues);
         }
-        const { preset, from, to, app: apps, platform: platforms, environment: environments, unit } = request.query;
+        const { preset, from, to, app: apps, platform: platforms, unit } = request.query;
         const raw = from !== undefined || to !== undefined ? { from, to } : { preset: preset ?? 'last30Days' };
         if (preset !== undefined && (from !== undefined || to !== undefined)) {
           throw invalidQuery([{ code: 'custom', path: ['range'], message: 'Send a preset, or from and to, not both.', input: raw }]);
@@ -117,7 +116,7 @@ export function analyticsOverviewRoutes(ctx: AppContext): FastifyPluginAsyncZod 
         const range = analyticsRangeSchema.safeParse(raw);
         if (!range.success) throw invalidQuery(range.error.issues, ['range']);
         requireEventStore(ctx.eventStore);
-        return runOverview(ctx, database, principal, { range: range.data, apps, platforms, environments, unit }, ctx.now(), clientGoneSignal(reply));
+        return runOverview(ctx, database, principal, { range: range.data, apps, platforms, unit }, ctx.now(), clientGoneSignal(reply));
       },
     );
   };

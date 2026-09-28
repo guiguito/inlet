@@ -22,7 +22,7 @@ import { FakeInlet as FakeFeedbackInlet, QUESTION } from './feedback-server.js';
  */
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-const ENVELOPE_FIELDS = new Set(['eventId', 'timestamp', 'name', 'category', 'installationId', 'userId', 'sessionId', 'attribution', 'experiments', 'params', 'app', 'platform', 'os', 'runtime', 'locale', 'country', 'environment', 'ephemeral', 'sdk']);
+const ENVELOPE_FIELDS = new Set(['eventId', 'timestamp', 'name', 'category', 'installationId', 'userId', 'sessionId', 'attribution', 'experiments', 'params', 'app', 'platform', 'os', 'runtime', 'locale', 'country', 'ephemeral', 'sdk']);
 
 let clock = START;
 const now = () => clock;
@@ -277,7 +277,7 @@ describe('track (AN-222, AN-234, AN-235)', () => {
   it('a captured batch contains only the fields of section 9.1', async () => {
     page();
     const server = new FakeInlet();
-    const client = initBrowser(options(server, { userId: 'u1', attribution: 'ads', experiments: { hero: 'b' }, environment: 'staging' }), { queue: new SharedQueue() });
+    const client = initBrowser(options(server, { userId: 'u1', attribution: 'ads', experiments: { hero: 'b' } }), { queue: new SharedQueue() });
     client.track('everything', { category: 'shop', params: { n: 1 } });
     await client.flush();
     for (const batch of server.batches) {
@@ -285,7 +285,7 @@ describe('track (AN-222, AN-234, AN-235)', () => {
       for (const event of batch.events) for (const key of Object.keys(event)) expect(ENVELOPE_FIELDS.has(key)).toBe(true);
     }
     expect(Object.keys(server.events('everything')[0]!).sort()).toEqual(
-      ['app', 'attribution', 'category', 'environment', 'eventId', 'experiments', 'installationId', 'locale', 'name', 'os', 'params', 'platform', 'runtime', 'sdk', 'sessionId', 'timestamp', 'userId'].sort(),
+      ['app', 'attribution', 'category', 'eventId', 'experiments', 'installationId', 'locale', 'name', 'os', 'params', 'platform', 'runtime', 'sdk', 'sessionId', 'timestamp', 'userId'].sort(),
     );
   });
 });
@@ -465,13 +465,13 @@ describe('transport (AN-231 to AN-233, AN-241)', () => {
 
   it('reads /v1/health again every ten minutes while analytics is not listed, and sends once it is', async () => {
     page();
-    const server = new FakeInlet(['crash', 'identity']);
+    const server = new FakeInlet(['crash']);
     const debug: string[] = [];
     const client = initBrowser(options(server, { debug: (message) => debug.push(message) }), { queue: new SharedQueue() });
     await client.flush();
     expect(server.batches).toHaveLength(0);
     expect(debug.some((message) => message.includes('does not list analytics'))).toBe(true);
-    server.caps = ['analytics', 'crash', 'identity'];
+    server.caps = ['analytics', 'crash'];
     clock += 5 * 60_000;
     await client.flush();
     expect(server.batches).toHaveLength(0);
@@ -766,8 +766,8 @@ describe('crash flags and session_crashed (AN-150, AN-151, AN-230, CR-119)', () 
 });
 
 describe('links between modules (AN-153, CR-118, FR-204)', () => {
-  async function submit(identityCaps = ['feedback', 'feedback-cross-origin', 'identity']) {
-    const fake = new FakeFeedbackInlet({ capabilities: identityCaps });
+  async function submit() {
+    const fake = new FakeFeedbackInlet();
     const client = new FeedbackClient({ baseUrl: 'https://inlet.example', publishableKey: 'ipk_testtesttesttest', feedbackDatabaseId: 'fdb_test', fetch: fake.fetch, store: new MemoryStore(), now });
     const created = await client.createSession();
     if (!created.ok) throw new Error(created.error.code);
@@ -818,7 +818,7 @@ describe('links between modules (AN-153, CR-118, FR-204)', () => {
     expect(client.queued).toHaveLength(0);
   });
 
-  it('with only the crash module, a report carries what 0.2.0 sent and nothing is written', async () => {
+  it('with only the crash module, a report carries a session and no installation, and nothing is written', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'inlet-crash-only-'));
     try {
       const server = new FakeInlet();
@@ -826,8 +826,8 @@ describe('links between modules (AN-153, CR-118, FR-204)', () => {
       const c = crash(server, { store: new FileStore(dir) });
       await c.captureMessage('plain');
       await c.flush();
-      expect(Object.keys(server.crash[0]!).sort()).toEqual(['environment', 'eventId', 'exception', 'kind', 'release', 'sdk', 'sessionId', 'timestamp']);
-      // Only the crash queue itself, as in 0.2.0: no identity file.
+      expect(Object.keys(server.crash[0]!).sort()).toEqual(['eventId', 'exception', 'kind', 'release', 'sdk', 'sessionId', 'timestamp']);
+      // Only the crash queue itself: no identity file.
       expect(readdirSync(dir).filter((file) => !file.endsWith('.tmp'))).toEqual(['queue.json']);
     } finally {
       rmSync(dir, { recursive: true, force: true });

@@ -76,7 +76,7 @@ async function store(h: Harness, db: Db, events: Ev[]) {
   }
 }
 
-const query = (overrides: Partial<OverviewQuery> = {}): OverviewQuery => ({ range: { preset: 'last30Days' }, apps: [], platforms: [], environments: [], unit: 'installation', ...overrides });
+const query = (overrides: Partial<OverviewQuery> = {}): OverviewQuery => ({ range: { preset: 'last30Days' }, apps: [], platforms: [], unit: 'installation', ...overrides });
 const overview = async (h: Harness, db: Db, nowMs: number, overrides: Partial<OverviewQuery> = {}): Promise<OverviewAnswer> =>
   runOverview(h.ctx, await row(h, db), ADMIN, query(overrides), nowMs);
 
@@ -98,7 +98,7 @@ describe('verification of the Overview (piece 5)', () => {
    */
   describe('every figure by hand, in a zone behind UTC', () => {
     const NOW = Date.parse('2026-02-10T15:00:00.000Z');
-    const [A, B, C, D, E, F, G] = [1, 2, 3, 4, 5, 6, 7].map(inst) as [string, string, string, string, string, string, string];
+    const [A, B, C, D, F, G] = [1, 2, 3, 4, 6, 7].map(inst) as [string, string, string, string, string, string];
     const s = { a1: uuid(), a2: uuid(), b1: uuid(), b2: uuid(), b3: uuid(), c1: uuid(), d1: uuid() };
     let db: Db;
 
@@ -134,8 +134,6 @@ describe('verification of the Overview (piece 5)', () => {
         ev('2026-02-10T13:10:00.000Z', { installationId: C, platform: 'web', country: 'US' }),
         // A today 09:30: in the last hour.
         ev('2026-02-10T14:30:00.000Z', { installationId: A, userId: 'u1', country: 'FR' }),
-        // E in development, 09:40.
-        ev('2026-02-10T14:40:00.000Z', { installationId: E, environment: 'development', app: { id: 'com.shop', version: '1.3' } }),
         // D: ephemeral, a session at 09:45 reporting a crash module.
         started('2026-02-10T14:45:00.000Z', D, s.d1, { ephemeral: true }),
         // A server installation and the test installation count nowhere.
@@ -149,7 +147,7 @@ describe('verification of the Overview (piece 5)', () => {
       expect(answer.range).toEqual({ from: '2026-01-12', to: '2026-02-10' });
       expect(answer.keptFrom).toBe('2025-11-01');
       const f = answer.figures;
-      // (14:00Z, 15:00Z]: A and D (E is development, the server and test installations never count);
+      // (14:00Z, 15:00Z]: A and D (the server and test installations never count);
       // (13:00Z, 14:00Z]: C.
       expect(f.activeLastHour).toEqual({ value: 2, previous: 1, covered: { from: '2026-02-10T14:00:00.000Z', to: '2026-02-10T15:00:00.000Z' } });
       // Yesterday (local): A, B (04:30Z the 10th), C, G; the 8th: B.
@@ -198,8 +196,6 @@ describe('verification of the Overview (piece 5)', () => {
         { day: '2026-02-01', value: 1 },
         { day: '2026-02-09', value: 2 },
       ]);
-      // Development alone: E, installed today.
-      expect((await overview(h, db, NOW, { environments: ['development'] })).figures.newInstallations.value).toBe(1);
     });
 
     it('counts sessions from app_started, the ephemeral installation’s included, on their local day', async () => {
@@ -258,14 +254,12 @@ describe('verification of the Overview (piece 5)', () => {
       ]);
     });
 
-    it('marks the versions first seen within the range, never from development or a background event', async () => {
+    it('marks the versions first seen within the range, never from a background event', async () => {
       const answer = await overview(h, db, NOW);
       expect(answer.versionsFirstSeen).toEqual([
         { version: '1.1', day: '2026-02-01' },
         { version: '1.2', day: '2026-02-09' },
       ]);
-      const dev = await overview(h, db, NOW, { environments: ['development'] });
-      expect(dev.versionsFirstSeen).toEqual([{ version: '1.3', day: '2026-02-10' }]);
       // A platform filter narrows the markers to that platform's versions.
       expect((await overview(h, db, NOW, { platforms: ['android'] })).versionsFirstSeen).toEqual([{ version: '1.1', day: '2026-02-01' }]);
     });
@@ -287,9 +281,9 @@ describe('verification of the Overview (piece 5)', () => {
       await refreshAnalyticsCatalog(h.ctx, NOW);
       const answer = await overview(h, db, NOW);
       // checkout since 15:00Z yesterday (a catalog total
-      // leaves only the test installation out), after G at 14:00Z yesterday: A, B, C, A, E and the server = 6; app_started: c1, d1 = 2.
+      // leaves only the test installation out), after G at 14:00Z yesterday: A, B, C, A and the server = 5; app_started: c1, d1 = 2.
       expect(answer.topEvents.events).toEqual([
-        { name: 'checkout', events: 6 },
+        { name: 'checkout', events: 5 },
         { name: 'app_started', events: 2 },
       ]);
       expect(answer.notices).toEqual([]);

@@ -138,7 +138,7 @@ export function analyticsEventRoutes(ctx: AppContext): FastifyPluginAsyncZod {
           tags: ['Analytics catalog'],
           summary: 'Read an event',
           description:
-            'AN-052. Viewer or above. The catalog entry, its categories, and its params with their observed types, descriptions and the ten most frequent values of each over the last seven days (`topValuesFrom` to `topValuesTo`, all environments). The top values read the event store and hold a query slot. A hidden event is readable by name.',
+            'AN-052. Viewer or above. The catalog entry, its categories, and its params with their observed types, descriptions and the ten most frequent values of each over the last seven days (`topValuesFrom` to `topValuesTo`). The top values read the event store and hold a query slot. A hidden event is readable by name.',
           params: nameParam,
           response: { 200: detailSchema, ...errorsFor(400, 401, 403, 404, 503) },
         },
@@ -270,7 +270,7 @@ export function analyticsEventRoutes(ctx: AppContext): FastifyPluginAsyncZod {
           summary: 'Run a trend',
           description: [
             'AN-060 to AN-069. Viewer or above; holds a query slot (`503 analytics_busy` after ten seconds without one, `503 query_limit_exceeded` past the per-query limits).',
-            'The definition of section 9.2, with its defaults: the last 30 days by day; presets end today and include it; a definition naming no `environment` filter reads `production` only. 1 to 5 series, each an event name or `*` (any event of a device installation that is not a background event), a metric (`events`, `installations`, `users`, `perInstallation`) and filters; a `split` only with one series (the ten values with the largest metric over the range, then `Other` and `None`). The hour interval covers at most seven days.',
+            'The definition of section 9.2, with its defaults: the last 30 days by day; presets end today and include it. 1 to 5 series, each an event name or `*` (any event of a device installation that is not a background event), a metric (`events`, `installations`, `users`, `perInstallation`) and filters; a `split` only with one series (the ten values with the largest metric over the range, then `Other` and `None`). The hour interval covers at most seven days.',
             'Each series has one point per period of the range, zeros included, and states the range it `covered`: from the oldest day kept to today. A range wholly before it answers an empty series marked `range_outside_retention`. A period is `incomplete` when it contains now or the covered range cuts it. An unknown or deleted event answers an empty series. `?format=csv` or `?format=json` downloads one row per period and series.',
           ].join('\n\n'),
           params: databaseIdParam,

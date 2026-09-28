@@ -24,7 +24,7 @@ import type {
 } from './types.js';
 
 export const SDK_NAME = 'inlet-sdk';
-export const SDK_VERSION = '0.4.0';
+export const SDK_VERSION = '0.5.0';
 
 const DEDUPE_KEY = 'dedupe';
 type DedupeState = { byFingerprint: Record<string, number>; recent: number[] };
@@ -246,7 +246,6 @@ export class CrashClient {
         ...(this.options.build ? { build: truncateCrashText(this.options.build, 64) } : {}),
         ...(this.options.channel ? { channel: truncateCrashText(this.options.channel, 32) } : {}),
       },
-      environment: truncateCrashText(this.options.environment ?? 'production', 32),
       ...(this.options.os ? { os: this.options.os } : {}),
       ...(this.options.runtime ? { runtime: this.options.runtime } : {}),
       ...(userId ? { user: { id: userId } } : {}),
@@ -391,7 +390,7 @@ export class CrashClient {
 
   /** Fills what the integrator left out and bounds what they supplied. */
   private completeEnvelope(report: CrashReportInput): CrashEnvelope {
-    const { kind, exception, native, exit, tags, context, fingerprint, user, os, runtime, release, environment, platform, timestamp, eventId, previousRun } = report;
+    const { kind, exception, native, exit, tags, context, fingerprint, user, os, runtime, release, platform, timestamp, eventId, previousRun } = report;
     const filled = this.base(kind, { ...(tags ? { tags } : {}), ...(context ? { context } : {}), ...(fingerprint ? { fingerprint } : {}) }, previousRun === true);
     const envelope: CrashEnvelope = {
       ...filled,
@@ -399,7 +398,6 @@ export class CrashClient {
       ...(timestamp ? { timestamp } : {}),
       ...(platform ? { platform } : {}),
       ...(release ? { release: { version: truncateCrashText(release.version, 64), ...(release.build ? { build: truncateCrashText(release.build, 64) } : {}), ...(release.channel ? { channel: truncateCrashText(release.channel, 32) } : {}) } } : {}),
-      ...(environment ? { environment: truncateCrashText(environment, 32) } : {}),
       ...(os ? { os } : {}),
       ...(runtime ? { runtime } : {}),
       ...(user ? { user: { id: truncateCrashText(user.id, CRASH_LIMITS.userIdMaxLength) } } : {}),

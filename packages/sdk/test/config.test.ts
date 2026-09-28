@@ -87,7 +87,7 @@ describe('init (RC-111, RC-128)', () => {
     expect(fetched!.body).toMatchObject({ platform: 'other', app: { version: '1.4.2', build: '88', id: 'com.example' }, locale: 'fr-FR', attributes: { plan: 'pro', seats: 4, beta: true }, sdk: { name: 'inlet-sdk', version: SDK_VERSION } });
     expect(fetched!.body.installationId).toMatch(UUID);
     expect(fetched!.body).not.toHaveProperty('deriveCountry');
-    expect(SDK_VERSION).toBe('0.4.0');
+    expect(SDK_VERSION).toBe('0.5.0');
   });
 });
 
@@ -613,7 +613,7 @@ describe('refresh and transport (RC-116, RC-121, RC-122)', () => {
 
   it('a deployment whose /v1/health lacks config leaves the in-app defaults, said through debug', async () => {
     const server = new FakeConfig();
-    server.caps = ['crash', 'identity'];
+    server.caps = ['crash'];
     server.publish({ version: 1, values: { limit: 99 } });
     const debug: string[] = [];
     const { reasons, onError } = errors();

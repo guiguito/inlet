@@ -585,7 +585,6 @@ export type AnalyticsOverviewQuery = {
   range: AnalyticsRange;
   apps: string[];
   platforms: string[];
-  environments: string[];
   unit: 'installation' | 'user';
 };
 export type AnalyticsFigure = { value: number | null; previous: number | null; covered: { from: string; to: string } | null };
@@ -596,7 +595,7 @@ export type AnalyticsOverview = {
   unit: 'installation' | 'user';
   timezone: string;
   keptFrom: string | null;
-  filters: { apps: string[]; platforms: string[]; environments: string[] };
+  filters: { apps: string[]; platforms: string[] };
   figures: {
     activeLastHour: AnalyticsFigure;
     dailyActiveLastDay: AnalyticsFigure;
@@ -660,8 +659,8 @@ export type CrashGroup = {
 export type CrashTimeline = {
   days: { day: string; reports: number; newGroups: number }[];
   releases: { version: string; day: string }[];
-  /** Present when `by` was release, os or environment (CR-046). */
-  breakdown?: { by: 'release' | 'os' | 'environment' | 'kind'; rows: { key: string; reports: number; groups: number }[] };
+  /** Present when `by` was release, os or kind (CR-046). */
+  breakdown?: { by: 'release' | 'os' | 'kind'; rows: { key: string; reports: number; groups: number }[] };
 };
 
 export type CrashGroupDetail = Omit<CrashGroup, 'sparkline'> & {
@@ -679,7 +678,6 @@ export type CrashReport = {
   clockSkew: boolean;
   kind: string;
   release: string;
-  environment: string;
   os: { name: string | null; version: string | null; arch: string | null };
   userId: string | null;
   /** CR-118: the shared SDK identity. */
@@ -696,7 +694,6 @@ export type CrashEnvelopeView = {
   platform?: string;
   kind?: string;
   release?: { version: string; build?: string; channel?: string };
-  environment?: string;
   exception?: {
     type: string;
     message: string;
@@ -740,7 +737,6 @@ export type CrashGroupFilters = {
   kind?: string;
   release?: string;
   os?: string;
-  environment?: string;
   userId?: string;
   installationId?: string;
   sessionId?: string;
@@ -875,7 +871,6 @@ export const api = {
     }
     for (const app of query.apps) search.append('app', app);
     for (const platform of query.platforms) search.append('platform', platform);
-    for (const environment of query.environments) search.append('environment', environment);
     search.set('unit', query.unit);
     return request<AnalyticsOverview>(`/v1/analytics-databases/${databaseId}/overview?${search.toString()}`, signal ? { signal } : {});
   },
@@ -938,10 +933,10 @@ export const api = {
     request<{ releases: CrashRelease[] }>(`/v1/crash-databases/${databaseId}/releases`),
   /** Section 8.1: the values the Groups tab's selects offer, without the stats breakdown's cost. */
   getCrashFilters: (databaseId: string) =>
-    request<{ kinds: string[]; operatingSystems: string[]; environments: string[] }>(
+    request<{ kinds: string[]; operatingSystems: string[] }>(
       `/v1/crash-databases/${databaseId}/filters`,
     ),
-  getCrashStats: (databaseId: string, options: CrashGroupFilters & { days: number; by?: 'day' | 'release' | 'os' | 'environment' | 'kind' }) =>
+  getCrashStats: (databaseId: string, options: CrashGroupFilters & { days: number; by?: 'day' | 'release' | 'os' | 'kind' }) =>
     request<CrashTimeline>(`/v1/crash-databases/${databaseId}/stats${crashQuery(options)}`),
   crashGroupsExportUrl: (databaseId: string, format: 'json' | 'csv', filters: CrashGroupFilters) =>
     `/v1/crash-databases/${databaseId}/groups/export${crashQuery({ ...filters, format })}`,
@@ -965,7 +960,6 @@ export const api = {
           platform: 'browser',
           kind: 'message',
           release: { version: 'test' },
-          environment: 'development',
           exception: { type: 'TestReport', message: 'Test report from the Collect tab', handled: true, frames: [] },
         },
       },

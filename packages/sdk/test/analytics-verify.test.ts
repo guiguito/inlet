@@ -16,7 +16,7 @@ import { CHROME_MAC, FakeInlet, FakeStorage, SharedQueue, START, fakeLocks, json
 
 /**
  * The verification of piece 11a: the gaps the first suite left (every standard event against
- * the server's `validateEvent`, sampling, a 0.2.x module beside a config-created ID, forget,
+ * the server's `validateEvent`, sampling, the attached ID beside a config-created one, forget,
  * the 24-hour rotation, the Electron sentinel end to end) and the defects the review found.
  */
 
@@ -63,7 +63,7 @@ describe('what a batch carries (AN-222, section 9.1)', () => {
     const first = analytics.init({ ...options(server), app: { version: '1.0.0', build: '7' }, store });
     await first.close();
     resetSharedIdentity();
-    const client = analytics.init({ ...options(server), app: { version: '1.1.0', build: '8', id: 'com.example' }, store, userId: 'u1', attribution: 'spring', experiments: { hero: 'b' }, environment: 'staging' });
+    const client = analytics.init({ ...options(server), app: { version: '1.1.0', build: '8', id: 'com.example' }, store, userId: 'u1', attribution: 'spring', experiments: { hero: 'b' } });
     const c = crash(server, { platform: 'node' });
     client.screen('Home');
     client.track('checkout_completed', { category: 'shop', params: { plan: 'pro', items: 3, trial: false } });
@@ -113,7 +113,7 @@ describe('crash flags (AN-150, CR-119)', () => {
 });
 
 describe('the attached installation ID (FD-016, RC-119)', () => {
-  it('a module that attaches installationId whenever it is set (0.2.x) never sees a config-created ID while analytics is disabled', async () => {
+  it('the attached installation ID never carries a config-created ID while analytics is disabled', async () => {
     const storage = page();
     const configCreated = '0190a1b2-c3d4-4e5f-8a6b-7c8d9e0f1a2b';
     storage.map.set(`inlet-sdk:${IDENTITY_KEYS.installationId}`, configCreated);
@@ -133,35 +133,6 @@ describe('the attached installation ID (FD-016, RC-119)', () => {
     expect(storage.getItem(`inlet-sdk:${IDENTITY_KEYS.installationId}`)).toBe(configCreated);
   });
 
-  it('an identity an older module version created first is upgraded in place, and analytics initialises', async () => {
-    page();
-    const server = new FakeInlet();
-    // What 0.2.0's crash module leaves on globalThis when it initialises first: its own class,
-    // with the session, user and attached installation ID, and none of this version's methods.
-    const older = {
-      session: null as { id: string; startedAt: number; lastActivityAt: number } | null,
-      random: undefined,
-      userId: 'u1' as string | null,
-      installationId: null as string | null,
-      useRandom() {},
-      sessionId(this: { session: { id: string } | null }) {
-        return this.session?.id ?? 'none';
-      },
-    };
-    (globalThis as Record<symbol, unknown>)[Symbol.for('inlet-sdk.identity')] = older;
-    const client = initBrowser(options(server), { queue: new SharedQueue() });
-    // The older module reads the same object, so it sees the attached ID while analytics is enabled.
-    expect(sharedIdentity()).toBe(older);
-    expect(older.installationId).toBe(client.getInstallationId());
-    await client.setEnabled(false);
-    expect(older.installationId).toBeNull();
-    await client.setEnabled(true);
-    await client.flush();
-    expect(server.events('app_started')[0]!.userId).toBe('u1');
-  });
-});
-
-describe('consent writes (AN-225, FD-016)', () => {
   it('Node device mode: disabled, then forget, leaves nothing on disk but the opt-out; enabling leaves no empty opt-out file', async () => {
     const dir = tempDir();
     try {
@@ -282,21 +253,21 @@ describe('keepalive when the page is hidden (AN-232, AN-233, AN-241)', () => {
     expect([...queue.records.values()].some((value) => value.includes('"late"'))).toBe(true);
   });
 
-  it('a page hidden before /v1/health has listed analytics sends nothing that an older server would drop as refused', async () => {
+  it('a page hidden before /v1/health has listed analytics sends nothing that a deployment without analytics would refuse', async () => {
     page();
     const drops: string[] = [];
     const posts: string[] = [];
     let answerHealth!: (response: Response) => void;
     const health = new Promise<Response>((resolve) => (answerHealth = resolve));
-    const olderServer: typeof fetch = async (input) => {
+    const withoutAnalytics: typeof fetch = async (input) => {
       if (String(input).endsWith('/v1/health')) return health;
       posts.push(String(input));
-      return json(404, { error: { code: 'not_found' } });
+      return json(503, { error: { code: 'analytics_unavailable' } });
     };
-    const client = initBrowser({ ...options(new FakeInlet()), fetch: olderServer, onDrop: (reason) => drops.push(reason) }, { queue: new SharedQueue() });
+    const client = initBrowser({ ...options(new FakeInlet()), fetch: withoutAnalytics, onDrop: (reason) => drops.push(reason) }, { queue: new SharedQueue() });
     await settle();
     client.pageHidden();
-    answerHealth(json(200, { capabilities: ['crash', 'identity'] }));
+    answerHealth(json(200, { capabilities: ['feedback', 'crash', 'mcp', 'config'] }));
     await settle();
     client.pageHidden();
     await settle();
@@ -417,7 +388,7 @@ describe('the Electron sentinel with analytics (CR-119, AN-151, AN-230)', () => 
     const file = join(userData, 'inlet-crash', 'running.json');
     const server = new FakeInlet();
     const { uninstall } = await installElectronMain(crashOptions(server), { exitCode: false } as never, { electron: electron(userData) });
-    // Crash only: what 0.2.0 wrote.
+    // Crash only: no identity.
     expect(Object.keys(JSON.parse(readFileSync(file, 'utf8'))).sort()).toEqual(['release', 'startedAt']);
     const client = analytics.init({ ...options(server), app: { version: '2.3.4' }, store: new MemoryStore() });
     const recorded = () => JSON.parse(readFileSync(file, 'utf8')).identity as { sessionId: string; installationId: string } | undefined;

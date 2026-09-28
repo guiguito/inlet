@@ -248,7 +248,6 @@ export async function ingestCrashReport(ctx: AppContext, input: IngestInput): Pr
       clockSkew,
       kind: envelope.kind,
       releaseId: release.id,
-      environment: envelope.environment,
       osName: envelope.os?.name ?? null,
       osVersion: envelope.os?.version ?? null,
       arch: envelope.os?.arch ?? null,
@@ -283,11 +282,10 @@ export async function ingestCrashReport(ctx: AppContext, input: IngestInput): Pr
         day: effectiveAt.toISOString().slice(0, 10),
         releaseId: release.id,
         osName: envelope.os?.name ?? '',
-        environment: envelope.environment,
         count: 1,
       })
       .onConflictDoUpdate({
-        target: [crashGroupDaily.crashGroupId, crashGroupDaily.day, crashGroupDaily.releaseId, crashGroupDaily.osName, crashGroupDaily.environment],
+        target: [crashGroupDaily.crashGroupId, crashGroupDaily.day, crashGroupDaily.releaseId, crashGroupDaily.osName],
         set: { count: sql`${crashGroupDaily.count} + 1` },
       });
 

@@ -398,7 +398,7 @@ function CohortEditor({
             fields={draft.unit === 'user' ? ANALYTICS_POPULATION_FILTER_FIELDS.filter((field) => field !== 'installAttribution') : ANALYTICS_POPULATION_FILTER_FIELDS}
             onChange={(filters) => update({ filters })}
           />
-          <p className="text-xs text-muted-foreground">These test each unit at its start (its install, or its first occurrence), never its returns. Without an environment filter, only production counts.</p>
+          <p className="text-xs text-muted-foreground">These test each unit at its start (its install, or its first occurrence), never its returns.</p>
         </section>
 
         <p className="text-xs text-muted-foreground" data-testid="cohort-web-note">

@@ -133,7 +133,7 @@ export function installReactNativeHandlers(options: ReactNativeHandlerOptions): 
       // application's either, but the application keeps running, so it is not a crash.
       client?.captureFatal(error, { kind: 'exception', handled: isFatal !== true });
     } catch {
-      // The reporter must never make a crash worse (0.1.5).
+      // The reporter must never make a crash worse.
     }
     previous?.(error, isFatal);
   };

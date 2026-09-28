@@ -11,30 +11,13 @@ import { FakeConfig, flush, resetConfigSlots } from './config-helpers.js';
 
 /**
  * FD-016, RC-117, RC-119: the config module joins the shared identity without creating it, with
- * whatever module and version creates it, before or after. The published 0.2.x crash module is
- * simulated by `OldIdentity` and its `sharedIdentity()`, as `dist/crash/node.js` of 0.2.0 has them.
+ * whatever module creates it, before or after.
  */
 
 const SLOT = Symbol.for('inlet-sdk.identity');
 const WATCHERS = Symbol.for('inlet-sdk.identity.user-watchers');
 const holder = globalThis as unknown as Record<symbol, unknown>;
 const DEFAULTS = { title: 'Hello' };
-
-class OldIdentity {
-  private session: string | null = null;
-  userId: string | null = null;
-  installationId: string | null = null;
-  sessionId(): string {
-    this.session ??= 'old-session';
-    return this.session;
-  }
-}
-
-/** 0.2.0's `sharedIdentity()`, word for word. */
-function oldSharedIdentity(): OldIdentity {
-  (holder as Record<symbol, OldIdentity | undefined>)[SLOT] ??= new OldIdentity();
-  return holder[SLOT] as OldIdentity;
-}
 
 let clients: ConfigClient<typeof DEFAULTS>[] = [];
 
@@ -66,31 +49,22 @@ async function lastUser(server: FakeConfig): Promise<unknown> {
 }
 
 describe('the shared identity (FD-016, RC-117)', () => {
-  it('config first, then a 0.2.x module: its identity lands in the slot, takes the user, is watched, and never gets the installation ID', async () => {
+  it('config first, then the crash module: its identity lands in the slot, takes the user, is watched, and never gets the installation ID', async () => {
     const server = new FakeConfig();
     const client = init(server, { userId: 'early' });
     await client.ready();
     expect(holder[SLOT]).toBeUndefined();
-    const old = oldSharedIdentity();
-    expect(old).toBeInstanceOf(OldIdentity);
-    expect(old.sessionId()).toBe('old-session');
-    expect(old.userId).toBe('early');
-    old.userId = 'switched';
-    expect(await lastUser(server)).toBe('switched');
-    expect(old.installationId).toBeNull();
-    expect(client.getInstallationId()).not.toBeNull();
-
-    // The current crash module then upgrades it in place, and the watcher survives the upgrade.
     const current = crash(server);
-    expect(sharedIdentity()).toBe(old);
-    expect(typeof (old as unknown as { currentSession?: unknown }).currentSession).toBe('function');
+    const identity = sharedIdentity();
+    expect(identity.userId).toBe('early');
     current.setUser('via-crash');
     expect(await lastUser(server)).toBe('via-crash');
-    expect(old.installationId).toBeNull();
+    expect(identity.installationId).toBeNull();
+    expect(client.getInstallationId()).not.toBeNull();
   });
 
-  it('a 0.2.x module first, then config, then the current analytics module', async () => {
-    oldSharedIdentity().userId = 'u0';
+  it('the crash module first, then config, then the analytics module', async () => {
+    sharedIdentity().userId = 'u0';
     const server = new FakeConfig();
     const client = init(server);
     await client.ready();

@@ -52,11 +52,10 @@ const USER_WATCHERS = Symbol.for('inlet-sdk.identity.user-watchers');
 
 /**
  * RC-117: tells `fn` of every change of the shared user ID, whichever module made it. The
- * modules set the field directly — the published 0.2.x crash module among them — so the first
- * watcher turns the identity's `userId` into an accessor: every write, from any copy of the
- * package sharing that identity, goes through it. A function rather than a method, so that it
- * works on an identity an older copy created, and so that the config module's browser entry
- * does not bundle the class. Writing the same value is not a change.
+ * modules set the field directly, so the first watcher turns the identity's `userId` into an
+ * accessor: every write, from any copy of the package sharing that identity, goes through it.
+ * A function rather than a method, so that the config module's browser entry does not bundle
+ * the class. Writing the same value is not a change.
  */
 export function watchUserId(identity: { userId: string | null }, fn: (userId: string | null) => void): () => void {
   const target = identity as { userId: string | null; [USER_WATCHERS]?: Set<(userId: string | null) => void> };
