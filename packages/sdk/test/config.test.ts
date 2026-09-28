@@ -87,7 +87,7 @@ describe('init (RC-111, RC-128)', () => {
     expect(fetched!.body).toMatchObject({ platform: 'other', app: { version: '1.4.2', build: '88', id: 'com.example' }, locale: 'fr-FR', attributes: { plan: 'pro', seats: 4, beta: true }, sdk: { name: 'inlet-sdk', version: SDK_VERSION } });
     expect(fetched!.body.installationId).toMatch(UUID);
     expect(fetched!.body).not.toHaveProperty('deriveCountry');
-    expect(SDK_VERSION).toBe('0.4.0');
+    expect(SDK_VERSION).toBe('0.5.0');
   });
 });
 

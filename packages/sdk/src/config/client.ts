@@ -14,7 +14,7 @@ import { CONFIG_EXPERIMENTS_SLOT, IDENTITY_KEYS, MemoryIdentityStorage, watchUse
 import type { ConfigDefaults, ConfigDetails, ConfigErrorReason, ConfigInitOptions, ConfigUpdate, Widen } from './types.js';
 
 export const SDK_NAME = 'inlet-sdk';
-export const SDK_VERSION = '0.4.0';
+export const SDK_VERSION = '0.5.0';
 
 /** RC-121: a deployment that does not list `config` is asked again after this, as the analytics module does (AN-241). */
 export const HEALTH_RETRY_MS = 10 * 60_000;
