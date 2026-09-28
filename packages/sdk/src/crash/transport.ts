@@ -1,7 +1,7 @@
 import { CRASH_LIMITS } from '@inlet/shared/crash-core';
 export { MemoryStore } from '../store.js';
 import type { QueueStore } from '../store.js';
-import { capabilities, settleWithin, timeoutSignal } from '../health.js';
+import { settleWithin, timeoutSignal } from '../health.js';
 import type { CrashEnvelope, DropReason, SentReport } from './types.js';
 
 /**
@@ -58,7 +58,6 @@ export class Transport {
   private failures = 0;
   private closed = false;
   private paused = false;
-  private warnedServer = false;
   private readonly paceMs: number;
   private readonly timeoutMs: number;
   private readonly backoffBaseMs: number;
@@ -265,10 +264,7 @@ export class Transport {
   ): Promise<{ kind: 'answered'; results: BatchResult[] } | { kind: 'rate_limited'; retryAfterMs: number } | { kind: 'failed'; reason: string }> {
     const base = `${this.options.baseUrl.replace(/\/$/, '')}/v1/crash-databases/${this.options.crashDatabaseId}/reports`;
     const headers = { authorization: `Bearer ${this.options.publishableKey}`, 'content-type': 'application/json' };
-    const identity = await this.checkServer();
-    // CR-118: a deployment that does not list `identity` would refuse the whole envelope
-    // for an unknown field, so the fields are left out rather than the report lost.
-    const envelopes = batch.map((item) => (identity ? item.envelope : withoutIdentity(item.envelope)));
+    const envelopes = batch.map((item) => item.envelope);
     // CR-106: bounds the request and the body read; not cleared, so a hung body is bounded
     // too. The timer is unref'd and aborting a settled request does nothing.
     const timeout = timeoutSignal(this.timeoutMs);
@@ -314,31 +310,4 @@ export class Transport {
       results: batch.map((_, index) => ({ ok: false as const, index, error: { code: error?.code ?? `http_${response.status}`, message: error?.message ?? '' } })),
     };
   }
-
-  /**
-   * FD-013, FD-016: what the deployment can do, from the shared probe, which is asked
-   * again after a failed probe. Returns whether the identity fields may be sent. A
-   * deployment without the crash routes is said once through debug; queueing until the
-   * server is upgraded is the right behaviour, not failing.
-   */
-  private async checkServer(): Promise<boolean> {
-    const caps = await capabilities(this.options.baseUrl, this.options.fetch, this.timeoutMs);
-    if (caps === null) {
-      this.options.debug('Inlet is not reachable for a health check; reports will queue.');
-      return false;
-    }
-    if (!caps.includes('crash') && !this.warnedServer) {
-      this.warnedServer = true;
-      this.options.debug('This Inlet deployment predates Crash Reports (Release 6); upgrade the server. Reports will queue and be refused until then.');
-    }
-    return caps.includes('identity');
-  }
-
-}
-
-/** CR-118: the envelope a deployment older than the identity fields accepts. */
-function withoutIdentity(envelope: CrashEnvelope): CrashEnvelope {
-  if (envelope.installationId === undefined && envelope.sessionId === undefined) return envelope;
-  const { installationId: _installation, sessionId: _session, ...rest } = envelope;
-  return rest;
 }

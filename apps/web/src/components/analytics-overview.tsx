@@ -38,7 +38,7 @@ const PRESET_LABELS: Record<(typeof ANALYTICS_RANGE_PRESETS)[number], string> = 
 const CLIENT_PLATFORMS = ANALYTICS_PLATFORMS.filter((platform) => platform !== 'server');
 const SELECT = 'h-9 rounded-md border border-input bg-transparent px-2 text-sm shadow-xs focus-visible:outline-2 focus-visible:outline-ring';
 
-const DEFAULT_QUERY: AnalyticsOverviewQuery = { range: { preset: 'last30Days' }, apps: [], platforms: [], environments: ['production'], unit: 'installation' };
+const DEFAULT_QUERY: AnalyticsOverviewQuery = { range: { preset: 'last30Days' }, apps: [], platforms: [], unit: 'installation' };
 
 const integer = (value: number) => value.toLocaleString();
 const percent = (value: number) => `${(value * 100).toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
@@ -57,15 +57,13 @@ export function OverviewPanel({ databaseId, timezone, unreachable }: { databaseI
   });
   // The app filter appears once the database has seen more than one app (PRD 8.1).
   const apps = useQuery({ queryKey: ['analytics-filter-values', databaseId, 'app'], queryFn: () => api.analyticsFilterValues(databaseId, { dimension: 'app' }), retry: false, staleTime: 60_000 });
-  const environments = useQuery({ queryKey: ['analytics-filter-values', databaseId, 'environment'], queryFn: () => api.analyticsFilterValues(databaseId, { dimension: 'environment' }), retry: false, staleTime: 60_000 });
   const update = (patch: Partial<AnalyticsOverviewQuery>) => setQuery((previous) => ({ ...previous, ...patch }));
-  const knownEnvironments = environments.data?.values ?? [];
   const data = overview.data;
   const empty = data?.notices.some((notice) => notice.code === 'no_events') ?? false;
 
   return (
     <div className="mt-4 space-y-4" data-testid="overview">
-      <FilterBar query={query} update={update} timezone={timezone} apps={apps.data?.values ?? []} environments={knownEnvironments} />
+      <FilterBar query={query} update={update} timezone={timezone} apps={apps.data?.values ?? []} />
 
       {overview.error ? (
         <p role="status" className="rounded-md border border-destructive/40 px-3 py-2 text-sm" data-testid="overview-error">
@@ -124,18 +122,15 @@ function FilterBar({
   update,
   timezone,
   apps,
-  environments,
 }: {
   query: AnalyticsOverviewQuery;
   update: (patch: Partial<AnalyticsOverviewQuery>) => void;
   timezone: string;
   apps: string[];
-  environments: string[];
 }) {
   const custom = 'from' in query.range;
   // The custom range starts on today in the database's timezone, the calendar every figure uses.
   const today = todayInZone(timezone);
-  const allEnvironments = environments.length > 1 && environments.every((value) => query.environments.includes(value));
   const chips: { label: string; isDefault: boolean; remove?: () => void }[] = [
     (() => {
       const isDefault = 'preset' in query.range && query.range.preset === 'last30Days';
@@ -146,17 +141,6 @@ function FilterBar({
     ...(query.platforms.length === 0
       ? [{ label: 'Every client platform', isDefault: true }]
       : query.platforms.map((platform) => ({ label: `Platform ${platform}`, isDefault: false, remove: () => update({ platforms: query.platforms.filter((value) => value !== platform) }) }))),
-    ...(allEnvironments
-      ? [{ label: 'Every environment', isDefault: false, remove: () => update({ environments: ['production'] }) }]
-      : query.environments.map((environment) => ({
-          label: `Environment ${environment}`,
-          isDefault: environment === 'production' && query.environments.length === 1,
-          // Removing the last environment reads every one the database has seen.
-          remove: () => {
-            const rest = query.environments.filter((value) => value !== environment);
-            update({ environments: rest.length > 0 ? rest : environments.length > 0 ? environments : ['production'] });
-          },
-        }))),
     { label: query.unit === 'user' ? 'Counting user IDs' : 'Counting installations', isDefault: query.unit === 'installation', ...(query.unit === 'user' ? { remove: () => update({ unit: 'installation' }) } : {}) },
   ];
 
@@ -216,22 +200,6 @@ function FilterBar({
                 {platform}
               </option>
             ))}
-          </select>
-        </label>
-        <label className="space-y-1 text-[13px]">
-          <span className="block font-medium">Environment</span>
-          <select
-            className={SELECT}
-            aria-label="Environment"
-            value={allEnvironments ? '*' : query.environments.length === 1 ? query.environments[0] : '*'}
-            onChange={(event) => update({ environments: event.target.value === '*' ? (environments.length > 0 ? environments : ['production']) : [event.target.value] })}
-          >
-            {[...new Set(['production', ...environments, ...query.environments])].map((environment) => (
-              <option key={environment} value={environment}>
-                {environment}
-              </option>
-            ))}
-            {environments.length > 1 ? <option value="*">Every environment</option> : null}
           </select>
         </label>
         <label className="space-y-1 text-[13px]">

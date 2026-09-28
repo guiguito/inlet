@@ -1,4 +1,3 @@
-import { readFile } from 'node:fs/promises';
 import net from 'node:net';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { pino } from 'pino';
@@ -9,7 +8,6 @@ import {
   eventStoreState,
   requireAnalyticsEnabled,
   requireEventStore,
-  splitStatements,
 } from '../../src/db/clickhouse.js';
 import { ApiError } from '../../src/lib/errors.js';
 import { createHarness, type Harness } from '../setup/harness.js';
@@ -22,7 +20,7 @@ import { TEST_CLICKHOUSE_DATABASE, TEST_ENV } from '../setup/config.js';
  * either shows up here.
  */
 
-const BASE_CAPABILITIES = ['feedback', 'crash', 'feedback-cross-origin', 'mcp', 'identity', 'config'];
+const BASE_CAPABILITIES = ['feedback', 'crash', 'mcp', 'config'];
 const UNREACHABLE = 'http://inlet:inlet@127.0.0.1:1';
 
 function expectApiError(fn: () => unknown, code: string): ApiError {
@@ -110,7 +108,7 @@ describe('the event store, configured and ready', () => {
       await scratch.connect();
       await scratch.connect();
       const recorded = await scratch.query<{ version: number; name: string }>('SELECT version, name FROM inlet_migrations ORDER BY version');
-      expect(recorded).toEqual([{ version: 1, name: '0001_events' }, { version: 2, name: '0002_version_first' }, { version: 3, name: '0003_analytics_erasure_targets' }, { version: 4, name: '0004_session_rollup_installation_index' }]);
+      expect(recorded).toEqual([{ version: 1, name: '0001_events' }]);
       const tables = await scratch.query<{ name: string }>('SELECT name FROM system.tables WHERE database = {database:String} ORDER BY name', { database });
       expect(tables.map((t) => t.name)).toEqual([
         'analytics_erasure_targets', 'events', 'events_ingest', 'events_mv', 'inlet_migrations', 'installation_first', 'installation_first_mv',
@@ -123,39 +121,29 @@ describe('the event store, configured and ready', () => {
     }
   });
 
-  it('applies 0004 on a store migrated through 0003, keeping its events, and again over itself (33.12d)', async () => {
-    const database = `${TEST_CLICKHOUSE_DATABASE}_through3`;
+  it('applies the baseline again over itself, as after a start cut short, keeping its events', async () => {
+    const database = `${TEST_CLICKHOUSE_DATABASE}_again`;
     const scratch = new EventStore({ url: TEST_ENV.INLET_CLICKHOUSE_URL, database, migrate: true, log: pino({ level: 'silent' }) });
     await store.command('DROP DATABASE IF EXISTS {database:Identifier}', { database });
     const count = async (table: string) => Number((await scratch.query<{ n: string }>(`SELECT count() AS n FROM ${table}`))[0]!.n);
     try {
-      // A store migrated through 0003, as a Release 8 development build left it, holding an event.
-      await store.command('CREATE DATABASE {database:Identifier}', { database });
-      await scratch.command('CREATE TABLE inlet_migrations (version UInt32, name String, applied_at DateTime64(3, \'UTC\') DEFAULT now64(3)) ENGINE = MergeTree ORDER BY version');
-      for (const [version, name] of [[1, '0001_events'], [2, '0002_version_first'], [3, '0003_analytics_erasure_targets']] as const) {
-        for (const statement of splitStatements(await readFile(new URL(`../../clickhouse/${name}.sql`, import.meta.url), 'utf8'))) await scratch.command(statement);
-        await scratch.command('INSERT INTO inlet_migrations (version, name) SELECT {version:UInt32}, {name:String}', { version, name });
-      }
-      const row0003 = (n: number) => ({
-        database_key: 7, local_day: '2026-09-20', effective_time: `2026-09-20 10:00:0${n}.000`, received_time: `2026-09-20 10:00:0${n}.500`,
-        event_id: `0192f5a0-0000-7000-8000-00000000000${n}`, event_name_id: 1, category: 'standard', installation_id: '0192f5a0-0000-7000-8000-000000000001',
-        installation_kind: 'device', ephemeral: false, user_id: '', session_id: `0192f5a0-0000-7000-8000-00000000abc${n}`, platform: 'ios', os_name: 'iOS',
+      await scratch.connect();
+      await scratch.insert('events_ingest', [{
+        database_key: 7, local_day: '2026-09-20', effective_time: '2026-09-20 10:00:01.000', received_time: '2026-09-20 10:00:01.500',
+        event_id: '0192f5a0-0000-7000-8000-000000000001', event_name_id: 1, category: 'standard', installation_id: '0192f5a0-0000-7000-8000-000000000001',
+        installation_kind: 'device', ephemeral: false, user_id: '', session_id: '0192f5a0-0000-7000-8000-00000000abc1', platform: 'ios', os_name: 'iOS',
         platform_version: '18.1', runtime_name: 'react-native', runtime_version: '0.74', app_id: '', app_version: '1.4.0', app_build: '140', locale: 'fr-FR',
-        environment: 'production', country: 'FR', attribution: '', experiment_keys: [], experiment_variants: [], params: {}, install_age_days: 0,
-        install_age_weeks: 0, install_age_months: 0, clock_corrected: false, credential_id: 'key_test', is_replay: false,
-      });
-      await scratch.insert('events_ingest', [row0003(1)]);
+        country: 'FR', attribution: '', experiment_keys: [], experiment_variants: [], params: {}, install_age_days: 0,
+        install_age_weeks: 0, install_age_months: 0, clock_corrected: false, credential_id: 'key_test', is_replay: false, session_event: 'started',
+      }]);
+      expect([await count('events'), await count('session_rollup'), await count('installation_index')]).toEqual([1, 1, 1]);
+      // The session marker feeds the rollup and never reaches `events`.
+      const columns = await scratch.query<{ name: string }>("SELECT name FROM system.columns WHERE database = {database:String} AND table = 'events'", { database });
+      expect(columns.map((c) => c.name)).not.toContain('session_event');
+      // Every statement again, over the objects it made: idempotent.
+      await scratch.command('ALTER TABLE inlet_migrations DELETE WHERE version = 1 SETTINGS mutations_sync = 2');
       await scratch.connect();
-      expect((await scratch.query<{ version: number }>('SELECT version FROM inlet_migrations ORDER BY version')).map((r) => Number(r.version))).toEqual([1, 2, 3, 4]);
-      expect(await count('events')).toBe(1);
-      // No backfill (Release 8 unshipped, 0004's header): the rollups start with the next insert.
-      expect([await count('session_rollup'), await count('installation_index')]).toEqual([0, 0]);
-      await scratch.insert('events_ingest', [{ ...row0003(2), session_event: 'started' }]);
-      expect([await count('session_rollup'), await count('installation_index')]).toEqual([1, 1]);
-      // Every statement of 0004 again, over the objects it made: idempotent.
-      await scratch.command('ALTER TABLE inlet_migrations DELETE WHERE version = 4 SETTINGS mutations_sync = 2');
-      await scratch.connect();
-      expect([await count('events'), await count('session_rollup'), await count('installation_index')]).toEqual([2, 1, 1]);
+      expect([await count('events'), await count('session_rollup'), await count('installation_index')]).toEqual([1, 1, 1]);
     } finally {
       await store.command('DROP DATABASE IF EXISTS {database:Identifier}', { database });
       await scratch.close();
@@ -167,7 +155,7 @@ describe('the event store, configured and ready', () => {
     await store.command('CREATE DATABASE IF NOT EXISTS {database:Identifier}', { database });
     const scratch = new EventStore({ url: TEST_ENV.INLET_CLICKHOUSE_URL, database, migrate: false, log: pino({ level: 'silent' }) });
     try {
-      await expect(scratch.connect()).rejects.toThrow(/0001_events, 0002_version_first, 0003_analytics_erasure_targets, 0004_session_rollup_installation_index are not applied/);
+      await expect(scratch.connect()).rejects.toThrow(/0001_events are not applied/);
       expect(scratch.state).toBe('pending');
     } finally {
       await store.command('DROP DATABASE IF EXISTS {database:Identifier}', { database });
@@ -256,7 +244,6 @@ describe('the event store, configured and ready', () => {
         app_version: '1.4.0',
         app_build: '140',
         locale: 'fr-FR',
-        environment: 'production',
         country: 'FR',
         attribution: '',
         experiment_keys: [],
@@ -531,7 +518,7 @@ describe('the event store, configured and ready', () => {
 
     it('records the test installation and an ephemeral one as such; only a device installation has "any event" (AN-025, AN-031)', async () => {
       await store.insert('events_ingest', [
-        event({ installation_id: OTHER, installation_kind: 'test', environment: 'development', event_name_id: 9 }),
+        event({ installation_id: OTHER, installation_kind: 'test', event_name_id: 9 }),
         event({ ephemeral: true }),
       ]);
       expect(await installation(OTHER)).toMatchObject({ installation_kind: 'test', ephemeral: false });
@@ -673,14 +660,14 @@ describe('the event store, configured and ready', () => {
       const trend = `SELECT local_day, count() AS installations
         FROM (SELECT local_day, installation_id, count() AS events FROM events
               WHERE database_key = {databaseKey:UInt32} AND event_name_id = {eventNameId:UInt32}
-                AND local_day BETWEEN {from:Date} AND {to:Date} AND environment = 'production'
+                AND local_day BETWEEN {from:Date} AND {to:Date}
                 AND installation_kind = 'device'
               GROUP BY local_day, installation_id)
         GROUP BY local_day ORDER BY local_day`;
       const active = `SELECT local_day, count() AS installations
         FROM (SELECT local_day, installation_id, count() AS events FROM events
               WHERE database_key = {databaseKey:UInt32} AND local_day BETWEEN {from:Date} AND {to:Date}
-                AND environment = 'production' AND platform != 'server' AND installation_kind = 'device'
+                AND platform != 'server' AND installation_kind = 'device'
               GROUP BY local_day, installation_id)
         GROUP BY local_day ORDER BY local_day`;
       const params = { databaseKey: DB, eventNameId: 3, from: '2026-09-14', to: '2026-09-20' };
@@ -719,7 +706,7 @@ describe('without an event store', () => {
     await h.close();
   });
 
-  it('lists exactly the capabilities it listed before analytics existed', async () => {
+  it('lists every capability but analytics', async () => {
     expect(h.ctx.eventStore).toBeNull();
     expect(eventStoreState(h.ctx.eventStore)).toBe('not_configured');
     const response = await h.app.inject({ method: 'GET', url: '/v1/health' });

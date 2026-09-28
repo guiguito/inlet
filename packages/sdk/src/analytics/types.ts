@@ -31,7 +31,6 @@ export type AnalyticsEnvelope = {
   runtime?: { name?: string; version?: string };
   locale?: string;
   country?: string;
-  environment?: string;
   ephemeral?: boolean;
   sdk: { name: string; version: string };
 };
@@ -87,8 +86,6 @@ export type AnalyticsInitOptions = {
    * (AN-186): initialise with `false` and call `setEnabled(true)` in the consent callback.
    */
   enabled?: boolean;
-  /** Defaults to `production`. */
-  environment?: string;
   userId?: string;
   attribution?: string;
   experiments?: Record<string, string>;

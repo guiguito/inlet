@@ -35,7 +35,8 @@ function rejected(result: EventValidation) {
 describe('validateEvent', () => {
   it('accepts the minimal event and fills the defaults of section 9.1', () => {
     const { event, warnings } = accepted(validateEvent(valid()));
-    expect(event).toMatchObject({ platform: 'other', environment: 'production', app: { version: '1.4.0' } });
+    expect(event).toMatchObject({ platform: 'other', app: { version: '1.4.0' } });
+    expect(event).not.toHaveProperty('environment');
     expect(warnings).toEqual([]);
   });
 
@@ -55,7 +56,6 @@ describe('validateEvent', () => {
         runtime: { name: 'r'.repeat(32), version: 'v'.repeat(32) },
         locale: 'zh-Hant-TW',
         country: 'fr',
-        environment: 'e'.repeat(32),
         ephemeral: true,
         sdk: { name: 's'.repeat(64), version: 'v'.repeat(32) },
       }),
@@ -72,6 +72,10 @@ describe('validateEvent', () => {
     expect(rejected(validateEvent({ ...valid(), os: { name: 'iOS', arch: 'arm64' } }))).toMatchObject({ code: 'unknown_field', field: 'os.arch' });
     // A typo is reported even when the event is also out of bounds.
     expect(rejected(validateEvent({ name: '1bad', extra: 1 }))).toMatchObject({ code: 'unknown_field', field: 'extra' });
+  });
+
+  it('refuses an environment label: an environment is a project (Foundations section 17)', () => {
+    expect(rejected(validateEvent({ ...valid(), environment: 'production' }))).toMatchObject({ code: 'unknown_field', field: 'environment' });
   });
 
   it('requires eventId, timestamp, name, app.version and sdk (AN-012)', () => {
@@ -156,8 +160,6 @@ describe('validateEvent', () => {
       [{ locale: 'not a locale' }, 'locale'],
       [{ country: 'FRA' }, 'country'],
       [{ country: 'F1' }, 'country'],
-      [{ environment: 'e'.repeat(33) }, 'environment'],
-      [{ environment: '' }, 'environment'],
       [{ ephemeral: 'yes' }, 'ephemeral'],
       [{ sdk: { name: 's'.repeat(65), version: '1' } }, 'sdk.name'],
       [{ sdk: { name: 's', version: 'v'.repeat(33) } }, 'sdk.version'],
@@ -184,7 +186,6 @@ describe('validateEvent', () => {
         runtime: null,
         locale: null,
         country: null,
-        environment: null,
         ephemeral: null,
         app: { version: '1.4.0', build: null, id: null },
       }),
@@ -198,7 +199,6 @@ describe('validateEvent', () => {
       app: { version: '1.4.0' },
       platform: 'other',
       os: { version: '14' },
-      environment: 'production',
       sdk: { name: 'inlet-sdk', version: '0.3.0' },
     });
     // A null installation ID beside a user ID is no installation ID: the event is the user's.

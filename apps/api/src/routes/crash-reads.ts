@@ -30,7 +30,6 @@ export const groupFiltersSchema = z.object({
   release: z.string().max(64).optional().describe('A release version string.'),
   os: z.string().max(32).optional(),
   arch: z.string().max(16).optional(),
-  environment: z.string().max(32).optional(),
   userId: z.string().max(128).optional(),
   // CR-040: the shared SDK identity, any letter case, with or without dashes.
   installationId: identityUuidSchema.optional(),
@@ -73,9 +72,9 @@ const timelineSchema = z.object({
   releases: z.array(z.object({ version: z.string(), day: z.string() })).describe('Release markers: first seen in range.'),
 });
 
-/** CR-046: reports and groups in the range, per release, operating system or environment. */
+/** CR-046: reports and groups in the range, per release, operating system or kind. */
 const breakdownSchema = z.object({
-  by: z.enum(['release', 'os', 'environment', 'kind']),
+  by: z.enum(['release', 'os', 'kind']),
   rows: z.array(z.object({ key: z.string(), reports: z.int(), groups: z.int().describe('Distinct groups seen in the range.') })),
 });
 
@@ -90,7 +89,6 @@ const statsSchema = timelineSchema.extend({ breakdown: breakdownSchema.optional(
 const crashFiltersSchema = z.object({
   kinds: z.array(z.string()),
   operatingSystems: z.array(z.string()),
-  environments: z.array(z.string()),
 });
 
 const groupDetailSchema = groupSchema.omit({ sparkline: true }).extend({
@@ -108,7 +106,6 @@ const reportSchema = z.object({
   clockSkew: z.boolean(),
   kind: z.string(),
   release: z.string(),
-  environment: z.string(),
   os: z.object({ name: z.string().nullable(), version: z.string().nullable(), arch: z.string().nullable() }),
   userId: z.string().nullable(),
   installationId: z.string().nullable().describe('CR-118: the SDK installation ID, lowercase and dashed.'),
@@ -138,7 +135,6 @@ export function groupWhere(databaseId: string, f: Filters): SQL {
   const daily: SQL[] = [];
   if (f.release) daily.push(sql`d.release_id in (select id from crash_releases where crash_database_id = ${databaseId} and version = ${f.release})`);
   if (f.os) daily.push(sql`d.os_name = ${f.os}`);
-  if (f.environment) daily.push(sql`d.environment = ${f.environment}`);
   if (daily.length > 0) {
     parts.push(sql`exists (select 1 from crash_group_daily d where d.crash_group_id = g.id and ${sql.join(daily, sql` and `)})`);
   }
@@ -155,7 +151,6 @@ function dailyWhere(databaseId: string, f: Filters, sinceDay: string): SQL {
   const parts: SQL[] = [sql`d.crash_database_id = ${databaseId}`, sql`d.day >= ${sinceDay}`];
   if (f.release) parts.push(sql`d.release_id in (select id from crash_releases where crash_database_id = ${databaseId} and version = ${f.release})`);
   if (f.os) parts.push(sql`d.os_name = ${f.os}`);
-  if (f.environment) parts.push(sql`d.environment = ${f.environment}`);
   const needsGroup = f.state || f.kind || f.q || f.userId || f.installationId || f.sessionId || f.arch || f.since || f.until;
   if (needsGroup) parts.push(sql`exists (select 1 from crash_groups g where g.id = d.crash_group_id and ${groupWhere(databaseId, f)})`);
   return sql.join(parts, sql` and `);
@@ -291,16 +286,16 @@ export function crashReadRoutes(ctx: AppContext): FastifyPluginAsyncZod {
         const names = await releaseNames(database.id);
         const { days, ...filters } = request.query;
         // CR-041: the same filters as the list reshape the breakdowns and the timeline. The
-        // rollup-backed ones (release, OS, environment) apply here; the group-level ones
+        // rollup-backed ones (release, OS) apply here; the group-level ones
         // describe the group itself and are already satisfied by having reached it.
-        const scope = sql`d.crash_group_id = ${group.id} and ${dailyWhere(database.id, { release: filters.release, os: filters.os, environment: filters.environment }, '0000-00-00')}`;
+        const scope = sql`d.crash_group_id = ${group.id} and ${dailyWhere(database.id, { release: filters.release, os: filters.os }, '0000-00-00')}`;
         const byRelease = (await ctx.db.execute(sql`select d.release_id, sum(d.count)::int as n from crash_group_daily d where ${scope} group by 1 order by 2 desc, 1`)).rows as Row[];
         const byOs = (await ctx.db.execute(sql`select d.os_name, sum(d.count)::int as n from crash_group_daily d where ${scope} group by 1 order by 2 desc, 1`)).rows as Row[];
         return {
           ...presentGroup(group, names),
           byRelease: byRelease.map((r) => ({ version: names.get(String(r.release_id)) ?? '?', count: Number(r.n) })),
           byOs: byOs.map((r) => ({ os: String(r.os_name), count: Number(r.n) })),
-          timeline: await timeline(database.id, { release: filters.release, os: filters.os, environment: filters.environment }, days, group.id),
+          timeline: await timeline(database.id, { release: filters.release, os: filters.os }, days, group.id),
         };
       },
     );
@@ -385,7 +380,6 @@ export function crashReadRoutes(ctx: AppContext): FastifyPluginAsyncZod {
           querystring: z.object({
             release: z.string().max(64).optional(),
             os: z.string().max(32).optional(),
-            environment: z.string().max(32).optional(),
             userId: z.string().max(128).optional(),
             installationId: identityUuidSchema.optional(),
             sessionId: identityUuidSchema.optional(),
@@ -405,7 +399,6 @@ export function crashReadRoutes(ctx: AppContext): FastifyPluginAsyncZod {
           parts.push(eq(crashReports.releaseId, id));
         }
         if (request.query.os) parts.push(eq(crashReports.osName, request.query.os));
-        if (request.query.environment) parts.push(eq(crashReports.environment, request.query.environment));
         if (request.query.userId) parts.push(eq(crashReports.userId, request.query.userId));
         if (request.query.installationId) parts.push(eq(crashReports.installationId, request.query.installationId));
         if (request.query.sessionId) parts.push(eq(crashReports.sessionId, request.query.sessionId));
@@ -491,7 +484,7 @@ export function crashReadRoutes(ctx: AppContext): FastifyPluginAsyncZod {
       {
         schema: {
           tags: ['Crash groups'],
-          summary: 'The kinds, systems and environments this database has actually seen',
+          summary: 'The kinds and systems this database has actually seen',
           description:
             'What the Groups tab offers in its selects, so a filter never lists a value that would return nothing. Distinct values only; `stats?by=` is the one that counts them.',
           params: databaseIdParam,
@@ -504,18 +497,15 @@ export function crashReadRoutes(ctx: AppContext): FastifyPluginAsyncZod {
         const [kinds, seen] = await Promise.all([
           ctx.db.execute(sql`select distinct kind from crash_groups where crash_database_id = ${database.id} order by 1`),
           ctx.db.execute(sql`
-            select distinct os_name, environment from crash_group_daily where crash_database_id = ${database.id}`),
+            select distinct os_name from crash_group_daily where crash_database_id = ${database.id}`),
         ]);
         const operatingSystems = new Set<string>();
-        const environments = new Set<string>();
         for (const row of seen.rows as Row[]) {
           if (row.os_name) operatingSystems.add(String(row.os_name));
-          if (row.environment) environments.add(String(row.environment));
         }
         return {
           kinds: (kinds.rows as Row[]).map((row) => String(row.kind)),
           operatingSystems: [...operatingSystems].sort(),
-          environments: [...environments].sort(),
         };
       },
     );
@@ -527,11 +517,11 @@ export function crashReadRoutes(ctx: AppContext): FastifyPluginAsyncZod {
           tags: ['Crash groups'],
           summary: 'Reports and new groups per day, honouring the list filters',
           description:
-            'CR-046, CR-048: served from the daily rollup, never from reports. `days` is 7, 30 or 90. With `by=release|os|environment` the response also carries the range broken down by that dimension.',
+            'CR-046, CR-048: served from the daily rollup, never from reports. `days` is 7, 30 or 90. With `by=release|os|kind` the response also carries the range broken down by that dimension.',
           params: databaseIdParam,
           querystring: groupFiltersSchema.extend({
             days: z.coerce.number().int().min(1).max(90).default(30),
-            by: z.enum(['day', 'release', 'os', 'environment', 'kind']).default('day'),
+            by: z.enum(['day', 'release', 'os', 'kind']).default('day'),
           }),
           response: { 200: statsSchema, ...errorsFor(400, 401, 403, 404) },
         },
@@ -544,7 +534,7 @@ export function crashReadRoutes(ctx: AppContext): FastifyPluginAsyncZod {
         if (by === 'day') return series;
         const sinceDay = daysBack(days)[0]!;
         // Kind lives on the group, not the rollup; the join is one indexed lookup per row.
-        const column = { release: sql`d.release_id`, os: sql`d.os_name`, environment: sql`d.environment`, kind: sql`k.kind` }[by];
+        const column = { release: sql`d.release_id`, os: sql`d.os_name`, kind: sql`k.kind` }[by];
         const join = by === 'kind' ? sql`join crash_groups k on k.id = d.crash_group_id` : sql``;
         const rows = (await ctx.db.execute(sql`
           select ${column} as key, sum(d.count)::int as reports, count(distinct d.crash_group_id)::int as groups
@@ -648,7 +638,6 @@ export function crashReadRoutes(ctx: AppContext): FastifyPluginAsyncZod {
         if (filters.release) parts.push(sql`r.release_id = ${versionToId.get(filters.release) ?? ''}`);
         if (filters.os) parts.push(sql`r.os_name = ${filters.os}`);
         if (filters.arch) parts.push(sql`r.arch = ${filters.arch}`);
-        if (filters.environment) parts.push(sql`r.environment = ${filters.environment}`);
         if (filters.userId) parts.push(sql`r.user_id = ${filters.userId}`);
         if (filters.installationId) parts.push(sql`r.installation_id = ${filters.installationId}`);
         if (filters.sessionId) parts.push(sql`r.session_id = ${filters.sessionId}`);
@@ -675,7 +664,6 @@ export function crashReadRoutes(ctx: AppContext): FastifyPluginAsyncZod {
                 clockSkew: r.clock_skew,
                 kind: r.kind,
                 release: names.get(String(r.release_id)) ?? '?',
-                environment: r.environment,
                 os: { name: r.os_name, version: r.os_version, arch: r.arch },
                 userId: r.user_id,
                 installationId: r.installation_id ?? null,
@@ -744,7 +732,6 @@ function presentReport(row: typeof crashReports.$inferSelect, names: Map<string,
     clockSkew: row.clockSkew,
     kind: row.kind,
     release: names.get(row.releaseId) ?? '?',
-    environment: row.environment,
     os: { name: row.osName, version: row.osVersion, arch: row.arch },
     userId: row.userId,
     installationId: row.installationId,

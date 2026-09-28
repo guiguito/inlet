@@ -26,7 +26,8 @@ integrating it into an application, [API.md](API.md) is the reference, and
 Three levels, and it is worth getting them straight once.
 
 - A **project** groups related work and owns the API keys. One per application is the
-  usual shape.
+  usual shape, and one per environment: a staging project and a production project keep
+  test crashes, events and config apart, since no database has environments of its own.
 - A **feedback database** is one form and everything ever submitted to it. "Beta
   feedback", "Checkout survey", "Bug reports".
 - A **response** is one submission: the answers, any screenshots, and the version of
@@ -247,7 +248,7 @@ application is not JavaScript, any HTTP client can post the envelope documented 
 **Groups** opens with a timeline: reports per day and new groups per day, over 7, 30 or 90
 days, with a marker on the day each release first appeared. Below it, one row per group
 with its count, how many distinct users hit it, when it was first and last seen, and a
-small sparkline. Filter by state, release, operating system, environment or failure kind,
+small sparkline. Filter by state, release, operating system or failure kind,
 or search the error type and message; the chart follows the filters. Select several rows
 to resolve or ignore them together.
 
@@ -403,9 +404,8 @@ withdrawing consent (`setEnabled(false, { forget: true })`).
 - **A snippet per runtime**: browser, React Native, Electron main and renderer, and a Node
   server, each consent-first as above.
 - **Send a test event.** One click sends a `test_event` through the same path your app
-  uses, in environment `development`, from a test installation that counts in no
-  installation, active, session or cohort figure and takes no slot of the database's
-  500 event names. Use it to check the database accepts events before you ship.
+  uses, from a test installation that counts in no installation, active, session or
+  cohort figure and takes no slot of the database's 500 event names. Use it to check the database accepts events before you ship.
 - **The live feed**: the latest events the database accepted, newest first, refreshed every
   three seconds, each with its time, name, the start of its installation ID, platform and app
   version. **Pause** stops the refresh while you read. The feed is kept in the server's memory
@@ -428,11 +428,10 @@ seen are still stored; delete or block names you no longer send in **Events**.
 **Insights → Overview** answers "how is the product used right now?" on one screen.
 
 **The filter bar.** A range (the last 30 days unless you choose another; every preset ends
-today and includes it), an app (shown once the database has seen more than one), a platform,
-an environment and what to count. The filters in force are the chips under the bar, the
-defaults marked as such: every app, every client platform, `production` only, installations.
-Remove a chip to go back to its default: the range chip returns to the last 30 days, and removing
-the environment chip reads every environment the database has seen. **Dates** in the range list
+today and includes it), an app (shown once the database has seen more than one), a platform
+and what to count. The filters in force are the chips under the bar, the defaults marked as
+such: every app, every client platform, installations. Remove a chip to go back to its default:
+the range chip returns to the last 30 days. **Dates** in the range list
 starts both ends on today in the database's reporting timezone. Switch **Count**
 to **User IDs** to read active users instead of active installations: it changes the active
 figures only.
@@ -450,7 +449,7 @@ with a period it only partly remembers, which is why a young database shows few 
 - **Stickiness.** The average daily active count over the last 30 days divided by the
   monthly one: how many of the month's users come on a given day.
 - **New installations.** Installations first seen in the range, filtered by where they were
-  installed (their first app, platform and environment). Installations whose app could not
+  installed (their first app and platform). Installations whose app could not
   keep its identity (a private window) are left out, since each visit would look new.
 - **Sessions.** Distinct sessions that sent `app_started` in the range, each counted on the day
   and app version of its first `app_started`. Inlet does not guess sessions from gaps between
@@ -510,8 +509,7 @@ the last 30 days, today included. Each point is one period of the reporting time
 unique count counts an installation once per period, so a weekly chart counts an
 installation active on three days of a week once, not three times. The period still under
 way is drawn dashed with a hollow point, because its number will still grow; so is a period
-the data only partly covers. Only `production` events count unless you add an environment
-filter. Days before the oldest event the database keeps are shaded, with a note saying from
+the data only partly covers. Days before the oldest event the database keeps are shaded, with a note saying from
 when events are kept: an empty stretch there means no data, not no activity. Below the chart,
 a table gives every value per period.
 
@@ -652,11 +650,11 @@ shows the newest and says that the oldest are left out.
   event* with optional filters: `purchase_completed` again.
 - **By**: day, week, month or year — month for purchases.
 - **Count**: installations (the default) or user IDs.
-- **Who is in the cohort**: population filters on the platform, app, app version, environment,
+- **Who is in the cohort**: population filters on the platform, app, app version,
   country, attribution, install attribution or an experiment. They test each person at their
   start — for the install, the platform and version they installed on; for an event, those of the
   occurrence that started them — and never their returns: a cohort of iOS installs counts their
-  returns on the web too. Without an environment filter, only production counts.
+  returns on the web too.
 - **Start periods**: the last 12 periods by default, or a preset or dates.
 
 Name it and **Save**; the range you chose becomes its default.
@@ -689,8 +687,8 @@ ID from a crash report. **Users** finds everything the database knows about them
 the start of either, at least six characters; with fewer, only exact IDs match (a short user
 ID such as `u1` is still found), and the page says so. A user ID lists the user and every
 installation it was seen on. Without a search, the page lists the installations seen most
-recently, newest first, 50 a page, and the filters narrow them to a platform, an app version,
-a country or an environment, as each installation last reported.
+recently, newest first, 50 a page, and the filters narrow them to a platform, an app version
+or a country, as each installation last reported.
 
 Two kinds of installation appear there. A **device** installation is an installation as defined
 above. A **server** installation, marked *server*, is the one
@@ -704,7 +702,7 @@ installation of **Send a test event** is never listed.
 - **The header**: its ID, its current user ID, when it was installed (the time of its first
   event, which never moves), first and last seen, and its last event of any kind.
 - **Context**: what its latest event said, platform and version, runtime, app and app version,
-  locale, country, environment, attribution and experiments, and its install attribution, the
+  locale, country, attribution and experiments, and its install attribution, the
   first attribution it ever reported.
 - **Identity history**: every user ID it carried, the current one first, each with when it was
   first and last seen on it. A shared tablet shows several; a user who signed out and in again

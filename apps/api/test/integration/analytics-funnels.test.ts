@@ -297,8 +297,8 @@ describe('funnels', () => {
       for (let i = 0; i < 2; i += 1) expect((await asAdmin(h, 'POST', `/v1/analytics-databases/${db.id}/test-event`)).statusCode).toBe(200);
       const now = Date.now();
       // A device installation sending the same name counts, so the name is not what leaves the test installation out.
-      await store(h, db, [ev('test_event', X, now - 2 * MINUTE, { environment: 'development', userId: 'dev-user' }), ev('test_event', X, now - MINUTE, { environment: 'development', userId: 'dev-user' })]);
-      const definition = { ...ONBOARDING, steps: [{ event: 'test_event', filters: [] }, { event: 'test_event', filters: [] }], filters: [{ field: 'environment' as const, op: 'is' as const, values: ['development'] }] };
+      await store(h, db, [ev('test_event', X, now - 2 * MINUTE, { userId: 'dev-user' }), ev('test_event', X, now - MINUTE, { userId: 'dev-user' })]);
+      const definition = { ...ONBOARDING, steps: [{ event: 'test_event', filters: [] }, { event: 'test_event', filters: [] }] };
       for (const unit of ['installation', 'user'] as const) {
         const answer = await steps(h, db, { definition: { ...definition, unit }, range: { preset: 'today' } }, now);
         expect(answer, unit).toMatchObject({ entered: 1 });
@@ -312,19 +312,19 @@ describe('funnels', () => {
       expect(answer.steps[1]!.reached).toBe(1);
     });
 
-    it('applies step and global filters, and reads production only unless an environment is named', async () => {
+    it('applies step and global filters', async () => {
       await store(h, db, [
         ev('onboarding_started', X, at(9, 3, 10)),
         ev('signup_completed', X, at(9, 3, 11), { params: { plan: 'free' } }),
         ev('onboarding_started', Y, at(9, 3, 10)),
         ev('signup_completed', Y, at(9, 3, 11), { params: { plan: 'pro' } }),
-        ev('onboarding_started', Z, at(9, 3, 10), { environment: 'development' }),
+        ev('onboarding_started', Z, at(9, 3, 10), { platform: 'android' }),
       ]);
       const pro = await steps(h, db, inline({ steps: [ONBOARDING.steps[0]!, { event: 'signup_completed', filters: [{ field: 'param', key: 'plan', op: 'is', values: ['pro'] }] }] }));
-      expect(pro.entered).toBe(2);
+      expect(pro.entered).toBe(3);
       expect(pro.steps[1]!.reached).toBe(1);
-      const dev = await steps(h, db, inline({ filters: [{ field: 'environment', op: 'is', values: ['development'] }] }));
-      expect(dev.entered).toBe(1);
+      const android = await steps(h, db, inline({ filters: [{ field: 'platform', op: 'is', values: ['android'] }] }));
+      expect(android.entered).toBe(1);
     });
 
     it('covers what is kept for a range that starts before the oldest event, and says so', async () => {
@@ -746,9 +746,9 @@ describe('funnels within the per-query memory limit (9.5, DECISIONS 33.7)', () =
     });
     // 400 installations, each doing the three steps in order every day from June 1 to August 29.
     await h.ctx.eventStore!.command(
-      `INSERT INTO events_ingest (database_key, local_day, effective_time, received_time, event_id, event_name_id, installation_id, installation_kind, platform, environment, app_version)
+      `INSERT INTO events_ingest (database_key, local_day, effective_time, received_time, event_id, event_name_id, installation_id, installation_kind, platform, app_version)
        SELECT {key:UInt32}, toDate(t), t, t + toIntervalMinute(1), generateUUIDv4(number), {ids:Array(UInt32)}[1 + number % 3],
-              toUUID(concat('0192f5a0-0000-7000-8000-', leftPad(toString(intDiv(number, 270)), 12, '0'))), 'device', 'ios', 'production', '1.4.0'
+              toUUID(concat('0192f5a0-0000-7000-8000-', leftPad(toString(intDiv(number, 270)), 12, '0'))), 'device', 'ios', '1.4.0'
        FROM (SELECT number, toDateTime64('2026-06-01 00:00:00', 3, 'UTC') + toIntervalDay(intDiv(number % 270, 3)) + toIntervalMinute(intDiv(number, 270) + (number % 3) * 20) AS t FROM numbers(108000))`,
       { key: database.key, ids: stepIds },
     );

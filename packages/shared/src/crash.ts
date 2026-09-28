@@ -85,7 +85,6 @@ export const crashEnvelopeSchema = z
       build: bounded(64).optional(),
       channel: bounded(32).optional(),
     }),
-    environment: z.string().min(1).max(32).default('production'),
     exception: crashExceptionSchema.optional(),
     native: crashNativeSchema.optional(),
     exit: crashExitSchema.optional(),

@@ -32,7 +32,7 @@ describe('funnel SQL binds every value', () => {
               mode,
               window: { value: 90, unit: 'minute' },
               unit,
-              filters: [{ field: 'environment', op: 'is', values: [`${HOSTILE}6`] }],
+              filters: [{ field: 'country', op: 'is', values: [`${HOSTILE}6`] }],
               ...(split ? { split } : {}),
               defaultRange: { preset: 'last30Days' },
               defaultView: { kind: 'steps' },

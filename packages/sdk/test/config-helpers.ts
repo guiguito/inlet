@@ -14,7 +14,7 @@ export type Published = { version: number | null; values: Record<string, JsonVal
 export type Fetched = { url: string; body: Record<string, unknown>; headers: Record<string, string> };
 
 export class FakeConfig {
-  readonly inlet = new FakeInlet(['config', 'crash', 'identity', 'analytics', 'feedback']);
+  readonly inlet = new FakeInlet(['config', 'crash', 'analytics', 'feedback']);
   published: Published = { version: null, values: {} };
   interval = 3600;
   readonly fetches: Fetched[] = [];

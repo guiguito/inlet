@@ -31,11 +31,6 @@ describe('the SDK identity on the server', () => {
     resetCrashRateLimits();
   });
 
-  it('health lists identity, so an SDK knows it may send the fields (FD-015, FD-016)', async () => {
-    const response = await h.app.inject({ method: 'GET', url: '/v1/health' });
-    expect(response.json().capabilities).toContain('identity');
-  });
-
   describe('crash reports (CR-118, CR-040, CR-011)', () => {
     let databaseId: string;
     let key: string;

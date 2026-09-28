@@ -88,7 +88,7 @@ export function createServer(config: McpConfig): McpServer {
         'Read the catalog first with list_analytics_events: it is the tracking plan, each event',
         'and param with the team’s description. query_analytics_trends charts events by the',
         'metric each series names, a unique count counting each installation or user ID once per',
-        'period, production events only unless a filter names an environment, the last 30 days',
+        'period, the last 30 days',
         'by day unless a range says otherwise; a split by app version or an experiment compares',
         'versions or variants. A point is incomplete while its period is under way, or while',
         'the range covered holds only part of it. run_analytics_cohort groups units by the period',

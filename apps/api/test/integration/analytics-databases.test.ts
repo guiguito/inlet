@@ -233,7 +233,7 @@ describe('analytics databases', () => {
     const base = {
       database_key: row!.key, local_day: '2026-09-20', effective_time: '2026-09-20 10:00:00.000', received_time: '2026-09-20 10:00:01.000',
       event_name_id: 1, category: '', installation_kind: 'device', ephemeral: false, session_id: null, platform: 'ios', os_name: '', platform_version: '',
-      runtime_name: '', runtime_version: '', app_id: '', app_version: '1.0.0', app_build: '', locale: '', environment: 'production', country: '',
+      runtime_name: '', runtime_version: '', app_id: '', app_version: '1.0.0', app_build: '', locale: '', country: '',
       attribution: '', experiment_keys: [], experiment_variants: [], params: {}, install_age_days: 0, install_age_weeks: 0, install_age_months: 0,
       clock_corrected: false, credential_id: 'cred_test', is_replay: false,
     };

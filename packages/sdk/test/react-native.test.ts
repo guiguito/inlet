@@ -63,7 +63,6 @@ function withoutCrypto(): void {
 function crashFetch() {
   const sent: CrashEnvelope[] = [];
   const impl: typeof fetch = async (input, init) => {
-    if (String(input).endsWith('/v1/health')) return new Response(JSON.stringify({ capabilities: ['crash', 'identity'] }), { status: 200 });
     const body = JSON.parse(String(init?.body)) as CrashEnvelope | { reports: CrashEnvelope[] };
     const reports = 'reports' in body ? body.reports : [body];
     sent.push(...reports);
@@ -213,7 +212,7 @@ describe('the React Native store (CR-097, FR-211)', () => {
 describe('feedback (FR-211)', () => {
   it('delivers a submission left pending when the application was killed, on the next launch', async () => {
     const storage = new AsyncStorageFake();
-    const server = new FakeInlet({ capabilities: ['feedback', 'feedback-cross-origin', 'identity'] });
+    const server = new FakeInlet();
     const options = { baseUrl: 'https://inlet.example', publishableKey: 'ipk_testtesttesttest', feedbackDatabaseId: 'fdb_test', storage, fetch: server.fetch };
 
     const first = initFeedback(options);

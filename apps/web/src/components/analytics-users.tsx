@@ -43,7 +43,6 @@ const FILTERS = [
   ['platform', 'Platform'],
   ['appVersion', 'App version'],
   ['country', 'Country'],
-  ['environment', 'Environment'],
 ] as const;
 
 function when(value: string | null): string {
@@ -358,7 +357,6 @@ function dimensionEntries(dims: ProfileDimensions): [string, ReactNode][] {
     ['App version', [dims.appVersion, dims.appBuild && `build ${dims.appBuild}`].filter(Boolean).join(' · ')],
     ['Locale', dims.locale],
     ['Country', dims.country],
-    ['Environment', dims.environment],
     ['Attribution', dims.attribution],
     ['Experiments', Object.entries(dims.experiments).map(([key, variant]) => `${key}: ${variant}`).join(', ')],
   ];

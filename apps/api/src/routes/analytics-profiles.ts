@@ -48,7 +48,6 @@ const dimensionsSchema = z.object({
   appVersion: z.string().nullable(),
   appBuild: z.string().nullable(),
   locale: z.string().nullable(),
-  environment: z.string().nullable(),
   country: z.string().nullable(),
   attribution: z.string().nullable(),
   experiments: z.record(z.string(), z.string()),
@@ -64,7 +63,6 @@ const summarySchema = z.object({
   platformVersion: z.string().nullable(),
   appVersion: z.string().nullable(),
   country: z.string().nullable(),
-  environment: z.string().nullable(),
   firstSeen: z.string().nullable(),
   lastSeen: z.string().nullable().describe('From events that are not background events; null for a server installation.'),
   lastEvent: z.string(),
@@ -146,7 +144,7 @@ export function analyticsProfileRoutes(ctx: AppContext): FastifyPluginAsyncZod {
           description: [
             'AN-120. Viewer or above; holds a query slot.',
             'With `q`: the installations whose ID is `q` or starts with it, and the user IDs equal to it or starting with it (`users`) with every installation they were seen on (in `installations`). A prefix needs at least six characters; shorter text matches exact IDs only and says `notice: prefix_too_short`. At most `limit` of each, `truncated` when more match.',
-            'Without `q`: the installations seen most recently, newest first then by installation ID, 50 a page, filtered by their latest `platform`, `appVersion`, `country` and `environment`. `nextCursor` carries the position and the first page’s time, so an installation active while you page is not listed twice. Device and server installations are listed; the test installation is not.',
+            'Without `q`: the installations seen most recently, newest first then by installation ID, 50 a page, filtered by their latest `platform`, `appVersion` and `country`. `nextCursor` carries the position and the first page’s time, so an installation active while you page is not listed twice. Device and server installations are listed; the test installation is not.',
           ].join('\n\n'),
           params: databaseIdParam,
           querystring: z.object({
@@ -154,7 +152,6 @@ export function analyticsProfileRoutes(ctx: AppContext): FastifyPluginAsyncZod {
             platform: z.string().max(64).optional(),
             appVersion: z.string().max(64).optional(),
             country: z.string().max(8).optional(),
-            environment: z.string().max(64).optional(),
             cursor,
             limit,
           }),

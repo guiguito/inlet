@@ -613,7 +613,7 @@ describe('refresh and transport (RC-116, RC-121, RC-122)', () => {
 
   it('a deployment whose /v1/health lacks config leaves the in-app defaults, said through debug', async () => {
     const server = new FakeConfig();
-    server.caps = ['crash', 'identity'];
+    server.caps = ['crash'];
     server.publish({ version: 1, values: { limit: 99 } });
     const debug: string[] = [];
     const { reasons, onError } = errors();

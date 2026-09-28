@@ -99,7 +99,7 @@ const READ_SETTINGS: ClickHouseSettings = {
   // without it, an aborted statement kept running in `system.processes`, DECISIONS 33.5).
   cancel_http_readonly_queries_on_client_close: 1,
   // One snapshot of each table for the whole statement: `indexRecords` and the session rollup's
-  // read (0004) read a table's single-row entries and its multi-row ones in separate subqueries,
+  // read read a table's single-row entries and its multi-row ones in separate subqueries,
   // which on different snapshots would list an entry twice or not at all while ingest writes.
   // The default since ClickHouse 25.12; stated so a server profile cannot turn it off.
   enable_shared_storage_snapshot_in_query: 1,

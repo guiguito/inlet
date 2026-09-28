@@ -354,7 +354,6 @@ function FunnelEditor({
         <section className="space-y-2 rounded-md border p-3" aria-label="Filters on every step">
           <p className="text-[13px] font-medium">Filters on every step</p>
           <FilterList databaseId={databaseId} event={draft.steps[0]?.event || '*'} filters={draft.filters} label="every step" onChange={(filters) => update({ filters })} />
-          <p className="text-xs text-muted-foreground">Without an environment filter, only production events count.</p>
         </section>
 
         <section className="flex flex-wrap items-end gap-4" aria-label="Range and view">

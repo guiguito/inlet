@@ -104,12 +104,11 @@ describe('piece 4 verification', () => {
    *   S (server installation of u3): checkout Sat — server, 1.2
    *   T (the test installation): checkout Wed
    *   D (u4): signup Mon — ios
-   *   E: checkout Mon in development
    */
   async function seedWeek() {
     const monday = mondayOf(addDays(todayIn('UTC', Date.now()), -14));
     const at = (offset: number) => Date.parse(`${addDays(monday, offset)}T12:00:00Z`);
-    const [A, B, C, D, E] = [uuid(), uuid(), uuid(), uuid(), uuid()];
+    const [A, B, C, D] = [uuid(), uuid(), uuid(), uuid()];
     const T = testInstallationId(db.row.installationSecret);
     for (const offset of [0, 1, 2]) await sendAt(h, db, at(offset), [event({ installationId: A, userId: 'u1', platform: 'ios', app: { version: '1.0' } })]);
     await sendAt(h, db, at(1), [event({ installationId: B, userId: 'u1', platform: 'android', app: { version: '1.1' } })]);
@@ -118,8 +117,7 @@ describe('piece 4 verification', () => {
     await sendAt(h, db, at(5), [event({ installationId: undefined, userId: 'u3', platform: 'server', app: { version: '1.2' } })]);
     await sendAt(h, db, at(2), [event({ installationId: T, platform: 'ios', app: { version: '1.0' } })]);
     await sendAt(h, db, at(0), [event({ installationId: D, userId: 'u4', name: 'signup', platform: 'ios', app: { version: '1.0' } })]);
-    await sendAt(h, db, at(0), [event({ installationId: E, platform: 'ios', environment: 'development', app: { version: '1.0' } })]);
-    return { monday, sunday: addDays(monday, 6), A, B, C, D, E, T };
+    return { monday, sunday: addDays(monday, 6), A, B, C, D, T };
   }
 
   describe('every number a trend returns, against hand-computed values', () => {
@@ -207,7 +205,7 @@ describe('piece 4 verification', () => {
           const bucket = interval === 'day' ? 'toString(local_day)' : 'toString(toMonday(local_day))';
           const raw = await h.ctx.eventStore!.query(
             `SELECT ${bucket} AS b, count() AS e, uniqExactIf(installation_id, installation_kind = 'device') AS i, uniqExactIf(user_id, user_id != '' AND installation_kind != 'test') AS u
-             FROM events WHERE database_key = {k:UInt32} AND ${rows} AND environment = 'production' AND local_day BETWEEN {f:Date} AND {t:Date}
+             FROM events WHERE database_key = {k:UInt32} AND ${rows} AND local_day BETWEEN {f:Date} AND {t:Date}
              GROUP BY b ORDER BY b`,
             { k: db.row.key, f: w.monday, t: w.sunday },
             { optimize_use_projections: 0 } as never,

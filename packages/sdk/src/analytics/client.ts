@@ -641,7 +641,6 @@ export class AnalyticsClient {
       ...(context.runtime ? { runtime: context.runtime } : {}),
       ...(context.locale ? { locale: context.locale } : {}),
       ...('country' in context && context.country ? { country: context.country } : {}),
-      ...(this.options.environment ? { environment: this.options.environment } : {}),
       ...(this.ephemeral && !server ? { ephemeral: true } : {}),
       sdk: { name: SDK_NAME, version: SDK_VERSION },
     };

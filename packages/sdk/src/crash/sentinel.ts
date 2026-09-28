@@ -25,8 +25,8 @@ export type PreviousRun = {
   lastUptimeMs?: number;
   /**
    * CR-119: the release of the run that died, so its report is filed against the version
-   * that crashed rather than the one just installed over it. Absent in a sentinel written
-   * by 0.1.x, which did not record it.
+   * that crashed rather than the one just installed over it. Absent when the file holds
+   * none that reads as one.
    */
   release?: SentinelRelease;
   /** CR-119: the session and installation of the run that died, when analytics recorded them. */
@@ -48,7 +48,7 @@ export type SentinelOptions = {
   release?: SentinelRelease;
   /**
    * CR-119: the identity to record, read at every write. Returns nothing unless an analytics
-   * client is enabled, so a crash-only application's sentinel holds what 0.2.0's did.
+   * client is enabled, so a crash-only application's sentinel holds only the start and release.
    */
   identity?: () => SentinelIdentity;
   debug: (message: string, detail?: unknown) => void;
@@ -129,7 +129,7 @@ function readPrevious(options: SentinelOptions): PreviousRun | null {
   }
 }
 
-/** CR-119: the release a sentinel recorded, absent from one written by 0.1.x. */
+/** CR-119: the release a sentinel recorded, if it reads as one. */
 function recordedRelease(value: unknown): SentinelRelease | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const release = value as Record<string, unknown>;

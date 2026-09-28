@@ -406,7 +406,7 @@ await installElectronMain({
 });
 ```
 
-Pass `[]` to either one to report every reason, as versions before 0.1.3 did.
+Pass `[]` to either one to report every reason.
 
 ### Catching the exits that leave nothing behind
 
@@ -452,7 +452,7 @@ only so a main-process module keeps working.
 
 A renderer never holds the key or a queue; everything goes through main. Main treats the
 channel as a trust boundary: it reads only `kind`, `exception`, `context`, `tags` and
-`fingerprint`, and fills in the release, environment, system and user itself, so a renderer
+`fingerprint`, and fills in the release, system and user itself, so a renderer
 running remote content cannot file a crash against a release that never shipped. Kinds are
 limited to `exception`, `unhandled-rejection`, `render-error` and `message`; widen that with
 `allowedKinds`, and restrict tag keys with `tagAllowlist`.
@@ -463,7 +463,7 @@ Only the fields of the crash envelope, and nothing your code did not put there:
 
 - the failure: kind, error type, message, frames (function name, file, line, column,
   whether it is your code);
-- your release, environment, operating system and runtime;
+- your release, operating system and runtime;
 - an opaque user ID, only after you call `setUser(id)`;
 - the session ID of the shared [identity](#identity), unless `identity: false`;
 - tags you set and any `context` you attach to a capture.
@@ -496,7 +496,7 @@ await flush(); // before a planned exit
 `captureReport` is for failure classes the SDK cannot see itself: a native crash your
 application parsed from a minidump on the next launch (`kind: 'native'`), or a sidecar the
 SDK does not supervise. You build the block for the kind; the SDK fills in the release,
-environment, system, user and tags. On Electron you no longer have to write the unclean-exit
+system, user and tags. On Electron you no longer have to write the unclean-exit
 sentinel yourself — `installElectronMain({ uncleanExit: true })` does it.
 
 ## Delivery
@@ -589,7 +589,7 @@ frame — so a redacted message costs you less than it appears to.
 | Option | Purpose |
 | --- | --- |
 | `baseUrl`, `publishableKey`, `crashDatabaseId`, `release` | Required. A secret key or an empty release throws at `init`. |
-| `build`, `channel`, `environment` | Reported with every envelope. `environment` defaults to `production`. |
+| `build`, `channel` | Reported with every envelope. There is no environment option: report a staging build to a staging project's crash database. |
 | `sampleRate` | 0 to 1. |
 | `enabled` | Start capturing or not. Default true. Flip it with `setEnabled`. |
 | `beforeSend(envelope)` | Return the envelope, a changed one, or `null` to drop it. Asynchronous, so it cannot run on the fatal path. |
@@ -605,7 +605,7 @@ frame — so a redacted message costs you less than it appears to.
 | `allowedKinds`, `tagAllowlist` | Electron main only: what the IPC channel accepts from a renderer. |
 | `ignoreRendererReasons`, `ignoreChildReasons` | Electron main only: exit reasons that are not crashes. Defaults `['clean-exit']` and `['clean-exit', 'killed']`. |
 | `uncleanExit` | Electron main only: report a previous run that never quit cleanly. Off by default, packaged builds only. |
-| `identity` | Attach the session ID of the shared [identity](#identity), and the installation ID while an analytics client is enabled. Default true; `false` sends exactly what 0.1.5 sent. Crash flags for crash-free sessions do not depend on it. |
+| `identity` | Attach the session ID of the shared [identity](#identity), and the installation ID while an analytics client is enabled. Default true; `false` sends neither ID, the user ID from `setUser` still included. Crash flags for crash-free sessions do not depend on it. |
 | `random(bytes)` | Fills a buffer with random bytes, for a runtime without `crypto.getRandomValues`. React Native only needs it without a polyfill, and even then IDs are still unique. |
 | `debug(message, detail)` | Receives warnings and transport events. Silent by default. |
 
@@ -842,7 +842,7 @@ Exactly the fields of the analytics envelope and nothing else: an event ID (UUID
 time, the name, an optional category, the installation ID, the user ID you set, the session
 ID, your attribution and experiments, your params, the app version, build and ID, the
 platform, the operating system and browser with their **major** versions (the full system
-version outside browsers), the language, the environment, whether the identity is
+version outside browsers), the language, whether the identity is
 ephemeral, and the SDK's name and version.
 
 Params, attribution, experiments and the user ID are yours: the SDK sends them only when you
@@ -956,7 +956,6 @@ included. The build fails past 20 KB.
 | `baseUrl`, `publishableKey`, `analyticsDatabaseId`, `app` | Required. `app` is `{ version, build?, id? }`; `id` tells apart the apps of one product. A secret key or an empty version throws at `init`. In Electron main `app` is optional: the application's version and name. |
 | `enabled` | Collect or not. Default true, unless a stored opt-out applies. |
 | `mode` | `device` or `server`. The Node entry defaults to `server`, the others to `device`. |
-| `environment` | Defaults to `production`. |
 | `userId`, `attribution`, `experiments` | Initial values of the calls above. |
 | `standardEvents` | `{ app_installed, app_updated, app_started, session_crashed }`, each on by default. |
 | `sessionTimeoutMinutes` | 30 by default, 1 to 240. |
@@ -1268,9 +1267,7 @@ it held are still what the application reads.
 **The limit of five experiments is shared** with your application's own `setExperiment` calls
 (UX Analytics AN-224): one past it is not recorded, and the config module says so through its
 `debug`. Nothing happens without an enabled analytics client, and the config module does not
-bundle the analytics module to do this. **The analytics module records them from 0.4.0**: where
-an application bundles an older copy of `inlet-sdk` for analytics beside this one, the config
-module works as usual and no experiment is recorded.
+bundle the analytics module to do this.
 
 ## Errors
 
@@ -1393,16 +1390,14 @@ is stored under keys every module reads (`inlet-sdk:installation-id` and its sib
 module the same persistence directory on Node and the same store on React Native. In
 Electron the main process holds it, and windows reach it through the renderer entries. While analytics is disabled the only thing written is its opt-out.
 
-It is sent only to a deployment whose `/v1/health` lists `identity`; an older deployment gets
-exactly the fields it has always accepted, so upgrading the SDK before the server loses no
-report. A report about the previous run — the unclean-exit report, or
+A report about the previous run — the unclean-exit report, or
 `captureReport({ …, previousRun: true })` — carries the session and installation IDs the
 sentinel recorded for that run, which it records only while analytics is enabled, and
 otherwise none.
 
 In the server, reports and submissions keep these IDs so that you can filter crash groups
 by session or installation, and see one respondent's crash beside their feedback.
-`identity: false` on either module's `init` turns it off for that module: a crash report is
-then exactly what 0.1.5 sent, the user ID from `setUser` included, and a submission carries
-no identity field at all.
+`identity: false` on either module's `init` turns it off for that module: a crash report then
+carries neither ID, the user ID from `setUser` still included, and a submission carries no
+identity field at all.
 

@@ -82,11 +82,8 @@ another origin, and these routes authenticate with a publishable key only.
 The exception is exactly these four routes, `GET /v1/health` and crash ingest. **Reading
 collected responses is not among them**, nor is anything a secret key reads, nor the
 management interface, nor the hosted form routes. `GET /v1/health` lists what a deployment
-opens in its `capabilities`, so a client can tell an old Inlet from an unreachable one:
-`feedback-cross-origin` means the four routes below answer a preflight, and `identity`
-means the deployment accepts the SDK identity fields on crash reports and submissions
-(see [Finalize](#4-finalize) and [The envelope](#the-envelope)). `inlet-sdk` leaves those
-fields out when talking to a deployment that does not list `identity`.
+serves in its `capabilities`: `feedback`, `crash`, `mcp` and `config` always, and
+`analytics` while its event store is configured and ready.
 
 ### 1. Read the published form
 
@@ -976,7 +973,6 @@ reads the body.
 | `platform` | no | `node`, `browser`, `electron`, `other` |
 | `kind` | yes | ≤ 32 lowercase; `exception`, `unhandled-rejection`, `renderer-gone`, `render-error`, `native`, `child-exit`, `unclean-exit`, `message`, or your own |
 | `release` | yes | `{version ≤ 64, build? ≤ 64, channel? ≤ 32}` |
-| `environment` | no | ≤ 32, default `production` |
 | `exception` | for `exception`, `unhandled-rejection`, `render-error`, `message` | `{type ≤ 128, message (truncated to 200), handled, frames[≤ 30]}`; frame `{function? ≤ 128, file? ≤ 128, line?, col?, inApp}` |
 | `native` | for `native` | `{process ≤ 32, fault ≤ 32, module ≤ 128, dumpBytes?}` |
 | `exit` | for `renderer-gone`, `child-exit`, `unclean-exit` | `{code?, signal? ≤ 16, reason? ≤ 64, name? ≤ 64, lastUptimeMs?}` |
@@ -990,9 +986,8 @@ reads the body.
 | `fingerprint` | no | ≤ 8 strings ≤ 128; `{{ default }}` expands to the computed fingerprint |
 
 Every string field has U+0000 removed and lone surrogates replaced with U+FFFD before
-validation, so no report is refused for its characters. The two identity fields are
-accepted by deployments whose `/v1/health` lists `identity`; an older deployment refuses
-them as `unknown_field`, which is why the SDK checks first.
+validation, so no report is refused for its characters. There is no environment field: an
+environment is a project, so a staging build reports to a staging project's crash database.
 
 ```bash
 curl -s -X POST "$BASE/v1/crash-databases/$DB/reports" \
@@ -1030,14 +1025,14 @@ later change to the rule never splits existing groups.
 ### Reading
 
 ```
-GET  /v1/crash-databases/{id}/groups?state&kind&release&os&arch&environment&userId&installationId&sessionId&since&until&q&sort&limit&offset&days
+GET  /v1/crash-databases/{id}/groups?state&kind&release&os&arch&userId&installationId&sessionId&since&until&q&sort&limit&offset&days
 GET  /v1/crash-databases/{id}/groups/{groupId}?days=30
-GET  /v1/crash-databases/{id}/groups/{groupId}/reports?release&os&environment&userId&installationId&sessionId&limit
+GET  /v1/crash-databases/{id}/groups/{groupId}/reports?release&os&userId&installationId&sessionId&limit
 GET  /v1/crash-databases/{id}/reports/{reportId}
 GET  /v1/crash-databases/{id}/reports/{reportId}/usage-profile
 GET  /v1/crash-databases/{id}/releases
 GET  /v1/crash-databases/{id}/filters
-GET  /v1/crash-databases/{id}/stats?days=30&by=day|release|os|environment|kind (plus the list filters)
+GET  /v1/crash-databases/{id}/stats?days=30&by=day|release|os|kind (plus the list filters)
 ```
 
 The groups list returns `{groups, total}`; `sort` is `lastSeen` (default), `firstSeen`,
@@ -1045,9 +1040,9 @@ The groups list returns `{groups, total}`; `sort` is `lastSeen` (default), `firs
 `days`. A group detail adds `byRelease`, `byOs` and a `timeline`
 (`{days: [{day, reports, newGroups}], releases: [{version, day}]}`). Stats return the
 same timeline for the whole database, reshaped by the filters, served from a daily rollup
-and never by scanning reports; with `by=release`, `os`, `environment` or `kind` they also carry
+and never by scanning reports; with `by=release`, `os` or `kind` they also carry
 `breakdown: {by, rows: [{key, reports, groups}]}` for the range. A group detail accepts
-the release, OS and environment filters too, and reshapes its breakdowns and timeline.
+the release and OS filters too, and reshapes its breakdowns and timeline.
 
 A report carries `installationId` and `sessionId` (null when absent) beside `userId`.
 Filtering groups by either returns the groups with at least one retained report carrying
@@ -1055,7 +1050,7 @@ it; the same filters apply to the report export.
 `…/usage-profile` answers the analytics profiles of the report's installation, for the
 "Usage profile" link (see [Profiles](#profiles)).
 
-`/filters` returns `{kinds, operatingSystems, environments}`: the distinct values this
+`/filters` returns `{kinds, operatingSystems}`: the distinct values this
 database has actually seen, for populating a filter control without offering a value that
 would match nothing. It is the cheap counterpart to `stats?by=`, which also counts the
 groups behind each value and costs an order of magnitude more to compute.
@@ -1292,14 +1287,14 @@ optional field is read as the field's absence; a param value may not be `null`.
 | `runtime` | no | `name` 32, `version` 32 | |
 | `locale` | no | BCP 47 with hyphens, 35 characters | `en-GB`, not `en_GB` |
 | `country` | no | ISO 3166-1 alpha-2 | Overrides the derived country |
-| `environment` | no | 32 characters | Defaults to `production` |
 | `ephemeral` | no | boolean | Set when the client could not persist its identity |
 | `sdk` | yes | `name` 64, `version` 32 | |
 
 UUIDs are accepted in any letter case, with or without dashes, and stored and returned
 lowercase with dashes. Standard events (`app_installed`, `app_updated`, `app_started`,
 `session_crashed`, `screen_viewed`) are ordinary events with the names and params the
-PRD gives them; any client may send them.
+PRD gives them; any client may send them. There is no environment field (`unknown_field`):
+an environment is a project, so a staging build sends to a staging project's database.
 
 #### Idempotency and clock correction
 
@@ -1351,7 +1346,7 @@ POST /v1/analytics-databases/{databaseId}/test-event          Creator or Admin
 GET  /v1/analytics-databases/{databaseId}/live?after=<cursor>  Viewer or above
 ```
 
-The **test event** sends one `test_event`, category `test`, environment `development`,
+The **test event** sends one `test_event`, category `test`,
 through the ingest path, attributed to the database's test installation. It answers like a
 batch, plus the `eventId` it sent. The test installation counts in no unique, active,
 new-installation, session or cohort figure, the event takes no slot of the event-name limit,
@@ -1437,7 +1432,7 @@ no query slot and answers while the event store is down.
 
 **One event** (`GET …/events/{name}`) adds its categories and its params, each with its
 observed types, its description and the ten most frequent values over the last seven days,
-today included, in every environment (`topValues`, with `topValuesFrom` and `topValuesTo`).
+today included (`topValues`, with `topValuesFrom` and `topValuesTo`).
 The top values read the event store, so this route holds a query slot. A hidden event reads
 the same. An unknown name is `404 event_not_found`.
 
@@ -1474,7 +1469,7 @@ GET /v1/analytics-databases/{id}/filters?param=plan&event=checkout_completed
 
 Distinct values, without counts, sorted, at most 1,000 (`truncated` says there are more), to
 fill filter controls. A `dimension` (`platform`, `platformVersion`, `runtime`, `app`,
-`appVersion`, `environment`, `country`, `attribution`, `installAttribution`, `category`,
+`appVersion`, `country`, `attribution`, `installAttribution`, `category`,
 `experiment`) covers the whole storage window; `experiment` lists experiment keys, and with
 `key` that experiment's variants. A `param` of an `event` covers the last seven days. Viewer
 or above; a query slot.
@@ -1523,15 +1518,14 @@ The body is a trend definition (UX Analytics PRD 9.2). Everything but `series` h
   installation it names) and users, and never in `*`. The test installation counts only in
   `test_event`'s totals.
 - **Filters** on a series apply to it; `filters` beside `series` apply to every series.
-  Fields and operators: `platform`, `runtime`, `app`, `environment`, `country`, `userId`,
+  Fields and operators: `platform`, `runtime`, `app`, `country`, `userId`,
   `installationId`, `attribution`, `installAttribution` (the installation's first
   attribution), `category` and `experiment` (with `key`; the values are variants) take `is`,
   `isNot`, `isSet`, `isNotSet`; `appVersion` and `platformVersion` add `startsWith`;
   `installAgeDays`, `installAgeWeeks` and `installAgeMonths` take `between` with the lowest
   and highest, both included; `param` (with `key`) takes `is`, `isNot`, `contains`, `isSet`,
   `isNotSet`, and `gt` and `lt` with a number. Filters on the same field (and key) combine
-  with or, on different fields with and. **A definition that names no `environment` filter
-  counts `production` events only.**
+  with or, on different fields with and.
 - **Split** (one series only): `{ "field": "appVersion" }`, or an experiment or a param with
   its `key`: a line for each of the ten values with the largest metric over the range, then
   `Other`, every remaining value counted as one set (an installation active on two of them
@@ -1585,7 +1579,7 @@ The answer has one point per period of the range, zeros included:
 ### The Overview
 
 ```
-GET /v1/analytics-databases/{id}/overview?preset&from&to&app&platform&environment&unit    Viewer or above; one query slot
+GET /v1/analytics-databases/{id}/overview?preset&from&to&app&platform&unit    Viewer or above; one query slot
 ```
 
 The home screen of a database (UX Analytics AN-140 to AN-144), in one answer that holds one
@@ -1595,8 +1589,8 @@ query slot for all of its statements.
   and `to`, dates in the reporting timezone, both included, at most 1,000 days.
 - **Filters**: `app` (every app by default), `platform` (every client platform by default:
   `web`, `ios`, `android`, `macos`, `windows`, `linux`, `other`; `server` is refused, since
-  a backend's events count in no active figure) and `environment` (`production` by default).
-  Repeat a parameter for several values: `?environment=production&environment=staging`.
+  a backend's events count in no active figure). Repeat a parameter for several values:
+  `?platform=ios&platform=android`.
 - **`unit`**: `installation` (the default) or `user`. It changes the active figures only:
   with `user` they count distinct non-empty user IDs of the same events.
 
@@ -1606,7 +1600,7 @@ query slot for all of its statements.
   "unit": "installation",
   "timezone": "Europe/Paris",
   "keptFrom": "2026-06-01",
-  "filters": { "apps": [], "platforms": [], "environments": ["production"] },
+  "filters": { "apps": [], "platforms": [] },
   "figures": {
     "activeLastHour": { "value": 412, "previous": 398, "covered": { "from": "2026-09-27T09:00:00.000Z", "to": "2026-09-27T10:00:00.000Z" } },
     "dailyActiveLastDay": { "value": 5210, "previous": 5102, "covered": { "from": "2026-09-26", "to": "2026-09-26" } },
@@ -1666,7 +1660,7 @@ Field by field:
   `app_started` names counting nowhere; each with `perDay` over the covered days.
 - **`d1`, `d7`, `d30`**: of the installations installed in the range whose Nth day after
   installing has ended (`installations`, the denominator), the share that sent `app_started`
-  on that local day, on any platform and in any environment — the standard Retention cohort,
+  on that local day, on any platform — the standard Retention cohort,
   by day. `value` is null while no installation of the range has reached its Nth day's end,
   which with the default 30 days is always the case for `d30`.
 - **`crashFree`**: over the sessions whose `app_started` falls in the range and reports a crash
@@ -1704,7 +1698,7 @@ application sets after sign-in. The two are never merged: one installation may c
 user IDs over its life, and one user ID may span several installations.
 
 ```
-GET /v1/analytics-databases/{id}/profiles?q&platform&appVersion&country&environment&cursor&limit   a query slot
+GET /v1/analytics-databases/{id}/profiles?q&platform&appVersion&country&cursor&limit   a query slot
 GET /v1/analytics-databases/{id}/profiles/installations/{installationId}                          no slot
 GET /v1/analytics-databases/{id}/profiles/users/{userId}                                          no slot
 GET /v1/analytics-databases/{id}/profiles/installations/{installationId}/events?name&from&to&cursor&limit   a query slot
@@ -1729,8 +1723,8 @@ found in any letter case, with or without its dashes. At most `limit` of each (5
 1,000 at most), with `truncated: true` when more match.
 
 Without `q`, the answer is the installations **seen most recently**, newest first then by
-installation ID, 50 a page, optionally filtered by their latest `platform`, `appVersion`,
-`country` and `environment`:
+installation ID, 50 a page, optionally filtered by their latest `platform`, `appVersion`
+and `country`:
 
 ```json
 {
@@ -1740,7 +1734,7 @@ installation ID, 50 a page, optionally filtered by their latest `platform`, `app
       "userId": "u2",
       "installationKind": "device", "server": false, "ephemeral": false,
       "platform": "ios", "platformVersion": "18.1", "appVersion": "1.5.0",
-      "country": "FR", "environment": "production",
+      "country": "FR",
       "firstSeen": "2026-09-01T08:00:00.000Z",
       "lastSeen": "2026-09-27T09:41:12.004Z",
       "lastEvent": "2026-09-27T09:41:12.004Z"
@@ -1779,7 +1773,7 @@ fresh first page). A cursor not issued by the list is `400 invalid_query`.
     "install": { "platform": "ios", "appVersion": "1.4.0", "…": "…", "experiments": {} },
     "latest": { "platform": "ios", "osName": "iOS", "platformVersion": "18.1", "runtime": null,
                 "runtimeVersion": null, "app": "com.example.checkout", "appVersion": "1.5.0",
-                "appBuild": "412", "locale": "fr-FR", "environment": "production", "country": "FR",
+                "appBuild": "412", "locale": "fr-FR", "country": "FR",
                 "attribution": "ads", "experiments": { "checkout": "b" } },
     "userId": "u2"
   },
@@ -1829,8 +1823,7 @@ carrying the user ID, `window`, and `links` for the user ID and those installati
 to 1,000), each with `eventId`, `name`, `category`, `time` (effective), `receivedTime`,
 `sessionId`, `installationId`, `userId`, `params` (as stored, every value text) and `context`
 (the dimensions above). `name` keeps one event name, an unknown or deleted one answering none;
-`from` and `to` are dates in the reporting timezone, both included. Every environment is
-included.
+`from` and `to` are dates in the reporting timezone, both included.
 
 **The export** is a JSON download, to answer a request for access: the record, `identity`,
 `firstOccurrences` (for each event name still in the catalog, and `*` for any event, the day,
@@ -1899,8 +1892,7 @@ HTTP does; the MCP tool asks for the exact name. An unknown ID answers `404 funn
 
 `mode` is `closed` or `open`; `window` runs from one minute to 90 days (`unit` `minute`, `hour`
 or `day`); `unit` is `installation` or `user`; `filters` apply to every step's events, with the
-same fields and operators as trends; `split` is optional. A definition that names no
-`environment` filter reads `production` only.
+same fields and operators as trends; `split` is optional.
 
 **A run** takes a saved funnel's `funnelId` or an inline `definition` — exactly one — and
 optionally a `range` and a `view`; without them it uses the definition's `defaultRange` and
@@ -2067,9 +2059,8 @@ ID answers `404 cohort_not_found`.
   timezone, ISO weeks from Monday. It has no default.
 - `unit` is `installation` (the default) or `user`.
 - `filters` are **population filters**, on the standard dimensions (`platform`,
-  `platformVersion`, `runtime`, `app`, `appVersion`, `environment`, `country`, `attribution`,
-  `experiment` with a `key`) and `installAttribution` (installations only). A definition that
-  names no `environment` filter, here or on its start, counts starts in `production` only.
+  `platformVersion`, `runtime`, `app`, `appVersion`, `country`, `attribution`,
+  `experiment` with a `key`) and `installAttribution` (installations only).
 - `defaultRange` is the start periods a run covers when it names none; without it, the last 12
   periods of the granularity, the current one included.
 
@@ -2098,8 +2089,7 @@ How units become members and return (AN-102 to AN-104):
   install dimensions and install attribution; otherwise the dimensions of the occurrence that is
   its start. They never apply to returns.
 - **Returns.** A member returned in period N (N ≥ 1) if it did the return event, matching the
-  return's own filters, in the calendar period N periods after its cohort's — on any platform and
-  in any environment.
+  return's own filters, in the calendar period N periods after its cohort's — on any platform.
 - **Units.** Installations are device installations: ephemeral installations (a private window,
   blocked storage), server installations and the test installation are in no cohort. User IDs count
   each user once across its installations.
@@ -2274,7 +2264,7 @@ GET /v1/analytics-databases/{id}/exports/events?from&to&name&installationId&user
 ```
 
 ```
-{"eventId":"0192f5a0-…","name":"checkout_completed","category":null,"time":"2026-09-26T14:03:11.402Z","receivedTime":"2026-09-26T14:03:12.018Z","localDay":"2026-09-26","installationId":"0192f5a0-1111-…","installationKind":"device","ephemeral":false,"userId":"user-42","sessionId":"0192f5a0-aaaa-…","context":{"platform":"web","osName":"macOS","platformVersion":"15.1","runtime":"Chrome","runtimeVersion":"131","app":null,"appVersion":"1.4.0","appBuild":null,"locale":"fr-FR","environment":"production","country":"FR","attribution":"newsletter","experiments":{"checkout":"b"}},"params":{"plan":"pro","items":"3"},"installAge":{"days":12,"weeks":1,"months":0},"clockCorrected":false,"credentialId":"cred_9rdayr4rstbv"}
+{"eventId":"0192f5a0-…","name":"checkout_completed","category":null,"time":"2026-09-26T14:03:11.402Z","receivedTime":"2026-09-26T14:03:12.018Z","localDay":"2026-09-26","installationId":"0192f5a0-1111-…","installationKind":"device","ephemeral":false,"userId":"user-42","sessionId":"0192f5a0-aaaa-…","context":{"platform":"web","osName":"macOS","platformVersion":"15.1","runtime":"Chrome","runtimeVersion":"131","app":null,"appVersion":"1.4.0","appBuild":null,"locale":"fr-FR","country":"FR","attribution":"newsletter","experiments":{"checkout":"b"}},"params":{"plan":"pro","items":"3"},"installAge":{"days":12,"weeks":1,"months":0},"clockCorrected":false,"credentialId":"cred_9rdayr4rstbv"}
 ```
 
 - **One line per event**, ordered by effective time then event ID, with every field stored and

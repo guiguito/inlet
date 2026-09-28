@@ -34,7 +34,6 @@ export type CrashEnvelope = {
   platform?: CrashPlatform;
   kind: CrashKind;
   release: { version: string; build?: string; channel?: string };
-  environment?: string;
   exception?: { type: string; message: string; handled: boolean; frames: CrashFrame[] };
   native?: { process: string; fault: string; module: string; dumpBytes?: number };
   exit?: { code?: number; signal?: string; reason?: string; name?: string; lastUptimeMs?: number };
@@ -118,8 +117,6 @@ export type CrashInitOptions = {
   release: string;
   build?: string;
   channel?: string;
-  /** Defaults to `production`. */
-  environment?: string;
   platform?: CrashPlatform;
   /** 0 to 1. Events are dropped at random above this fraction. Default 1. */
   sampleRate?: number;
@@ -172,7 +169,7 @@ export type CrashInitOptions = {
   /**
    * CR-118: attach the shared SDK identity (Foundations FD-016) — the session ID, and the
    * installation ID while an analytics client is enabled. Default true. `false` sends
-   * exactly the fields `inlet-sdk` 0.1.5 sent; the user ID from `setUser` is one of them.
+   * neither ID; the user ID from `setUser` is still sent.
    */
   identity?: boolean;
   /** Fills a buffer with random bytes, for runtimes without `crypto.getRandomValues` (CR-120). */

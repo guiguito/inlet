@@ -57,8 +57,8 @@ export function registerAnalyticsProfileTools(server: McpServer, client: InletCl
       title: 'Find analytics profiles, or list the recent installations',
       description: [
         'AN-120. With `q`: the installations whose ID is `q` or starts with it, and the user IDs equal to it or starting with it (`users`), with every installation those users were seen on in `installations`. A prefix needs at least six characters; shorter text matches exact IDs only and answers notice prefix_too_short. At most 1,000 of each; `truncated` when more match.',
-        'Without `q`: the installations seen most recently, newest first then by installation ID, filtered by their latest platform, appVersion, country and environment, 1,000 per call: pass `nextCursor` back as `cursor` for the next page (the cursor keeps the first page’s time, so an installation active meanwhile is not listed twice).',
-        'Each installation: its ID, the user ID seen last on it, whether it is a server or an ephemeral installation, its latest platform, platform version, app version, country and environment, first seen, last seen (null for a server installation, whose events are background events) and last event, times in RFC 3339 UTC.',
+        'Without `q`: the installations seen most recently, newest first then by installation ID, filtered by their latest platform, appVersion and country, 1,000 per call: pass `nextCursor` back as `cursor` for the next page (the cursor keeps the first page’s time, so an installation active meanwhile is not listed twice).',
+        'Each installation: its ID, the user ID seen last on it, whether it is a server or an ephemeral installation, its latest platform, platform version, app version and country, first seen, last seen (null for a server installation, whose events are background events) and last event, times in RFC 3339 UTC.',
         PROFILE_SEMANTICS,
         'Holds an analytics query slot: analytics_busy after ten seconds without one.',
       ].join(' '),
@@ -68,7 +68,6 @@ export function registerAnalyticsProfileTools(server: McpServer, client: InletCl
         platform: z.string().max(64).optional(),
         appVersion: z.string().max(64).optional(),
         country: z.string().max(8).optional().describe('An ISO 3166-1 alpha-2 code, upper case.'),
-        environment: z.string().max(64).optional(),
         cursor: z.string().max(500).optional(),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
@@ -83,7 +82,7 @@ export function registerAnalyticsProfileTools(server: McpServer, client: InletCl
       title: 'Read an installation or a user profile',
       description: [
         'AN-121, AN-122, AN-124. Pass installationId or userId.',
-        'An installation: its record (install time and day, first seen, last seen, last event, server or ephemeral, install attribution, the install and latest dimensions — platform, OS and version, runtime, app and app version, locale, country, environment, attribution, experiments — and the current user ID), `identity` (every user ID seen on it with first and last seen, the current one first), `counts` (events; sessions, the distinct session IDs of its app_started events; active days, the days holding an event that is not a background event) and `activeDays`, counted from its events.',
+        'An installation: its record (install time and day, first seen, last seen, last event, server or ephemeral, install attribution, the install and latest dimensions — platform, OS and version, runtime, app and app version, locale, country, attribution, experiments — and the current user ID), `identity` (every user ID seen on it with first and last seen, the current one first), `counts` (events; sessions, the distinct session IDs of its app_started events; active days, the days holding an event that is not a background event) and `activeDays`, counted from its events.',
         'A user: its first and last seen, `identity` (the installations it was seen on, most recent first, each with platform, app version, country and last seen), and `counts` and `activeDays` over the events carrying the user ID.',
         '`links`: the crash groups (with the number of retained reports carrying the IDs and when the last arrived) and the feedback submissions (with their received time and first free-text answer) that carry the installation ID or a user ID seen on it — for a user, the user ID or one of its installations’ IDs — in the crash and feedback databases of the same project; read them with get_crash_group and get_submission.',
         PROFILE_SEMANTICS,
@@ -100,8 +99,8 @@ export function registerAnalyticsProfileTools(server: McpServer, client: InletCl
     {
       title: 'List the events of an installation or a user',
       description: [
-        'AN-123. Pass installationId or userId. Newest first by effective time then event ID, 1,000 per call: pass `nextCursor` back as `cursor` (it keeps the first page’s time, so events arriving meanwhile never move one across pages). Each event has its name, category, effective and received time (RFC 3339 UTC), session ID (group by it to read one session), installation and user ID, params (as stored: every value as text) and context (platform, OS, runtime, app, app version and build, locale, environment, country, attribution, experiments).',
-        '`name` keeps one event name (an unknown or deleted one answers none); `from` and `to` are dates (YYYY-MM-DD) in the database’s reporting timezone, both included. Every environment is included.',
+        'AN-123. Pass installationId or userId. Newest first by effective time then event ID, 1,000 per call: pass `nextCursor` back as `cursor` (it keeps the first page’s time, so events arriving meanwhile never move one across pages). Each event has its name, category, effective and received time (RFC 3339 UTC), session ID (group by it to read one session), installation and user ID, params (as stored: every value as text) and context (platform, OS, runtime, app, app version and build, locale, country, attribution, experiments).',
+        '`name` keeps one event name (an unknown or deleted one answers none); `from` and `to` are dates (YYYY-MM-DD) in the database’s reporting timezone, both included.',
         PROFILE_SEMANTICS,
         'Holds an analytics query slot: analytics_busy after ten seconds without one.',
       ].join(' '),

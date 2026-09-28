@@ -383,7 +383,7 @@ export function analyticsRoutes(ctx: AppContext): FastifyPluginAsyncZod {
           tags: ['Analytics ingest'],
           summary: 'Send a test event',
           description:
-            'AN-025. Creator or Admin, not a publishable key. Sends `test_event`, category `test`, environment `development`, through the ingest path, attributed to the database’s test installation, which counts in no unique, active, new-installation, session or cohort figure. It takes no slot of the event-name limit and appears in the live feed.',
+            'AN-025. Creator or Admin, not a publishable key. Sends `test_event`, category `test`, through the ingest path, attributed to the database’s test installation, which counts in no unique, active, new-installation, session or cohort figure. It takes no slot of the event-name limit and appears in the live feed.',
           params: databaseIdParam,
           response: { 200: batchAnswerSchema.extend({ eventId: z.string() }), ...errorsFor(401, 403, 404, 429, 503) },
         },
@@ -405,7 +405,6 @@ export function analyticsRoutes(ctx: AppContext): FastifyPluginAsyncZod {
               name: TEST_EVENT_NAME,
               category: TEST_EVENT_CATEGORY,
               installationId: testInstallationId(database.installationSecret),
-              environment: 'development',
               app: { version: 'test' },
               sdk: { name: 'inlet', version: 'test-event' },
             },

@@ -75,6 +75,12 @@ describe('crash databases and ingest over HTTP', () => {
     expect(errorCode(unknown)).toBe('unknown_field');
     expect(unknown.json().error.details[0].path).toBe('breadcrumbs');
 
+    // An environment is a project (Foundations section 17): the label is an unknown field.
+    const labelled = await report(envelope({ environment: 'production' }));
+    expect(labelled.statusCode).toBe(400);
+    expect(errorCode(labelled)).toBe('unknown_field');
+    expect(labelled.json().error.details[0].path).toBe('environment');
+
     const large = await report(envelope({ context: { blob: 'x'.repeat(70 * 1024) } }));
     expect(large.statusCode).toBe(413);
     expect(errorCode(large)).toBe('envelope_too_large');

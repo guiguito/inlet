@@ -762,7 +762,7 @@ export const crashGroupUsers = pgTable(
 
 /**
  * CR-025: the daily rollup behind every timeline, sparkline and breakdown. One row per
- * (group, day, release, OS, environment); the database-wide timeline (CR-048) sums rows
+ * (group, day, release, OS); the database-wide timeline (CR-048) sums rows
  * across groups, filtered on the same columns the list filters on. Survives eviction.
  */
 export const crashGroupDaily = pgTable(
@@ -779,11 +779,10 @@ export const crashGroupDaily = pgTable(
       .notNull()
       .references(() => crashReleases.id, { onDelete: 'cascade' }),
     osName: text('os_name').notNull().default(''),
-    environment: text('environment').notNull(),
     count: integer('count').notNull().default(0),
   },
   (table) => [
-    primaryKey({ columns: [table.crashGroupId, table.day, table.releaseId, table.osName, table.environment] }),
+    primaryKey({ columns: [table.crashGroupId, table.day, table.releaseId, table.osName] }),
     index('crash_group_daily_db_day_idx').on(table.crashDatabaseId, table.day),
   ],
 );
@@ -809,7 +808,6 @@ export const crashReports = pgTable(
     releaseId: text('release_id')
       .notNull()
       .references(() => crashReleases.id, { onDelete: 'cascade' }),
-    environment: text('environment').notNull(),
     osName: text('os_name'),
     osVersion: text('os_version'),
     arch: text('arch'),

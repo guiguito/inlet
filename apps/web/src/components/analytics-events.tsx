@@ -65,7 +65,6 @@ export const LABELS = {
     runtime: 'Runtime',
     app: 'App',
     appVersion: 'App version',
-    environment: 'Environment',
     country: 'Country',
     userId: 'User ID',
     installationId: 'Installation ID',
@@ -449,7 +448,6 @@ function ChartBuilder({
         <section className="space-y-2 rounded-md border p-3" aria-label="Global filters">
           <p className="text-[13px] font-medium">Filters on every series</p>
           <FilterList databaseId={databaseId} event={first ?? ANY_EVENT} filters={chart.filters} label="every series" onChange={(filters) => update({ filters })} />
-          <p className="text-xs text-muted-foreground">Without an environment filter, only production events count.</p>
         </section>
 
         <section className="flex flex-wrap items-end gap-4" aria-label="Time and split">
@@ -571,7 +569,7 @@ export function SplitControl({ split, disabled, onChange }: { split: AnalyticsSp
 // --- Filters (AN-057, AN-062) -------------------------------------------------------------------
 
 const KEYED: AnalyticsFilterField[] = ['experiment', 'param'];
-const FILTER_VALUE_DIMENSIONS = new Set(['platform', 'platformVersion', 'runtime', 'app', 'appVersion', 'environment', 'country', 'attribution', 'installAttribution', 'category']);
+const FILTER_VALUE_DIMENSIONS = new Set(['platform', 'platformVersion', 'runtime', 'app', 'appVersion', 'country', 'attribution', 'installAttribution', 'category']);
 
 export function FilterList({
   databaseId,

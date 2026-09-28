@@ -6,7 +6,7 @@ import { E2E } from '../env';
  * Insights → Overview (UX Analytics PRD 8.1, AN-140 to AN-144), in a browser against the running
  * server: events seeded through the ingest API, the database opened on its Overview, the figures
  * and the app-version share table read, the counting unit switched to user IDs, and the
- * environment filtered to `development`; and the empty state of a database with no event.
+ * platform filtered to `android`; and the empty state of a database with no event.
  */
 test.use({ timezoneId: 'Europe/Paris' });
 
@@ -40,7 +40,7 @@ async function createDatabase(request: APIRequestContext, label: string) {
 /** A figure's value, found by its label. */
 const figure = (page: Page, label: string) => page.getByTestId('figure').filter({ has: page.getByText(label, { exact: true }) }).getByTestId('figure-value');
 
-test('the Overview shows the figures and shares, switches to user IDs and filters to development', async ({ page, request }) => {
+test('the Overview shows the figures and shares, switches to user IDs and filters to a platform', async ({ page, request }) => {
   const { databaseId, key } = await createDatabase(request, 'Analytics overview');
   const [a, b, c, d, e] = Array.from({ length: 5 }, () => randomUUID());
   const events = [
@@ -48,7 +48,7 @@ test('the Overview shows the figures and shares, switches to user IDs and filter
     event('checkout_completed', b!, '1.4.0', { userId: 'u1' }),
     event('checkout_completed', c!, '1.4.0'),
     event('app_started', d!, '1.5.0', { category: 'standard', sessionId: randomUUID(), params: { trigger: 'launch' } }),
-    event('checkout_completed', e!, '2.0.0', { environment: 'development' }),
+    event('checkout_completed', e!, '2.0.0', { platform: 'android' }),
   ];
   // A server just started answers 503 for two seconds after its event store becomes ready.
   const send = () => request.post(`/v1/analytics-databases/${databaseId}/batch`, { headers: { authorization: `Bearer ${key}` }, data: { sentAt: new Date().toISOString(), events } });
@@ -64,9 +64,9 @@ test('the Overview shows the figures and shares, switches to user IDs and filter
   // Insights → Overview is where a database opens.
   await page.goto(`/analytics-databases/${databaseId}`);
   await expect(page.getByTestId('overview-figures')).toBeVisible();
-  await expect(figure(page, 'Active installations, last hour')).toHaveText('4');
-  await expect(figure(page, 'Daily active installations, today so far')).toHaveText('4');
-  await expect(figure(page, 'New installations')).toHaveText('4');
+  await expect(figure(page, 'Active installations, last hour')).toHaveText('5');
+  await expect(figure(page, 'Daily active installations, today so far')).toHaveText('5');
+  await expect(figure(page, 'New installations')).toHaveText('5');
   await expect(figure(page, 'Sessions')).toHaveText('2');
   // The first day of a database: no previous period is kept, and the figure says so.
   await expect(page.getByTestId('figure').filter({ has: page.getByText('Sessions', { exact: true }) }).getByTestId('figure-change')).toHaveText('Change not available');
@@ -78,32 +78,34 @@ test('the Overview shows the figures and shares, switches to user IDs and filter
 
   // The app-version shares: each installation once, adding up to 100%.
   const versions = page.getByTestId('share-app-version');
-  await expect(versions.getByRole('row')).toHaveCount(3);
-  await expect(versions.getByRole('row').nth(1).getByRole('cell')).toHaveText(['1.4.0', '75%', '3']);
-  await expect(versions.getByRole('row').nth(2).getByRole('cell')).toHaveText(['1.5.0', '25%', '1']);
+  await expect(versions.getByRole('row')).toHaveCount(4);
+  await expect(versions.getByRole('row').nth(1).getByRole('cell')).toHaveText(['1.4.0', '60%', '3']);
+  await expect(versions.getByRole('row', { name: /1\.5\.0/ }).getByRole('cell')).toHaveText(['1.5.0', '20%', '1']);
+  await expect(versions.getByRole('row', { name: /2\.0\.0/ }).getByRole('cell')).toHaveText(['2.0.0', '20%', '1']);
   // The chart's table carries today's value, and a marker per version first seen today.
-  await expect(page.getByTestId('trend-table').getByRole('row').last().getByRole('cell')).toHaveText(['4']);
+  await expect(page.getByTestId('trend-table').getByRole('row').last().getByRole('cell')).toHaveText(['5']);
   await expect(page.getByTestId('chart-markers')).toContainText('1.4.0 on');
   await expect(page.getByTestId('chart-markers')).toContainText('1.5.0 on');
+  await expect(page.getByTestId('chart-markers')).toContainText('2.0.0 on');
   // The defaults are chips.
   const chips = page.getByRole('list', { name: 'Filters applied' });
   await expect(chips).toContainText('Last 30 days');
-  await expect(chips).toContainText('Environment production');
+  await expect(chips).toContainText('Every client platform');
 
-  // Counting user IDs: a and b share u1; c and d carry none.
+  // Counting user IDs: a and b share u1; c, d and e carry none.
   await page.getByLabel('Counting unit').selectOption('user');
   await expect(figure(page, 'Active user IDs, last hour')).toHaveText('1');
-  await expect(figure(page, 'New installations')).toHaveText('4');
+  await expect(figure(page, 'New installations')).toHaveText('5');
 
-  // Development only.
+  // Android only.
   await page.getByLabel('Counting unit').selectOption('installation');
-  await page.getByLabel('Environment', { exact: true }).selectOption('development');
-  await expect(chips).toContainText('Environment development');
+  await page.getByLabel('Platform', { exact: true }).selectOption('android');
+  await expect(chips).toContainText('Platform android');
   await expect(figure(page, 'Active installations, last hour')).toHaveText('1');
   await expect(versions.getByRole('row').nth(1).getByRole('cell')).toHaveText(['2.0.0', '100%', '1']);
-  // Removing the environment chip reads every environment the database has seen.
-  await page.getByRole('button', { name: 'Remove Environment development' }).click();
-  await expect(chips).toContainText('Every environment');
+  // Removing the platform chip reads every client platform again.
+  await page.getByRole('button', { name: 'Remove Platform android' }).click();
+  await expect(chips).toContainText('Every client platform');
   await expect(figure(page, 'Active installations, last hour')).toHaveText('5');
 });
 
@@ -152,7 +154,7 @@ function answer(overrides: Record<string, unknown> = {}) {
     unit: 'installation',
     timezone: 'Europe/Paris',
     keptFrom: '2026-09-20',
-    filters: { apps: [], platforms: [], environments: ['production'] },
+    filters: { apps: [], platforms: [] },
     figures: {
       activeLastHour: { value: 3, previous: 2, covered: { from: '2026-09-27T09:00:00.000Z', to: '2026-09-27T10:00:00.000Z' } },
       dailyActiveLastDay: figure(10, 8),

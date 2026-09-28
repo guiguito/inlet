@@ -45,9 +45,9 @@ import { eraseCrashReports, eraseSubmissions } from './erasure-deletes.js';
 
 /**
  * Every event-store table carrying an installation ID or a user ID, which an erasure deletes
- * from. `version_first` carries neither (0002_version_first.sql). A test compares this list
+ * from. `version_first` carries neither (0001_events.sql). A test compares this list
  * with every table of the event store holding one of the two columns. The two internal rollups
- * of 0004 (AN-035) are erased with the installation records they summarise.
+ * (AN-035) are erased with the installation records they summarise.
  */
 export const ERASED_TABLES = ['events', 'installations', 'installation_users', 'installation_first', 'user_first', 'installation_index', 'session_rollup'] as const;
 
@@ -135,7 +135,7 @@ export async function analyticsErasureCounts(store: ReadStore, settings: QuerySe
 
 // --- The worker pass ----------------------------------------------------------------------------
 
-/** The event-store table naming each erasure's targets (0003_analytics_erasure_targets.sql). */
+/** The event-store table naming each erasure's targets (0001_events.sql). */
 const TARGETS = 'analytics_erasure_targets';
 
 /**
@@ -364,7 +364,7 @@ async function replay(ctx: AppContext, store: EventStore, databaseKey: number, i
   invalidateReadSkip(databaseKey);
   const skip = await readSkip(ctx, databaseKey);
   const r = new SqlParams();
-  // `events` does not store the session marker ingest sets (0004), so it is set again here from
+  // `events` does not store the session marker ingest sets, so it is set again here from
   // the current IDs of the two names, for `session_rollup` to rebuild the sessions of the
   // installations re-derived (AN-043, AN-152). A name never seen has no rows to mark.
   const names = await resolveEventNames(ctx.db, databaseKey, ['app_started', 'session_crashed']);
@@ -383,7 +383,7 @@ async function replay(ctx: AppContext, store: EventStore, databaseKey: number, i
 
 /**
  * Each state table's condition for these erasures; `user_first` only when a user ID is erased.
- * The two rollups of 0004 go with the installations re-derived and are rebuilt by the replay: a
+ * The two internal rollups go with the installations re-derived and are rebuilt by the replay: a
  * session belongs to one installation, and an erased user's sessions are on the installations
  * it was seen on, erased or shared.
  */

@@ -237,7 +237,6 @@ export function CrashGroupPage({ user }: { user: CurrentUser }) {
                         <TableCell>{report.release}</TableCell>
                         <TableCell className="text-muted-foreground">
                           {[report.os.name, report.os.version, report.os.arch].filter(Boolean).join(' ') || '—'}
-                          {report.environment !== 'production' ? <Badge variant="muted" className="ml-2">{report.environment}</Badge> : null}
                         </TableCell>
                         <TableCell className="font-mono text-xs text-muted-foreground">{report.userId ?? '—'}</TableCell>
                         <TableCell className="text-right">
@@ -333,13 +332,12 @@ function ReportView({ report }: { report: CrashReport }) {
             {e.native ? <KeyValues title="Native crash" entries={Object.entries(e.native)} /> : null}
             {e.exit ? <KeyValues title="Exit" entries={Object.entries(e.exit)} /> : null}
             <KeyValues
-              title="Environment"
+              title="Context"
               entries={[
                 ['platform', e.platform],
                 ['runtime', e.runtime ? `${e.runtime.name} ${e.runtime.version ?? ''}`.trim() : undefined],
                 ['os', e.os ? `${e.os.name} ${e.os.version ?? ''} ${e.os.arch ?? ''}`.trim() : undefined],
                 ['release', e.release ? [e.release.version, e.release.build && `build ${e.release.build}`, e.release.channel].filter(Boolean).join(' · ') : undefined],
-                ['environment', e.environment],
                 ['sdk', e.sdk ? `${e.sdk.name} ${e.sdk.version}` : undefined],
                 ['user', e.user?.id],
                 ['client time', e.timestamp],

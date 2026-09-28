@@ -750,7 +750,6 @@ function eventRow(
     app_version: event.app.version,
     app_build: event.app.build ?? '',
     locale: event.locale ?? '',
-    environment: event.environment,
     country: extra.country,
     attribution: event.attribution ?? '',
     experiment_keys: experiments.map(([key]) => key),
@@ -768,7 +767,7 @@ function eventRow(
 }
 
 /**
- * The marker `session_rollup`'s view reads (0004): event names are catalog IDs the view cannot
+ * The marker `session_rollup`'s view reads: event names are catalog IDs the view cannot
  * resolve, so ingest names the two standard events that make sessions (AN-043, AN-044, AN-152).
  */
 export function sessionEventOf(name: string): 'started' | 'crashed' | 'none' {

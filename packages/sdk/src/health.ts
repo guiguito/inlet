@@ -1,12 +1,11 @@
 /**
- * The deployment's capabilities, read from `/v1/health` (Foundations FD-013, FD-015,
- * FD-016).
+ * The deployment's capabilities, read from `/v1/health` (Foundations FD-013, FD-015).
  *
- * Shared by every module, cached per fetch implementation and origin for the life of the
- * page or process, and read again after a failed probe, so that a module sends the
- * identity fields only to a deployment that lists `identity` without asking before every
- * request. Only a probe that answered is cached: a deployment that was unreachable at
- * startup is asked again on the next send.
+ * The analytics and config modules wait until it lists `analytics` or `config`, which a
+ * deployment serves depending on its configuration. Shared by those modules, cached per
+ * fetch implementation and origin for the life of the page or process, and read again after
+ * a failed probe, so a module does not ask before every request. Only a probe that answered
+ * is cached: a deployment that was unreachable at startup is asked again on the next send.
  *
  * Keyed by the fetch implementation too, so two clients given different `fetch` functions
  * (every test, and an integrator's instrumented fetch) never read each other's answer.

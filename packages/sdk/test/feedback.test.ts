@@ -94,13 +94,6 @@ describe('the form', () => {
     const second = await client.getForm();
     expect(second.ok).toBe(true);
   });
-
-  it('warns once when the deployment predates Release 7', async () => {
-    const server = new FakeInlet({ capabilities: ['feedback', 'crash'] });
-    const { client, debug } = make(server);
-    await client.getForm();
-    expect(debug.join('\n')).toContain('predates Release 7');
-  });
 });
 
 describe('the controller', () => {
@@ -328,6 +321,8 @@ describe('submitting', () => {
         [QUESTION.shot]: { attachmentIds: [attachmentId] },
       },
       clientContext: { appVersion: '4.2.0', screen: 'settings' },
+      // FR-204: the shared SDK session.
+      sessionId: expect.stringMatching(/^[0-9a-f-]{36}$/),
     });
     // Nothing about the page, the agent, the language or the viewport, ever.
     expect(Object.keys(finalize.headers).sort()).toEqual(['authorization', 'content-type', 'x-inlet-intent-token']);

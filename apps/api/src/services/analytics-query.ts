@@ -394,7 +394,7 @@ export class ReadSkip {
   }
 
   /**
-   * Whether an erasure is pending. `session_rollup` (0004, AN-035) keeps no received time, so it
+   * Whether an erasure is pending. `session_rollup` (AN-035) keeps no received time, so it
    * cannot hide exactly the rows received before an erasure, as `events` does; while one is
    * pending, the Overview reads its sessions from the events instead (correct, slower, as every
    * read is while something is pending).
@@ -482,10 +482,10 @@ export function invalidateReadSkip(databaseKey?: number): void {
   else skips.delete(databaseKey);
 }
 
-// --- The installation index (0004, AN-031, AN-035) ------------------------------------------------
+// --- The installation index (AN-031, AN-035) ------------------------------------------------
 
 /**
- * One row per installation of a database from `installation_index` (0004): `installation_id`,
+ * One row per installation of a database from `installation_index`: `installation_id`,
  * `has_qualifying`, `installation_kind`, `ephemeral`, `last_seen`, `last_event`, `install` and
  * `latest`, the same values `installations` gives (AN-031). Every reader tests `has_qualifying = 1`
  * first, the existence rule, and applies the erasure skip, as readers of `installations` do.
@@ -577,7 +577,6 @@ const COLUMNS = {
   runtime: 'runtime_name',
   app: 'app_id',
   appVersion: 'app_version',
-  environment: 'environment',
   country: 'country',
   userId: 'user_id',
   attribution: 'attribution',
@@ -711,10 +710,6 @@ export function compileFilters(filters: readonly AnalyticsFilter[], p: SqlParams
   return parts.length > 0 ? parts.join(' AND ') : '1';
 }
 
-/** AN-064: a definition that names no `environment` filter reads `production` only. */
-export function environmentDefault(filters: readonly AnalyticsFilter[], p: SqlParams): string {
-  return filters.some((filter) => filter.field === 'environment') ? '1' : `environment = ${p.add('production', 'String')}`;
-}
 
 // --- Slots and limits (AN-205, 9.5) ------------------------------------------------------------------
 

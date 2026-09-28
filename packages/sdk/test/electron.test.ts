@@ -39,7 +39,6 @@ async function install(userData: string, options: Record<string, unknown> = {}, 
       crashDatabaseId: 'cdb_test',
       dedupe: false,
       fetch: async (input, init) => {
-        if (String(input).endsWith('/v1/health')) return new Response(JSON.stringify({ status: 'ok', capabilities: ['crash'] }), { status: 200 });
         const body = JSON.parse(String(init?.body)) as CrashEnvelope | { reports: CrashEnvelope[] };
         const reports = 'reports' in body ? body.reports : [body];
         sent.push(...reports);
@@ -76,8 +75,7 @@ describe('Electron main (CR-100)', () => {
         crashDatabaseId: 'cdb_test',
         dedupe: false,
         fetch: async (input, init) => {
-          if (String(input).endsWith('/v1/health')) return new Response(JSON.stringify({ status: 'ok', capabilities: ['crash'] }), { status: 200 });
-          const body = JSON.parse(String(init?.body)) as CrashEnvelope | { reports: CrashEnvelope[] };
+            const body = JSON.parse(String(init?.body)) as CrashEnvelope | { reports: CrashEnvelope[] };
           const reports = 'reports' in body ? body.reports : [body];
           sent.push(...reports);
           return new Response(
@@ -234,7 +232,7 @@ describe('the IPC channel is a trust boundary (CR-111)', () => {
     expect(sent).toHaveLength(1);
     const envelope = sent[0]!;
     expect(envelope.release.version).toBe('2.3.4');
-    expect(envelope.environment).toBe('production');
+    expect(envelope).not.toHaveProperty('environment');
     expect(envelope.os?.name).not.toBe('ForgedOS');
     expect(envelope.runtime?.name).not.toBe('forged');
     expect(envelope.user).toBeUndefined();

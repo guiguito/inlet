@@ -202,10 +202,8 @@ describe('trends', () => {
       ]);
       const test = await asAdmin(h, 'POST', `/v1/analytics-databases/${db.id}/test-event`);
       expect(test.json().accepted).toBe(1);
-      const everywhere = [{ field: 'environment', op: 'isSet' }];
       const refunds = await trend(h, db, {
         range: { preset: 'today' },
-        filters: everywhere,
         series: [
           { event: 'refund_issued', metric: 'events' },
           { event: 'refund_issued', metric: 'installations' },
@@ -220,7 +218,6 @@ describe('trends', () => {
       expect(refunds.series[3]!.label).toBe('Any event');
       const tests = await trend(h, db, {
         range: { preset: 'today' },
-        filters: everywhere,
         series: [
           { event: 'test_event', metric: 'events' },
           { event: 'test_event', metric: 'installations' },
@@ -228,21 +225,6 @@ describe('trends', () => {
         ],
       });
       expect(tests.series.map(total)).toEqual([1, 0, 0]);
-    });
-
-    it('leaves development events out when the definition names no environment (AN-064)', async () => {
-      await send(h, db, [event(), event({ environment: 'development' }), event({ environment: 'staging' })]);
-      const answer = await trend(h, db, {
-        range: { preset: 'today' },
-        series: [
-          { event: 'checkout_completed', metric: 'events' },
-          { event: 'checkout_completed', metric: 'events', filters: [{ field: 'environment', op: 'is', values: ['development'] }] },
-        ],
-        filters: [],
-      });
-      expect(answer.series.map(total)).toEqual([1, 1]);
-      const global = await trend(h, db, { range: { preset: 'today' }, series: [{ event: 'checkout_completed', metric: 'events' }], filters: [{ field: 'environment', op: 'isNot', values: ['staging'] }] });
-      expect(total(global.series[0]!)).toBe(2);
     });
 
     it('answers an unknown event with an empty series, not an error', async () => {

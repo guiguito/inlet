@@ -12,7 +12,6 @@ export type ProfileDimensions = {
   appVersion: string | null;
   appBuild: string | null;
   locale: string | null;
-  environment: string | null;
   country: string | null;
   attribution: string | null;
   experiments: Record<string, string>;
@@ -28,7 +27,6 @@ export type InstallationSummary = {
   platformVersion: string | null;
   appVersion: string | null;
   country: string | null;
-  environment: string | null;
   firstSeen: string | null;
   lastSeen: string | null;
   lastEvent: string;
@@ -115,7 +113,7 @@ export function profileHref(databaseId: string, subject: ProfileSubject): string
 }
 
 export const profilesApi = {
-  find: (databaseId: string, params: { q?: string; platform?: string; appVersion?: string; country?: string; environment?: string; cursor?: string }) =>
+  find: (databaseId: string, params: { q?: string; platform?: string; appVersion?: string; country?: string; cursor?: string }) =>
     request<ProfileList>(`/v1/analytics-databases/${databaseId}/profiles${query(params)}`),
   installation: (databaseId: string, installationId: string) => request<InstallationProfile>(profilePath(databaseId, { kind: 'installation', id: installationId })),
   user: (databaseId: string, userId: string) => request<UserProfile>(profilePath(databaseId, { kind: 'user', id: userId })),

@@ -25,7 +25,6 @@ import {
   checkInterval,
   compileFilters,
   coverageOf,
-  environmentDefault,
   indexRecords,
   mondayOf,
   namedEventRows,
@@ -266,9 +265,9 @@ export type CohortCount = { cohort: string; n: number; units: number };
 /**
  * The columns a member exposes under the filter compiler's names (its allowlist), so population
  * filters compile with `compileFilters` unchanged: platform, platform version, runtime, app, app
- * version, environment, country, attribution and experiments (AN-101).
+ * version, country, attribution and experiments (AN-101).
  */
-const DIMENSIONS = ['platform', 'platform_version', 'runtime_name', 'app_id', 'app_version', 'environment', 'country', 'attribution', 'experiment_keys', 'experiment_variants'] as const;
+const DIMENSIONS = ['platform', 'platform_version', 'runtime_name', 'app_id', 'app_version', 'country', 'attribution', 'experiment_keys', 'experiment_variants'] as const;
 
 /** Device installations that exist and are not ephemeral (AN-031, AN-047): the only installations a cohort counts. */
 function countedInstallations(scope: FilterScope, p: SqlParams): string {
@@ -278,9 +277,9 @@ function countedInstallations(scope: FilterScope, p: SqlParams): string {
            HAVING max(has_qualifying) = 1 AND max(installation_kind) = 'device' AND NOT max(ephemeral))`;
 }
 
-/** The dimensions a member carries: the production default's environment, and whatever a population filter tests. */
+/** The dimensions a member carries: whatever a population filter tests. */
 function neededDimensions(filters: readonly AnalyticsFilter[]): string[] {
-  return DIMENSIONS.filter((column) => column === 'environment' || filters.some((filter) => columnsOf(filter).includes(column)));
+  return DIMENSIONS.filter((column) => filters.some((filter) => columnsOf(filter).includes(column)));
 }
 
 /** The member columns a population filter reads. */
@@ -308,7 +307,7 @@ function columnsOf(filter: AnalyticsFilter): readonly string[] {
  * start's rows; a statement reading it passes `membersSettings`.
  *
  * - The install (AN-031): the installation record's install day and install dimensions. It never
- *   moves. Read from `installation_index` (0004) through `indexRecords`, the same record in plain
+ *   moves. Read from `installation_index` through `indexRecords`, the same record in plain
  *   columns, aggregated only where an installation has more than one row (DECISIONS 33.12d).
  * - The first event, or a named event without filters (AN-036): the first occurrence's day and
  *   dimensions, from `installation_first` or `user_first` (event-name ID 0 is any event of a
@@ -358,14 +357,10 @@ export function membersSql(args: Pick<CohortCountArgs, 'scope' | 'start' | 'unit
             GROUP BY unit)
       ${byUser ? '' : `WHERE unit IN ${countedInstallations(scope, p)}`}`;
   }
-  // AN-102: population filters test the context at the start; the production default of AN-064
-  // is one of them (it tests the start's environment), lifted when the population or the start
-  // names an environment.
-  const startFilters = start.kind === 'event' ? start.filters : [];
+  // AN-102: population filters test the context at the start.
   return `SELECT unit, day FROM (${source})
     WHERE day BETWEEN ${p.add(args.from, 'Date')} AND ${p.add(args.to, 'Date')}
-      AND ${compileFilters(filters, p, scope)}
-      AND ${environmentDefault([...filters, ...startFilters], p)}`;
+      AND ${compileFilters(filters, p, scope)}`;
 }
 
 /**
@@ -393,8 +388,8 @@ export function membersSettings(settings: QuerySettings, start: ResolvedStart['k
  * period once — grouped from the rollup (the aggregate projections answer a period of `local_day`).
  * "Any event" is any event of a device installation that is not a background event (AN-060); a
  * named return counts a background event of the unit (AN-047). Population filters do not apply to
- * returns, nor does the production default: a unit that returns on another platform or in another
- * environment has returned (piece 5's rule for D1, D7 and D30, kept).
+ * returns: a unit that returns on another platform has returned (piece 5's rule for D1, D7 and
+ * D30, kept).
  */
 function returnsSql(args: CohortCountArgs, p: SqlParams): string {
   const { scope } = args;

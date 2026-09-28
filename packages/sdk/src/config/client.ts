@@ -328,7 +328,7 @@ export class ConfigClient<D extends ConfigDefaults = ConfigDefaults> extends Con
    * FD-016, RC-117: the one identity of the application. When no module has created it yet, the
    * config module does not create it either — that would bundle the whole session machinery
    * into an 8 KB entry — but holds the slot open: the identity another module creates next
-   * (any version, `holder[slot] = new Identity()`) lands here, takes the user ID set so far,
+   * (`holder[slot] = new Identity()`) lands here, takes the user ID set so far,
    * and is watched from then on.
    */
   private attachIdentity(): void {
@@ -564,7 +564,7 @@ export class ConfigClient<D extends ConfigDefaults = ConfigDefaults> extends Con
     const holder = globalThis as unknown as Record<symbol, unknown>;
     holder[CONFIG_EXPERIMENTS_SLOT] = [next?.experiments, this.debug];
     // Found through its slot, not imported: the analytics module would not fit in 8 KB (RC-123).
-    (holder[Symbol.for('inlet-sdk.analytics.current')] as { syncConfigExperiments?(): void } | null | undefined)?.syncConfigExperiments?.();
+    (holder[Symbol.for('inlet-sdk.analytics.current')] as { syncConfigExperiments(): void } | null | undefined)?.syncConfigExperiments();
     if (changed.length > 0) this.emit({ staged: [], activated: changed });
     return changed;
   }

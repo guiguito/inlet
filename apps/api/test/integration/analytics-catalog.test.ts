@@ -321,7 +321,6 @@ describe('the catalog and the Lexicon', () => {
           installation_id: uuid(),
           installation_kind: 'device',
           app_version: '1',
-          environment: 'production',
           is_replay: false,
         },
       ]);

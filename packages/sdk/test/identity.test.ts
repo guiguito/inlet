@@ -16,16 +16,15 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{1
 
 beforeEach(() => resetSharedIdentity());
 
-/** A crash endpoint whose health lists the capabilities given. */
-function crashServer(caps: string[] | 'offline-once' = ['crash', 'identity']) {
+/** A crash endpoint that records what it is sent, and counts health probes. */
+function crashServer() {
   const sent: CrashEnvelope[] = [];
   let probes = 0;
   const fetchImpl: typeof fetch = async (input, init) => {
     const url = String(input);
     if (url.endsWith('/v1/health')) {
       probes += 1;
-      if (caps === 'offline-once' && probes === 1) throw new TypeError('fetch failed');
-      return new Response(JSON.stringify({ status: 'ok', capabilities: caps === 'offline-once' ? ['crash', 'identity'] : caps }), { status: 200 });
+      return new Response(JSON.stringify({ status: 'ok', capabilities: [] }), { status: 200 });
     }
     const body = JSON.parse(String(init?.body)) as CrashEnvelope | { reports: CrashEnvelope[] };
     if ('reports' in body) {
@@ -110,36 +109,23 @@ describe('crash reports (CR-118)', () => {
     expect(server.sent[1]!.installationId).toBe('0190a1b2-c3d4-4e5f-8a6b-7c8d9e0f1a2b');
   });
 
-  it('with identity: false carry exactly the 0.1.5 fields, the user ID included', async () => {
+  it('with identity: false carry neither ID, the user ID still included', async () => {
     const server = crashServer();
     const c = crash(server.fetch, { identity: false });
     c.setUser('user-7');
     sharedIdentity().installationId = '0190a1b2-c3d4-4e5f-8a6b-7c8d9e0f1a2b';
     await c.captureMessage('plain');
     await c.flush();
-    expect(Object.keys(server.sent[0]!).sort()).toEqual(['environment', 'eventId', 'exception', 'kind', 'release', 'sdk', 'timestamp', 'user']);
+    expect(Object.keys(server.sent[0]!).sort()).toEqual(['eventId', 'exception', 'kind', 'release', 'sdk', 'timestamp', 'user']);
   });
 
-  it('leave the fields out for a deployment whose health does not list identity, and are accepted', async () => {
-    const server = crashServer(['crash']);
-    const c = crash(server.fetch);
-    await c.captureMessage('old server');
-    await c.flush();
-    expect(server.sent).toHaveLength(1);
-    expect(server.sent[0]).not.toHaveProperty('sessionId');
-  });
-
-  it('ask the deployment again after a failed probe', async () => {
-    const server = crashServer('offline-once');
+  it('are sent without asking the deployment first', async () => {
+    const server = crashServer();
     const c = crash(server.fetch);
     await c.captureMessage('first');
     await c.flush();
-    await c.captureMessage('second');
-    await c.flush();
-    expect(server.probes()).toBe(2);
-    // The first went out while the deployment was unknown, without the fields.
-    expect(server.sent[0]).not.toHaveProperty('sessionId');
-    expect(server.sent[1]!.sessionId).toMatch(UUID);
+    expect(server.sent[0]!.sessionId).toMatch(UUID);
+    expect(server.probes()).toBe(0);
   });
 
   it('describing the previous run carry none of the current run’s IDs (CR-119)', async () => {
@@ -175,7 +161,7 @@ describe('submissions (FR-204)', () => {
 
   it('carry the session and user IDs, and with no analytics client no installation ID', async () => {
     sharedIdentity().userId = 'user-7';
-    const { outcome, body } = await submit(new FakeInlet({ capabilities: ['feedback', 'feedback-cross-origin', 'identity'] }));
+    const { outcome, body } = await submit(new FakeInlet());
     expect(outcome.status).toBe('accepted');
     expect(body.sessionId).toMatch(UUID);
     expect(body.userId).toBe('user-7');
@@ -188,20 +174,22 @@ describe('submissions (FR-204)', () => {
     const c = crash(server.fetch);
     await c.captureMessage('before feedback');
     await c.flush();
-    const { body } = await submit(new FakeInlet({ capabilities: ['feedback', 'feedback-cross-origin', 'identity'] }));
+    const { body } = await submit(new FakeInlet());
     expect(body.sessionId).toBe(server.sent[0]!.sessionId);
   });
 
   it('with identity: false carry no identity field', async () => {
     sharedIdentity().userId = 'user-7';
-    const { body } = await submit(new FakeInlet({ capabilities: ['feedback', 'feedback-cross-origin', 'identity'] }), { identity: false });
+    const { body } = await submit(new FakeInlet(), { identity: false });
     expect(Object.keys(body).sort()).toEqual(['answers', 'formVersion']);
   });
 
-  it('leave the fields out for a deployment whose health does not list identity', async () => {
+  it('are sent without asking the deployment first', async () => {
     sharedIdentity().userId = 'user-7';
-    const { body } = await submit(new FakeInlet());
-    expect(Object.keys(body).sort()).toEqual(['answers', 'formVersion']);
+    const server = new FakeInlet();
+    const { body } = await submit(server);
+    expect(Object.keys(body).sort()).toEqual(['answers', 'formVersion', 'sessionId', 'userId']);
+    expect(server.calls.some((call) => call.url.endsWith('/v1/health'))).toBe(false);
   });
 });
 

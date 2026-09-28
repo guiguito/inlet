@@ -391,7 +391,7 @@ function CollectPanel({ databaseId, projectId }: { databaseId: string; projectId
               {test.isPending ? 'Sending' : 'Send a test event'}
             </Button>
             <p className="text-xs text-muted-foreground">
-              Sends <code className="font-mono">test_event</code> in environment <code className="font-mono">development</code> through the ingest path. It
+              Sends <code className="font-mono">test_event</code> through the ingest path. It
               counts in no installation figure and takes no slot of the event-name limit.
             </p>
           </div>

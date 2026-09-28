@@ -35,7 +35,7 @@ describe('the examples of section 9.2, verbatim', () => {
         { event: 'checkout_completed', metric: 'installations', label: '1.4.0', filters: [{ field: 'appVersion', op: 'is', values: ['1.4.0'] }] },
         { event: 'checkout_completed', metric: 'installations', label: '1.3.2', filters: [{ field: 'appVersion', op: 'is', values: ['1.3.2'] }] },
       ],
-      filters: [{ field: 'environment', op: 'is', values: ['production'] }],
+      filters: [{ field: 'country', op: 'is', values: ['FR'] }],
     };
     expect(analyticsTrendQuerySchema.parse(trend)).toEqual(trend);
   });
@@ -81,7 +81,7 @@ describe('the examples of section 9.2, verbatim', () => {
 describe('filters (AN-062)', () => {
   const ok = (filter: unknown) => expect(analyticsFilterSchema.safeParse(filter).success, JSON.stringify(filter)).toBe(true);
   it('allows is, isNot, isSet and isNotSet on every standard field', () => {
-    for (const field of ['platform', 'platformVersion', 'runtime', 'app', 'appVersion', 'environment', 'country', 'userId', 'installationId', 'attribution', 'installAttribution', 'category']) {
+    for (const field of ['platform', 'platformVersion', 'runtime', 'app', 'appVersion', 'country', 'userId', 'installationId', 'attribution', 'installAttribution', 'category']) {
       ok({ field, op: 'is', values: ['a', 'b'] });
       ok({ field, op: 'isNot', values: ['a'] });
       ok({ field, op: 'isSet' });
@@ -91,6 +91,10 @@ describe('filters (AN-062)', () => {
     }
     ok({ field: 'experiment', key: 'checkout', op: 'is', values: ['B'] });
     ok({ field: 'experiment', key: 'checkout', op: 'isSet' });
+  });
+
+  it('has no environment field: an environment is a project (Foundations section 17)', () => {
+    expect(refusedAt(analyticsFilterSchema, { field: 'environment', op: 'is', values: ['production'] })).toEqual(['field']);
   });
 
   it('allows startsWith on app and platform versions only', () => {

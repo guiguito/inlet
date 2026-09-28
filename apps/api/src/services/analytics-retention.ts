@@ -28,8 +28,7 @@ const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
 
 /**
- * Every event-store table keyed by the database key (0001_events.sql, 0002_version_first.sql,
- * 0004_session_rollup_installation_index.sql). `events` and `session_rollup` are partitioned by
+ * Every event-store table keyed by the database key (0001_events.sql). `events` and `session_rollup` are partitioned by
  * key and ISO week (the projections live in the events' parts), the others by key alone, so
  * removing a database drops every partition of the key in each. A test checks this list against
  * every table of the event store that has a `database_key` column.
@@ -277,7 +276,7 @@ export type PruneStep = 'waiting' | 'submitted' | 'done';
  *
  * 1. the installation records whose last event of any platform (`last_event`, AN-031) is
  *    older than the maximum age, whether or not the cap already removed their events, from
- *    `installations` and from `installation_index`, which holds the same `last_event` (0004);
+ *    `installations` and from `installation_index`, which holds the same `last_event`;
  * 2. once none is left, the identity links and first occurrences of installations that no
  *    longer have a record (which also clears what an erasure left, piece 10); ingest's
  *    install-time cache is evicted first, so a pruned installation that sends again starts

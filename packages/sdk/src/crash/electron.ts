@@ -113,7 +113,7 @@ export type ElectronMainInitOptions = Omit<NodeInitOptions, 'release'> & {
  * CR-111: the IPC channel is a trust boundary.
  *
  * A renderer may run remote content, so its payload is input, not data. Taking the whole
- * object let it override `eventId`, `timestamp`, `release`, `environment`, `os`, `runtime`
+ * object let it override `eventId`, `timestamp`, `release`, `os`, `runtime`
  * and `user.id` through `completeEnvelope` — which meant a compromised renderer could file a
  * crash against a release that never shipped and corrupt regression detection. Only these
  * fields are read; everything else is main's to fill in.

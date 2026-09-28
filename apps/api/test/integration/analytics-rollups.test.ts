@@ -7,7 +7,7 @@ import { runEventNameDeletions } from '../../src/services/analytics-catalog.js';
 import { runAnalyticsErasures } from '../../src/services/analytics-erasure.js';
 import { ingestAnalyticsBatch } from '../../src/services/analytics-ingest.js';
 import { activeRows, crashedSessions, overviewFilters, runOverview, sessionWeeks, sessionsSource, sharesOf, type OverviewAnswer } from '../../src/services/analytics-overview.js';
-import { ReadSkip, SqlParams, addDays, compileFilters, environmentDefault, invalidateReadSkip, readSkip, resolveEventNames, type FilterScope } from '../../src/services/analytics-query.js';
+import { ReadSkip, SqlParams, addDays, compileFilters, invalidateReadSkip, readSkip, resolveEventNames, type FilterScope } from '../../src/services/analytics-query.js';
 import { pruneDatabase, runAnalyticsRetention, sweepOrphans } from '../../src/services/analytics-retention.js';
 import { cohortCounts, membersSql } from '../../src/services/analytics-cohorts.js';
 import { testInstallationId } from '../../src/services/analytics-derive.js';
@@ -16,7 +16,7 @@ import { createHarness, type Harness } from '../setup/harness.js';
 import { asAdmin, createCredential, createProject } from '../setup/api.js';
 
 /**
- * The two internal rollups of ClickHouse migration 0004 (UX Analytics AN-035; DECISIONS 33.12d):
+ * The two internal rollups of the event store (UX Analytics AN-035; DECISIONS 33.12d):
  * `session_rollup`, from which the Overview reads sessions and crash-free sessions, and
  * `installation_index`, from which cohorts' install start, the Overview's new installations and
  * shares and the recent-installations list read the installation records. AN-035 requires every
@@ -202,7 +202,7 @@ const eventsSkip = () => new ReadSkip({ erasures: [{ installationIds: [NOBODY], 
 type SessionRow = { s: string; d: string; v: string; cr: number; crashed: number };
 
 /** The Overview's sessions statement (AN-043, AN-152) from one source, every session with its day, version, crash module and flag. */
-async function sessions(h: Harness, key: number, skip: ReadSkip, from: string, to: string, filters = overviewFilters({ apps: [], platforms: [], environments: [] })): Promise<SessionRow[]> {
+async function sessions(h: Harness, key: number, skip: ReadSkip, from: string, to: string, filters = overviewFilters({ apps: [], platforms: [] })): Promise<SessionRow[]> {
   const names = await resolveEventNames(h.ctx.db, key, ['app_started', 'session_crashed']);
   const id = (name: string) => {
     const status = names.get(name);
@@ -229,7 +229,7 @@ async function sessionsAgree(h: Harness, key: number): Promise<SessionRow[]> {
   ];
   let widest: SessionRow[] = [];
   for (const window of windows) {
-    for (const filters of [overviewFilters({ apps: [], platforms: [], environments: [] }), overviewFilters({ apps: [], platforms: ['android', 'web'], environments: [] })]) {
+    for (const filters of [overviewFilters({ apps: [], platforms: [] }), overviewFilters({ apps: [], platforms: ['android', 'web'] })]) {
       const fromRollup = await sessions(h, key, noSkip(), window.from, window.to, filters);
       expect(fromRollup, `sessions ${window.from}..${window.to}`).toEqual(await sessions(h, key, eventsSkip(), window.from, window.to, filters));
       if (fromRollup.length > widest.length) widest = fromRollup;
@@ -260,10 +260,10 @@ async function recordsAgree(h: Harness, key: number) {
 }
 
 async function overview(h: Harness, db: Db): Promise<OverviewAnswer> {
-  return runOverview(h.ctx, await row(h, db), ADMIN, { range: { preset: 'last30Days' }, apps: [], platforms: [], environments: [], unit: 'installation' }, NOW);
+  return runOverview(h.ctx, await row(h, db), ADMIN, { range: { preset: 'last30Days' }, apps: [], platforms: [], unit: 'installation' }, NOW);
 }
 
-describe('the internal rollups of 0004 (AN-035)', () => {
+describe('the internal rollups (AN-035)', () => {
   let h: Harness;
   let db: Db;
   let key: number;
@@ -419,8 +419,8 @@ describe('the internal rollups of 0004 (AN-035)', () => {
     // as the session events are.
     const orphan = 4_000_123;
     await h.ctx.eventStore!.command(
-      `INSERT INTO events_ingest (database_key, local_day, effective_time, received_time, event_id, event_name_id, installation_id, installation_kind, session_id, platform, app_version, environment, is_replay, session_event)
-       SELECT {key:UInt32}, today() - 1, now64(3) - INTERVAL 1 DAY, now64(3) - INTERVAL 1 DAY, generateUUIDv7(number), {id:UInt32}, {installation:UUID}, 'device', generateUUIDv4(number), 'ios', '1.4.0', 'production', false, 'started'
+      `INSERT INTO events_ingest (database_key, local_day, effective_time, received_time, event_id, event_name_id, installation_id, installation_kind, session_id, platform, app_version, is_replay, session_event)
+       SELECT {key:UInt32}, today() - 1, now64(3) - INTERVAL 1 DAY, now64(3) - INTERVAL 1 DAY, generateUUIDv7(number), {id:UInt32}, {installation:UUID}, 'device', generateUUIDv4(number), 'ios', '1.4.0', false, 'started'
        FROM numbers(5)`,
       { key, id: orphan, installation: installationOf(1) },
     );
@@ -457,17 +457,17 @@ describe('the internal rollups of 0004 (AN-035)', () => {
       return: { kind: 'event', event: 'app_started', id: started!.status === 'current' ? started!.id : null, filters: [] },
       unit: 'installation',
       granularity: 'week',
-      filters: overviewFilters({ apps: [], platforms: [], environments: [] }),
+      filters: overviewFilters({ apps: [], platforms: [] }),
       from: addDays(today, -40),
       to: today,
       returnsTo: today,
     });
     // The members are the install days of `installations`' records: device installations that are
-    // not ephemeral, in production (the default), installed in the range, by the week of that day.
+    // not ephemeral, installed in the range, by the week of that day.
     const members = await h.ctx.eventStore!.query<{ week: string; n: string }>(
       `SELECT toString(toMonday(i.day)) AS week, count() AS n FROM (SELECT installation_id, minIfMerge(install) AS i FROM installations WHERE database_key = {key:UInt32}
          GROUP BY installation_id HAVING max(has_qualifying) = 1 AND max(installation_kind) = 'device' AND NOT max(ephemeral))
-       WHERE i.day BETWEEN {from:Date} AND {to:Date} AND i.environment = 'production'
+       WHERE i.day BETWEEN {from:Date} AND {to:Date}
        GROUP BY week ORDER BY week`,
       { key, from: addDays(today, -40), to: today },
     );
@@ -480,22 +480,22 @@ describe('the internal rollups of 0004 (AN-035)', () => {
 // --- Adversarially, against the statements the rollups replaced (git 56fa9df) --------------------
 
 /**
- * The reads 0004 moved to its rollups, as they were before it, over the events and the
+ * The reads the rollups took over, as they were before them, over the events and the
  * installation records: the reference every new answer is compared with, on data built to
  * break them — `app_started` late, twice, in two ISO weeks, replayed, tied; `session_crashed`
  * without a session; a background `app_started`; the test installation; an ephemeral
  * installation; one installation and one session whose second row arrives after their first
  * row merged; ties on "seen" across the recent list's pages; an erasure before, during, after.
  */
-const before0004 = {
+const beforeRollups = {
   /** Sessions (AN-043, AN-152): `argMin` keyed on the event ID over the range ± 1 day, a join of `session_crashed`. */
   sessions(scope: FilterScope, filters: AnalyticsFilter[], p: SqlParams, started: number, crashed: number, from: string, to: string): string {
     const key = p.add(scope.databaseKey, 'UInt32');
     const crashedRows = `(SELECT session_id FROM events WHERE database_key = ${key} AND event_name_id = ${p.add(crashed, 'UInt32')}
         AND session_id IS NOT NULL AND local_day >= ${p.add(addDays(from, -1), 'Date')} AND ${scope.skip.events(p)})`;
     return `SELECT toString(session_id) AS s, toString(day) AS d, app_version AS v, toUInt8(crash_reporting) AS cr, toUInt8(session_id IN ${crashedRows}) AS crashed FROM (
-        SELECT session_id, f.1 AS day, f.2 AS app_id, f.3 AS platform, f.4 AS environment, f.5 AS app_version, f.6 AS crash_reporting
-        FROM (SELECT session_id, argMin((local_day, app_id, platform, environment, app_version, params['crashReporting'] = 'true'), (received_time, effective_time, event_id)) AS f
+        SELECT session_id, f.1 AS day, f.2 AS app_id, f.3 AS platform, f.4 AS app_version, f.5 AS crash_reporting
+        FROM (SELECT session_id, argMin((local_day, app_id, platform, app_version, params['crashReporting'] = 'true'), (received_time, effective_time, event_id)) AS f
               FROM events
               WHERE database_key = ${key} AND event_name_id = ${p.add(started, 'UInt32')}
                 AND installation_kind = 'device' AND platform != 'server' AND session_id IS NOT NULL
@@ -506,14 +506,14 @@ const before0004 = {
   },
   /** The install start's members (AN-031, AN-102): `minIfMerge(install)` of `installations`. */
   installMembers(scope: FilterScope, filters: AnalyticsFilter[], p: SqlParams, from: string, to: string): string {
-    const dims = ['platform', 'platform_version', 'runtime_name', 'app_id', 'app_version', 'environment', 'country', 'attribution', 'experiment_keys', 'experiment_variants'];
+    const dims = ['platform', 'platform_version', 'runtime_name', 'app_id', 'app_version', 'country', 'attribution', 'experiment_keys', 'experiment_variants'];
     return `SELECT toString(unit) AS u, toString(day) AS d FROM (
         SELECT installation_id AS unit, installation_id, i.day AS day, ${dims.map((name) => `i.${name} AS ${name}`).join(', ')}
         FROM (SELECT installation_id, minIfMerge(install) AS i FROM installations
               WHERE database_key = ${p.add(scope.databaseKey, 'UInt32')} AND ${scope.skip.installations(p)}
               GROUP BY installation_id
               HAVING max(has_qualifying) = 1 AND max(installation_kind) = 'device' AND NOT max(ephemeral)))
-      WHERE day BETWEEN ${p.add(from, 'Date')} AND ${p.add(to, 'Date')} AND ${compileFilters(filters, p, scope)} AND ${environmentDefault(filters, p)} ORDER BY u`;
+      WHERE day BETWEEN ${p.add(from, 'Date')} AND ${p.add(to, 'Date')} AND ${compileFilters(filters, p, scope)} ORDER BY u`;
   },
   /** The Overview's shares (AN-140): the week's active installations joined with `installations`' latest dimensions. */
   shares(scope: FilterScope, filters: AnalyticsFilter[], p: SqlParams, from: string, to: string): string {
@@ -586,7 +586,7 @@ describe('the rollups against the statements they replaced, adversarially (AN-03
       ...Array.from({ length: 10 }, (_, k) =>
         onTime([
           started(NOW - (10 + k) * DAY, I(6 + k), sessionOf(106 + k, 1), { platform: (['ios', 'android', 'web'] as const)[k % 3], country: ['FR', 'US', 'BR'][k % 3], app: { version: `1.${k % 4}.0` } }),
-          event(NOW - DAY - HOUR, { installationId: I(6 + k), sessionId: sessionOf(106 + k, 1), platform: (['ios', 'android', 'web'] as const)[k % 3], app: { version: `1.${k % 4}.1` }, ...(k === 3 ? { environment: 'development' } : {}) }),
+          event(NOW - DAY - HOUR, { installationId: I(6 + k), sessionId: sessionOf(106 + k, 1), platform: (['ios', 'android', 'web'] as const)[k % 3], app: { version: `1.${k % 4}.1` }, ...(k === 3 ? { country: 'DE' } : {}) }),
         ]),
       ),
     ];
@@ -608,9 +608,9 @@ describe('the rollups against the statements they replaced, adversarially (AN-03
     { from: addDays(mondayDay, 4), to: addDays(mondayDay, 4) },
   ];
   const filterSets = () => [
-    overviewFilters({ apps: [], platforms: [], environments: [] }),
-    overviewFilters({ apps: [], platforms: ['android', 'web'], environments: [] }),
-    overviewFilters({ apps: [], platforms: [], environments: ['production', 'development'] }),
+    overviewFilters({ apps: [], platforms: [] }),
+    overviewFilters({ apps: [], platforms: ['android', 'web'] }),
+    overviewFilters({ apps: ['com.example.other'], platforms: [] }),
   ];
 
   async function skipNow(): Promise<ReadSkip> {
@@ -620,7 +620,7 @@ describe('the rollups against the statements they replaced, adversarially (AN-03
 
   /**
    * The sessions from the rollup (or the events while an erasure is pending) and from the
-   * statement before 0004, over every window and filter: the same, but for the two cases the
+   * statement before the rollups, over every window and filter: the same, but for the two cases the
    * week's grain changed on purpose, which are returned so a caller can check they are the only ones.
    */
   async function sessionsAgainstBefore(): Promise<Set<string>> {
@@ -630,7 +630,7 @@ describe('the rollups against the statements they replaced, adversarially (AN-03
       for (const filters of filterSets()) {
         const now = await sessions(h, key, skip, window.from, window.to, filters);
         const p = new SqlParams();
-        const then = await h.ctx.eventStore!.query<SessionRow>(before0004.sessions({ databaseKey: key, skip }, filters, p, ids.started, ids.crashed, window.from, window.to), p.values);
+        const then = await h.ctx.eventStore!.query<SessionRow>(beforeRollups.sessions({ databaseKey: key, skip }, filters, p, ids.started, ids.crashed, window.from, window.to), p.values);
         const byId = (rows: SessionRow[]) => new Map(rows.map((r) => [r.s, JSON.stringify(r)]));
         const [a, b] = [byId(now), byId(then)];
         for (const id of new Set([...a.keys(), ...b.keys()])) if (a.get(id) !== b.get(id)) differing.add(id);
@@ -647,13 +647,13 @@ describe('the rollups against the statements they replaced, adversarially (AN-03
       [{ field: 'platform', op: 'is', values: ['ios'] }],
       [{ field: 'country', op: 'isNot', values: ['DE'] }],
       [{ field: 'appVersion', op: 'is', values: ['2.0.0', '1.1.0', '3.0.0'] }],
-      [{ field: 'environment', op: 'is', values: ['production', 'development'] }],
+      [{ field: 'country', op: 'is', values: ['FR', 'US', 'DE'] }],
     ];
     for (const filters of populations) {
       for (const range of [{ from: addDays(today, -40), to: today }, { from: addDays(today, -9), to: addDays(today, -5) }]) {
         const [p, q] = [new SqlParams(), new SqlParams()];
         const now = await h.ctx.eventStore!.query(`SELECT toString(unit) AS u, toString(day) AS d FROM (${membersSql({ scope, start: { kind: 'install' }, unit: 'installation', filters, ...range }, p)}) ORDER BY u`, p.values);
-        const then = await h.ctx.eventStore!.query(before0004.installMembers(scope, filters, q, range.from, range.to), q.values);
+        const then = await h.ctx.eventStore!.query(beforeRollups.installMembers(scope, filters, q, range.from, range.to), q.values);
         expect(now, `install members ${JSON.stringify(filters)} ${range.from}..${range.to}`).toEqual(then);
       }
     }
@@ -662,7 +662,7 @@ describe('the rollups against the statements they replaced, adversarially (AN-03
   async function sharesAgainstBefore(answer: OverviewAnswer): Promise<void> {
     const p = new SqlParams();
     const rows = await h.ctx.eventStore!.query<{ appVersion: string; platform: string; country: string; n: string; gv: number; gp: number }>(
-      before0004.shares({ databaseKey: key, skip: await skipNow() }, overviewFilters({ apps: [], platforms: [], environments: [] }), p, addDays(today, -6), today),
+      beforeRollups.shares({ databaseKey: key, skip: await skipNow() }, overviewFilters({ apps: [], platforms: [] }), p, addDays(today, -6), today),
       p.values,
     );
     const of = (pick: (r: (typeof rows)[number]) => boolean, value: (r: (typeof rows)[number]) => string) => sharesOf(rows.filter(pick).map((r) => ({ value: value(r), installations: Number(r.n) })));
@@ -674,7 +674,7 @@ describe('the rollups against the statements they replaced, adversarially (AN-03
     });
   }
 
-  /** Every page of the recent list, `limit` at a time, by the reads before 0004 (one statement, `max(seen) OVER ()`). */
+  /** Every page of the recent list, `limit` at a time, by the reads before the rollups (one statement, `max(seen) OVER ()`). */
   async function recentBefore(query: { platform?: string }, limit: number, from: { h: string; s: string; i: string } | null = null) {
     const skip = await skipNow();
     const out: string[] = [];
@@ -724,7 +724,7 @@ describe('the rollups against the statements they replaced, adversarially (AN-03
     return all;
   }
 
-  const overviewNow = () => runOverview(h.ctx, database, ADMIN, { range: { preset: 'last30Days' }, apps: [], platforms: [], environments: [], unit: 'installation' }, NOW);
+  const overviewNow = () => runOverview(h.ctx, database, ADMIN, { range: { preset: 'last30Days' }, apps: [], platforms: [], unit: 'installation' }, NOW);
   const merged = async () => {
     for (const table of ['installations', 'installation_index', 'session_rollup', 'installation_first', 'installation_users', 'user_first']) await h.ctx.eventStore!.command(`OPTIMIZE TABLE ${table} FINAL`);
   };
@@ -738,7 +738,7 @@ describe('the rollups against the statements they replaced, adversarially (AN-03
     await h.close();
   });
 
-  it('answers what the statements before 0004 answered, through replays, merges, late rows and an erasure', async () => {
+  it('answers what the statements before the rollups answered, through replays, merges, late rows and an erasure', async () => {
     await h.reset();
     db = await setup(h);
     database = await row(h, db);

@@ -186,12 +186,12 @@ reports from an application, groups them by fingerprint into **groups**, and tra
 | Tool | What it does |
 | --- | --- |
 | `list_crash_databases`, `get_crash_database` | The crash databases of a project; one of them with its retention, counts and what was dropped in the last 24 hours. |
-| `list_crash_groups` | Groups with aggregates and a sparkline, filtered by state, kind, release, OS, architecture, environment, user ID, installation ID, session ID, time range and text, sorted by last seen, first seen, count or affected users. Returns the total. |
+| `list_crash_groups` | Groups with aggregates and a sparkline, filtered by state, kind, release, OS, architecture, user ID, installation ID, session ID, time range and text, sorted by last seen, first seen, count or affected users. Returns the total. |
 | `get_crash_group` | One group: state, breakdowns by release and OS, and its daily timeline with release markers. |
 | `list_crash_reports`, `get_crash_report` | The retained reports of a group, newest first, filterable by user, installation and session ID, and one report with its envelope and its SDK identity (`sessionId`, `installationId`). `context` is whatever the integrator sent. |
 | `list_crash_releases` | Releases in first-seen order with reports, groups and new groups. |
-| `list_crash_filters` | The kinds, operating systems and environments this database has seen, so a filter you pass can actually match. Cheap; use `get_crash_stats` with `by` when you want them counted. |
-| `get_crash_stats` | Reports and new groups per day over 7, 30 or 90 days, honouring the list filters; `by=release`, `os`, `environment` or `kind` adds the range broken down by that dimension. |
+| `list_crash_filters` | The kinds and operating systems this database has seen, so a filter you pass can actually match. Cheap; use `get_crash_stats` with `by` when you want them counted. |
+| `get_crash_stats` | Reports and new groups per day over 7, 30 or 90 days, honouring the list filters; `by=release`, `os` or `kind` adds the range broken down by that dimension. |
 | `export_crash_groups`, `export_crash_reports` | Groups as JSON or CSV; reports as newline-delimited JSON. Both follow the filters. |
 | `get_crash_retention` | The report cap and maximum age, with the platform bounds. |
 
@@ -249,8 +249,7 @@ before the oldest event kept) and the range it covers.
 An agent should read the catalog first (`list_analytics_events`): it is the tracking plan,
 every event and param with the team's descriptions. Then `query_analytics_trends` answers
 most questions. Its description states the defaults so the agent needs nothing else: the
-last 30 days by day; presets end today and include it; only `production` events unless a
-filter names an environment; unique installations counted once per period, never a sum of
+last 30 days by day; presets end today and include it; unique installations counted once per period, never a sum of
 days; ISO weeks labelled `2026-W39`; a point is `incomplete` while its period is under way
 or when the data kept only partly covers it; every series states the range it `covered`, and
 a range before the storage window answers `range_outside_retention`. A split by `appVersion`
@@ -304,14 +303,14 @@ shorter range or a coarser interval).
 | Tool | What it does |
 | --- | --- |
 | `list_analytics_databases`, `get_analytics_database` | The analytics databases of a project; one of them with its reporting timezone, country derivation, storage settings in force, the deployment's limits, and `eventStore`, whether the event store answers now. Both work while it does not. |
-| `get_analytics_overview` | The Overview (AN-140): `preset` (last 30 days by default) or `from`/`to`, `apps`, `platforms` (client platforms only), `environments` (`production` by default) and `unit` (`installation` or `user`, for the active figures). Each figure has `value`, `previous` and `covered`; `crashFree` overall and for the five versions with the most sessions, with `measured` and `lowConfidence`; `shares`, `topEvents`, `dailyActive`, `versionsFirstSeen` and `notices` (`no_events`, `no_app_started`). One query slot. |
+| `get_analytics_overview` | The Overview (AN-140): `preset` (last 30 days by default) or `from`/`to`, `apps`, `platforms` (client platforms only) and `unit` (`installation` or `user`, for the active figures). Each figure has `value`, `previous` and `covered`; `crashFree` overall and for the five versions with the most sessions, with `measured` and `lowConfidence`; `shares`, `topEvents`, `dailyActive`, `versionsFirstSeen` and `notices` (`no_events`, `no_app_started`). One query slot. |
 | `get_analytics_live_events` | The latest events the database accepted, newest first, with name, effective time, installation ID, platform and app version: the last 500 since the server started, empty after a restart. At most 500 per call with a `cursor`; pass it back as `after` to get only what arrived since. Takes no query slot. |
 | `list_analytics_events` | The catalog with its Lexicon: each event's latest category, description, params (types and descriptions), first and last seen, and its events, unique installations and unique user IDs in the last 24 hours as of `computedAt`. `q` searches names and descriptions, whatever their case; hidden events only with `includeHidden`; sorted by name, `lastSeen` or `events24h`. At most 1,000 per call with `nextCursor`. No query slot. |
 | `get_analytics_event` | One event, hidden or not: its params with types, descriptions and the ten most frequent values of each over the last seven days. A query slot. |
 | `list_analytics_filter_values` | Distinct values, without counts, at most 1,000: of a `dimension` over the storage window (an `experiment` lists keys, with `key` its variants), or of a `param` of an `event` over the last seven days. A query slot. |
 | `query_analytics_trends` | One to five series (an event or `*`, a metric, filters, a label), global filters, an optional split, a range and an interval, the definition of UX Analytics 9.2; answers each series' points with `covered`, `notice` and `incomplete`. `format` `csv` or `json` returns the export, one row per period and series. A query slot. |
 | `export_analytics_catalog` | Every event name, hidden ones included, with its Lexicon, as JSON, 1,000 per call with `nextCursor`. The whole catalog as CSV is `GET /exports/catalog?format=csv` over HTTP. |
-| `find_analytics_profiles` | With `q`, the installations whose ID is `q` or starts with it and the user IDs equal to it or starting with it, with their installations; a prefix needs six characters (fewer match exact IDs only, with notice `prefix_too_short`). Without `q`, the installations seen most recently, newest first, filtered by latest `platform`, `appVersion`, `country`, `environment`, 1,000 per call with `nextCursor`. Server installations are marked; the test installation is never listed. A query slot. |
+| `find_analytics_profiles` | With `q`, the installations whose ID is `q` or starts with it and the user IDs equal to it or starting with it, with their installations; a prefix needs six characters (fewer match exact IDs only, with notice `prefix_too_short`). Without `q`, the installations seen most recently, newest first, filtered by latest `platform`, `appVersion`, `country`, 1,000 per call with `nextCursor`. Server installations are marked; the test installation is never listed. A query slot. |
 | `get_analytics_profile` | An installation (pass `installationId`) or a user (`userId`): the record, identity history (user IDs of an installation, installations of a user), events, sessions and active days counted from its events, and `links`: the crash groups and submissions carrying its IDs in the crash and feedback databases of the project, for get_crash_group and get_submission. `profile_not_found` when none exists. No query slot. |
 | `list_analytics_profile_events` | A profile's events, newest first, 1,000 per call with `nextCursor` (stable while events arrive), filtered by `name` and `from`/`to` dates; each with its session ID, params and context. A query slot. |
 | `list_analytics_funnels`, `get_analytics_funnel` | The saved funnels, by name, with their definitions; one of them. No query slot. |
@@ -331,7 +330,7 @@ shorter range or a coarser interval).
 | --- | --- |
 | `create_analytics_database` | Takes a name and a `timezone`, an IANA name such as `Europe/Paris` that can never be changed; offsets such as `UTC+2` are refused with `timezone_invalid`. Refused with `analytics_not_enabled` on a deployment without the event store, and `analytics_database_limit` when it holds its limit. The project's existing publishable key will ingest into it. |
 | `update_analytics_database` | Renames it, or switches country derivation, which applies to events received afterwards. |
-| `send_analytics_test_event` | Sends one `test_event` (category `test`, environment `development`) through the ingest path, from the database's test installation, which counts in no unique, active, new-installation, session or cohort figure; it takes no slot of the event-name limit. Answers like ingest, with the `eventId`, and shows up in `get_analytics_live_events`. |
+| `send_analytics_test_event` | Sends one `test_event` (category `test`) through the ingest path, from the database's test installation, which counts in no unique, active, new-installation, session or cohort figure; it takes no slot of the event-name limit. Answers like ingest, with the `eventId`, and shows up in `get_analytics_live_events`. |
 | `update_analytics_event` | An event's `description` (at most 500 characters; null clears it) and `hidden`, which leaves it out of the catalog and pickers but keeps it stored and queryable by name. |
 | `update_analytics_event_param` | A param's `description`. |
 | `create_analytics_funnel`, `update_analytics_funnel` | Save a funnel (a name of at most 80 characters and a definition, defaults applied), or rename it or replace its definition. |
@@ -353,8 +352,7 @@ shorter range or a coarser interval).
 `revoke_invitation`, `get_slack_notifications`, `update_slack_notifications`,
 `send_slack_test_message` and `get_deletion_impact` accept an analytics database ID as their
 `databaseId`, as they accept a crash database ID. `set_member_role` with a crash or analytics
-database ID now routes to that database; before Release 8 it always addressed a feedback
-database.
+database ID routes to that database.
 
 ## Remote Config tools
 
@@ -438,6 +436,5 @@ PRD 5.7, with the tools: a crash occurs only on Android 14 with the new checkout
 `list_members`, `invite_member`, `set_member_role`, `remove_member`, `list_invitations`,
 `revoke_invitation`, `get_slack_notifications`, `update_slack_notifications`,
 `send_slack_test_message` and `get_deletion_impact` accept a config database ID as their
-`databaseId`. `send_slack_test_message` now reads the name it confirms from the database's
-own type; before Release 9 it always read a feedback database, so it failed for a crash or
-analytics database ID.
+`databaseId`. `send_slack_test_message` reads the name it confirms from the database's own
+type.

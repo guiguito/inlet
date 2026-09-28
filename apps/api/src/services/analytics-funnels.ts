@@ -17,7 +17,6 @@ import {
   checkInterval,
   compileFilters,
   coverageOf,
-  environmentDefault,
   installAttributionTable,
   namedEventRows,
   oldestKeptDay,
@@ -247,8 +246,7 @@ function walkSql(args: WalkArgs, p: SqlParams): string {
   const n = definition.steps.length;
   const byUser = definition.unit === 'user';
 
-  // Each step's condition: its event, its filters and the global ones (AN-083), and the
-  // production default unless an environment filter applies to it (AN-064).
+  // Each step's condition: its event, its filters and the global ones (AN-083).
   const conditions = definition.steps.map((step, index) => {
     const id = stepIds[index];
     if (id === null || id === undefined) return '0';
@@ -256,7 +254,6 @@ function walkSql(args: WalkArgs, p: SqlParams): string {
       namedEventRows(step.event, id, p),
       compileFilters(definition.filters, p, scope, 'filters'),
       compileFilters(step.filters, p, scope, `steps.${index}.filters`),
-      environmentDefault([...definition.filters, ...step.filters], p),
     ]
       .filter((condition) => condition !== '1')
       .map((condition) => `(${condition})`)

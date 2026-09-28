@@ -1,5 +1,5 @@
-import { execFile, execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { cpSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -12,8 +12,7 @@ import { E2E } from '../env';
  * built `inlet-sdk` (`packages/sdk/dist`, which the end-to-end server's build rewrites), not the
  * recording fake of `packages/sdk/test`. A launch is a child `node` process, so the `globalThis`
  * slot and the shared identity are genuinely fresh; the criteria that need a running application
- * to see a publish run in this process. `inlet-sdk@0.2.0`, the published crash and feedback
- * modules, is installed from npm into a temporary directory. Electron and React Native run their
+ * to see a publish run in this process. Electron and React Native run their
  * built entries with fake platform modules, as `analytics-acceptance-native.spec.ts` does.
  */
 
@@ -230,23 +229,10 @@ test.describe('a running application (the SDK in this process)', () => {
 });
 
 test.describe('with the config and crash modules and no analytics module', () => {
-  let published020: string;
-  test.beforeAll(async () => {
-    const prefix = mkdtempSync(join(tmpdir(), 'inlet-sdk-020-'));
-    dirs.push(prefix);
-    try {
-      execFileSync('npm', ['install', '--no-save', '--no-audit', '--no-fund', '--prefix', prefix, 'inlet-sdk@0.2.0'], { stdio: 'pipe', timeout: 120_000 });
-    } catch (error) {
-      throw new Error(`Could not install inlet-sdk@0.2.0 from the npm registry, which this criterion needs: ${(error as { stderr?: Buffer }).stderr?.toString() ?? error}`);
-    }
-    published020 = join(prefix, 'node_modules/inlet-sdk/dist');
-    expect(existsSync(join(published020, 'crash/node.js'))).toBe(true);
-  });
-
   const A = '0123456789abcdefghjkmnpqrstvwxyz';
   const shortId = (prefix: string) => `${prefix}_${Array.from({ length: 12 }, () => A[Math.floor(Math.random() * A.length)]).join('')}`;
 
-  test('the config module sends an installation ID, and a crash report and a feedback submission carry none, from 0.2.0’s modules bundled beside it and from this build’s (PRD 12, RC-119)', async ({ request }) => {
+  test('the config module sends an installation ID, and a crash report and a feedback submission carry none, whichever module starts first (PRD 12, RC-119)', async ({ request }) => {
     const fx = await setup(request, 'Config and crash');
     // A value only a context carrying an installation ID receives.
     await publish(request, fx.base, {
@@ -292,12 +278,10 @@ test.describe('with the config and crash modules and no analytics module', () =>
         process.stdout.write(JSON.stringify(out));`);
     };
 
-    const old = (path: string) => pathToFileURL(join(published020, path)).href;
     const current = (path: string) => pathToFileURL(join(SDK_DIST, path)).href;
     const runs = {
-      'config then 0.2.0': await application(old('crash/node.js'), old('feedback/node.js'), true, 'config then 0.2.0'),
-      '0.2.0 then config': await application(old('crash/node.js'), old('feedback/node.js'), false, '0.2.0 then config'),
-      'config then this build': await application(current('crash/node.js'), current('feedback/node.js'), true, 'config then this build'),
+      'config then crash': await application(current('crash/node.js'), current('feedback/node.js'), true, 'config then crash'),
+      'crash then config': await application(current('crash/node.js'), current('feedback/node.js'), false, 'crash then config'),
     };
     for (const [label, run] of Object.entries(runs)) {
       // The config module created an ID, sent it with every fetch, and the server evaluated with it.
@@ -307,21 +291,20 @@ test.describe('with the config and crash modules and no analytics module', () =>
       expect([run.ready, run.value, run.submitted], label).toEqual([true, true, 'accepted']);
     }
 
-    // What the server stored: three reports and three submissions, none with an installation ID.
-    await expect.poll(async () => (await (await request.get(`/v1/crash-databases/${crashId}/groups`)).json()).groups.reduce((n: number, g: { count: number }) => n + g.count, 0), { timeout: 15_000 }).toBe(3);
+    // What the server stored: two reports and two submissions, none with an installation ID.
+    await expect.poll(async () => (await (await request.get(`/v1/crash-databases/${crashId}/groups`)).json()).groups.reduce((n: number, g: { count: number }) => n + g.count, 0), { timeout: 15_000 }).toBe(2);
     const groups = (await (await request.get(`/v1/crash-databases/${crashId}/groups`)).json()).groups as { id: string }[];
-    const reports = (await Promise.all(groups.map(async (group) => (await (await request.get(`/v1/crash-databases/${crashId}/groups/${group.id}/reports`)).json()).reports))).flat() as { installationId: string | null; envelope: Record<string, unknown> & { user?: { id: string }; sdk: { version: string } } }[];
-    expect(reports.map((report) => [report.envelope.user?.id, report.envelope.sdk.version, report.installationId, 'installationId' in report.envelope]).sort()).toEqual([
-      ['user-0.2.0 then config', '0.2.0', null, false],
-      ['user-config then 0.2.0', '0.2.0', null, false],
-      ['user-config then this build', '0.4.0', null, false],
+    const reports = (await Promise.all(groups.map(async (group) => (await (await request.get(`/v1/crash-databases/${crashId}/groups/${group.id}/reports`)).json()).reports))).flat() as { installationId: string | null; envelope: Record<string, unknown> & { user?: { id: string } } }[];
+    expect(reports.map((report) => [report.envelope.user?.id, report.installationId, 'installationId' in report.envelope]).sort()).toEqual([
+      ['user-config then crash', null, false],
+      ['user-crash then config', null, false],
     ]);
     for (const run of Object.values(runs)) {
       const filtered = await (await request.get(`/v1/crash-databases/${crashId}/groups?installationId=${run.installationId}`)).json();
       expect(filtered.groups).toEqual([]);
     }
     const listed = (await (await request.get(`/v1/feedback-databases/${feedbackId}/submissions`)).json()).submissions as { id: string }[];
-    expect(listed).toHaveLength(3);
+    expect(listed).toHaveLength(2);
     for (const submission of listed) {
       const detail = await (await request.get(`/v1/feedback-databases/${feedbackId}/submissions/${submission.id}`)).json();
       expect(detail.installationId).toBeNull();

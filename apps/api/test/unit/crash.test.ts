@@ -27,9 +27,14 @@ const base = {
 };
 
 describe('crashEnvelopeSchema (section 9.1, CR-011, CR-012)', () => {
-  it('accepts a minimal envelope and defaults the environment', () => {
-    const parsed = crashEnvelopeSchema.parse(base);
-    expect(parsed.environment).toBe('production');
+  it('accepts a minimal envelope', () => {
+    expect(crashEnvelopeSchema.parse(base)).toMatchObject({ eventId: base.eventId, kind: base.kind });
+  });
+
+  it('refuses an environment label: an environment is a project (Foundations section 17)', () => {
+    const result = crashEnvelopeSchema.safeParse({ ...base, environment: 'production' });
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error.issues[0]).toMatchObject({ code: 'unrecognized_keys', keys: ['environment'] });
   });
 
   it('rejects an unknown top-level field naming it', () => {

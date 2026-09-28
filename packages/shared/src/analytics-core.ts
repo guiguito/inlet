@@ -40,7 +40,6 @@ export const ANALYTICS_LIMITS = {
   runtimeNameMaxLength: 32,
   runtimeVersionMaxLength: 32,
   localeMaxLength: 35,
-  environmentMaxLength: 32,
   sdkNameMaxLength: 64,
   sdkVersionMaxLength: 32,
   /** AN-053: a description of an event name or a param key. */
@@ -225,7 +224,6 @@ export type AnalyticsEvent = {
   runtime?: { name?: string; version?: string };
   locale?: string;
   country?: string;
-  environment: string;
   ephemeral?: boolean;
   sdk: { name: string; version: string };
 };
@@ -239,7 +237,7 @@ export type EventValidation =
 /** The fields of section 9.1, and the fields of its nested objects. Anything else is `unknown_field`. */
 const TOP_FIELDS = new Set([
   'eventId', 'timestamp', 'name', 'category', 'installationId', 'userId', 'sessionId', 'attribution', 'experiments',
-  'params', 'app', 'platform', 'os', 'runtime', 'locale', 'country', 'environment', 'ephemeral', 'sdk',
+  'params', 'app', 'platform', 'os', 'runtime', 'locale', 'country', 'ephemeral', 'sdk',
 ]);
 const NESTED_FIELDS: Record<string, Set<string>> = {
   app: new Set(['version', 'build', 'id']),
@@ -251,7 +249,7 @@ const NESTED_FIELDS: Record<string, Set<string>> = {
 /** Section 9.1's optional fields, which a `null` leaves absent rather than refused. */
 const OPTIONAL_TOP_FIELDS = [
   'category', 'installationId', 'userId', 'sessionId', 'attribution', 'experiments', 'params', 'platform', 'os', 'runtime',
-  'locale', 'country', 'environment', 'ephemeral',
+  'locale', 'country', 'ephemeral',
 ];
 const OPTIONAL_NESTED_FIELDS: Record<string, string[]> = { app: ['build', 'id'], os: ['name', 'version'], runtime: ['name', 'version'] };
 
@@ -392,7 +390,7 @@ function accept(raw: unknown): EventValidation {
     throw invalid('name', 'name starts with a letter and has at most 64 letters, digits, "_", ".", ":" or "-".');
   }
 
-  const event: AnalyticsEvent = { eventId, timestamp, name, app: { version: '' }, platform: 'other', environment: 'production', sdk: { name: '', version: '' } };
+  const event: AnalyticsEvent = { eventId, timestamp, name, app: { version: '' }, platform: 'other', sdk: { name: '', version: '' } };
 
   if (has('category')) {
     const category = truncated(input.category, 'category', ANALYTICS_LIMITS.categoryMaxLength);
@@ -485,7 +483,6 @@ function accept(raw: unknown): EventValidation {
     if (typeof country !== 'string' || !COUNTRY_PATTERN.test(country)) throw invalid('country', 'country is an ISO 3166-1 alpha-2 code, like FR.');
     event.country = country.toUpperCase();
   }
-  if (has('environment')) event.environment = string(input.environment, 'environment', ANALYTICS_LIMITS.environmentMaxLength);
   if (has('ephemeral')) {
     if (typeof input.ephemeral !== 'boolean') throw invalid('ephemeral', 'ephemeral is a boolean.');
     event.ephemeral = input.ephemeral;
@@ -519,7 +516,7 @@ function accept(raw: unknown): EventValidation {
 
 /** AN-062: every field a filter may name. */
 export const ANALYTICS_FILTER_FIELDS = [
-  'platform', 'platformVersion', 'runtime', 'app', 'appVersion', 'environment', 'country', 'userId', 'installationId',
+  'platform', 'platformVersion', 'runtime', 'app', 'appVersion', 'country', 'userId', 'installationId',
   'attribution', 'installAttribution', 'category', 'installAgeDays', 'installAgeWeeks', 'installAgeMonths', 'experiment', 'param',
 ] as const;
 export type AnalyticsFilterField = (typeof ANALYTICS_FILTER_FIELDS)[number];
@@ -556,7 +553,7 @@ export type AnalyticsRange = { from: string; to: string } | { preset: AnalyticsR
 
 /** AN-063, AN-087: a split by a standard dimension, an experiment or a param. */
 export const ANALYTICS_SPLIT_FIELDS = [
-  'platform', 'platformVersion', 'runtime', 'app', 'appVersion', 'environment', 'country', 'attribution', 'installAttribution', 'experiment', 'param',
+  'platform', 'platformVersion', 'runtime', 'app', 'appVersion', 'country', 'attribution', 'installAttribution', 'experiment', 'param',
 ] as const;
 export type AnalyticsSplit = { field: (typeof ANALYTICS_SPLIT_FIELDS)[number]; key?: string };
 
@@ -599,7 +596,7 @@ export type AnalyticsCohortReturn = { kind: 'anyEvent' } | { kind: 'event'; even
 export type AnalyticsGranularity = 'day' | 'week' | 'month' | 'year';
 /** AN-101: population filters take standard dimensions and install attribution only. */
 export const ANALYTICS_POPULATION_FILTER_FIELDS = [
-  'platform', 'platformVersion', 'runtime', 'app', 'appVersion', 'environment', 'country', 'attribution', 'installAttribution', 'experiment',
+  'platform', 'platformVersion', 'runtime', 'app', 'appVersion', 'country', 'attribution', 'installAttribution', 'experiment',
 ] as const;
 /** AN-101. Without `defaultRange`, a run covers the last 12 periods of the granularity. */
 export type AnalyticsCohortDefinition = {

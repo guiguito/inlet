@@ -104,7 +104,7 @@ async function store(h: Harness, db: Db, events: Ev[]) {
   }
 }
 
-const query = (overrides: Partial<OverviewQuery> = {}): OverviewQuery => ({ range: { preset: 'last30Days' }, apps: [], platforms: [], environments: [], unit: 'installation', ...overrides });
+const query = (overrides: Partial<OverviewQuery> = {}): OverviewQuery => ({ range: { preset: 'last30Days' }, apps: [], platforms: [], unit: 'installation', ...overrides });
 async function overviewAt(h: Harness, db: Db, overrides: Partial<OverviewQuery> = {}, nowMs = NOW): Promise<OverviewAnswer> {
   return runOverview(h.ctx, await row(h, db), ADMIN, query(overrides), nowMs);
 }
@@ -119,7 +119,6 @@ const I = {
   i3: '0192f5a0-0000-7000-8000-000000000003',
   i4: '0192f5a0-0000-7000-8000-000000000004',
   i5: '0192f5a0-0000-7000-8000-000000000005',
-  i6: '0192f5a0-0000-7000-8000-000000000006',
 };
 
 describe('the Overview', () => {
@@ -156,7 +155,6 @@ describe('the Overview', () => {
         started(at(1, 13), I.i3, sessions.s2, { platform: 'android', params: { trigger: 'launch', crashReporting: false } }),
         // Today, before the last hour, in the hour before it, and within it.
         event(at(0, 10, 30), { installationId: I.i3, platform: 'android' }),
-        event(at(0, 11, 20), { installationId: I.i6, environment: 'development', app: { version: '2.0.0' } }),
         event(at(0, 11, 30), { installationId: I.i2, userId: 'u1', platform: 'web', app: { version: '1.5.0' } }),
         // A server installation (a user ID alone, from a backend) and the test installation count nowhere.
         event(at(0, 11, 40), { installationId: undefined, userId: 'backend-user', platform: 'server' }),
@@ -191,7 +189,7 @@ describe('the Overview', () => {
 
     it('counts new installations by install day and dimensions, and sessions from app_started (AN-043, AN-047)', async () => {
       const f = (await overviewAt(h, db)).figures;
-      // i2, i3 and i4 installed yesterday; i1 35 days ago; i6 is in development; i5 never qualified.
+      // i2, i3 and i4 installed yesterday; i1 35 days ago; i5 never qualified.
       expect(f.newInstallations).toMatchObject({ value: 3, previous: 1, covered: { from: day(29), to: TODAY } });
       expect(f.newInstallations.perDay).toHaveLength(30);
       expect(f.newInstallations.perDay.find((entry) => entry.day === day(1))!.value).toBe(3);
@@ -237,7 +235,7 @@ describe('the Overview', () => {
 
     it('marks the day each version was first seen, and states crash-free sessions per version (AN-142, AN-152)', async () => {
       const answer = await overviewAt(h, db);
-      // 1.0.0 and 1.3.0 were first seen before the range; 2.0.0 only in development; 9.9.9 only on a background event.
+      // 1.0.0 and 1.3.0 were first seen before the range; 9.9.9 only on a background event.
       expect(answer.versionsFirstSeen).toEqual([
         { version: '1.4.0', day: day(1) },
         { version: '1.5.0', day: day(1) },
@@ -249,14 +247,7 @@ describe('the Overview', () => {
       ]);
     });
 
-    it('leaves development out by default and counts it when the filters say so; filters by app and platform (AN-140)', async () => {
-      const dev = await overviewAt(h, db, { environments: ['development'] });
-      expect(dev.figures.activeLastHour.value).toBe(1);
-      expect(dev.figures.dailyActiveToday.value).toBe(1);
-      expect(dev.figures.newInstallations.value).toBe(1);
-      expect(dev.versionsFirstSeen).toEqual([{ version: '2.0.0', day: TODAY }]);
-      const both = await overviewAt(h, db, { environments: ['production', 'development'] });
-      expect(both.figures.dailyActiveToday.value).toBe(4);
+    it('filters by app and platform (AN-140)', async () => {
       const web = await overviewAt(h, db, { platforms: ['web'] });
       expect(web.figures.dailyActiveLastDay.value).toBe(1);
       expect(web.figures.sessions.value).toBe(1);
@@ -295,7 +286,7 @@ describe('the Overview', () => {
     it('reads the active figures from a rollup, not the events (DECISIONS 33.1, 33.5)', async () => {
       const database = await row(h, db);
       const p = new SqlParams();
-      const sql = activeRows({ databaseKey: database.key, skip: await readSkip(h.ctx, database.key) }, overviewFilters({ apps: ['com.a'], platforms: ['ios'], environments: [] }), p, day(59), TODAY);
+      const sql = activeRows({ databaseKey: database.key, skip: await readSkip(h.ctx, database.key) }, overviewFilters({ apps: ['com.a'], platforms: ['ios'] }), p, day(59), TODAY);
       // PROJECTION_NOT_USED if the optimizer would read the events.
       await h.ctx.eventStore!.query(`SELECT count() FROM (${sql})`, p.values, { force_optimize_projection: 1 } as never);
       const plan = await h.ctx.eventStore!.query<{ explain: string }>(`EXPLAIN SELECT count() FROM (${sql})`, p.values);
@@ -319,11 +310,11 @@ describe('the Overview', () => {
     });
 
     it('answers through the route and holds one slot for the whole answer (AN-205)', async () => {
-      const response = await overviewRoute(h, db, '?unit=user&environment=production&environment=development');
+      const response = await overviewRoute(h, db, '?unit=user&platform=ios&platform=web');
       expect(response.statusCode, response.body).toBe(200);
       const answer = response.json() as OverviewAnswer;
       expect(answer.unit).toBe('user');
-      expect(answer.filters).toEqual({ apps: [], platforms: [], environments: ['production', 'development'] });
+      expect(answer.filters).toEqual({ apps: [], platforms: ['ios', 'web'] });
       expect(querySlots.inUse).toBe(0);
       // A secret key reads it; a publishable key does not.
       expect((await withKey(h.app, db.secret.secret, 'GET', `/v1/analytics-databases/${db.id}/overview`)).statusCode).toBe(200);
@@ -453,7 +444,7 @@ describe('the Overview', () => {
         started(at(10, 9), members[1]!, uuid()), // D30 for m1
         // Installed 5 days ago: day 1 has ended, day 7 has not.
         started(at(5, 9), members[2]!, uuid()),
-        started(at(4, 9), members[2]!, uuid(), { environment: 'development' }), // returns in any environment (AN-103)
+        started(at(4, 9), members[2]!, uuid(), { platform: 'web' }), // returns on any platform (AN-103)
         // Installed yesterday: its first day ends tonight.
         started(at(1, 9), members[3]!, uuid()),
         started(at(0, 9), members[3]!, uuid()),
@@ -604,7 +595,7 @@ describe('the Overview', () => {
       const database = await row(h, await setup(h));
       return {
         scope: { databaseKey: database.key, skip: await readSkip(h.ctx, database.key) },
-        filters: overviewFilters({ apps: [], platforms: [], environments: [] }),
+        filters: overviewFilters({ apps: [], platforms: [] }),
         unit: 'installation' as const,
         timezone: 'UTC',
         range: { from: day(29), to: TODAY },

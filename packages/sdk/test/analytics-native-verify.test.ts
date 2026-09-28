@@ -147,7 +147,7 @@ describe('the Electron IPC trust boundary, probed (AN-238, CR-111)', () => {
       expect(event.params).not.toHaveProperty('nan');
       expect(event.timestamp).toBe(new Date(clock - 5_000).toISOString());
       expect(event.eventId).not.toBe('0190a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b');
-      expect(event.environment).toBe('production');
+      expect(event).not.toHaveProperty('environment');
       expect(event.ephemeral).toBeUndefined();
       expect(event.sdk).toEqual({ name: 'inlet-sdk', version: expect.any(String) });
       expect(event.experiments).toBeUndefined();

@@ -113,17 +113,12 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
     async (v1) => {
       v1.get('/health', { schema: { hide: true } }, async () => {
         await ctx.db.execute('select 1');
-        // FD-013: what this server can do, so an SDK can tell an old deployment from a
-        // reachable one before it queues reports the server would refuse.
-        // 'mcp' announces the Streamable HTTP endpoint at /v1/mcp (FR-126), so a client
-        // can tell a deployment that serves MCP from one that only ships the binary.
-        // 'identity' says this deployment accepts the SDK identity fields of FD-016 on crash
-        // reports and submissions; an SDK leaves them out for a deployment that does not.
-        // 'analytics' once the event store has been ready since start (FD-015, UX Analytics
-        // 9.4), and still through a later outage: failing or shrinking the probe then would
-        // restart the container, or make an SDK think the deployment lost the capability.
+        // FD-013: what this deployment serves. 'mcp' announces the Streamable HTTP endpoint at
+        // /v1/mcp (FR-126). 'analytics' once the event store has been ready since start (FD-015,
+        // UX Analytics 9.4), and still through a later outage: failing or shrinking the probe then
+        // would restart the container, or make an SDK think the deployment lost the capability.
         // 'config' unconditionally: Remote Config needs no optional service (RC-049, FD-009).
-        const capabilities = ['feedback', 'crash', CROSS_ORIGIN_FEEDBACK, 'mcp', 'identity', 'config'];
+        const capabilities = ['feedback', 'crash', 'mcp', 'config'];
         if (ctx.eventStore?.readySinceStart) capabilities.push('analytics');
         return { status: 'ok', capabilities };
       });
@@ -263,8 +258,6 @@ async function registerDocs(app: FastifyInstance, ctx: AppContext): Promise<void
  * `/v1/feedback-databases/{id}/submissions` — the route that returns collected responses
  * — stays shut while `/v1/feedback-databases/{id}/form` opens.
  */
-const CROSS_ORIGIN_FEEDBACK = 'feedback-cross-origin';
-
 const CROSS_ORIGIN_COLLECTION = new RegExp(
   [
     '^/v1/(',

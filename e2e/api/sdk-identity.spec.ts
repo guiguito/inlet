@@ -96,7 +96,7 @@ test('one session and one user across a crash report and a submission, stored an
   }
 });
 
-test('identity: false sends the 0.1.5 fields and no identity at all', async ({ request }) => {
+test('identity: false sends no session or installation ID', async ({ request }) => {
   const f = await fixture(request, `No identity ${Date.now()}`);
   const crash = crashNode.init({ baseUrl: E2E.baseUrl, publishableKey: f.key, crashDatabaseId: f.crashDatabaseId, release: '5.0.0', identity: false });
   const feedback = feedbackNode.init({ baseUrl: E2E.baseUrl, publishableKey: f.key, feedbackDatabaseId: f.feedbackDatabaseId, identity: false });
