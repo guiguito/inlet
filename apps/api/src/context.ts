@@ -22,4 +22,10 @@ export type AppContext = {
   storage: Storage;
   scanner: MalwareScanner;
   log: FastifyBaseLogger;
+  /**
+   * The clock the analytics query routes read "now" from, which decides presets, the period
+   * under way and incomplete cells. `Date.now` in production; a test replaces it to answer as of
+   * a fixed day, as the query services already accept one.
+   */
+  now: () => number;
 };

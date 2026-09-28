@@ -146,7 +146,7 @@ export function analyticsEventRoutes(ctx: AppContext): FastifyPluginAsyncZod {
       async (request, reply) => {
         const principal = await requireManagementPrincipal(ctx, request);
         const { database } = await requireAnalyticsDatabase(ctx.db, principal, request.params.databaseId, 'viewer');
-        return eventDetail(ctx, database, principal, request.params.name, Date.now(), clientGoneSignal(reply));
+        return eventDetail(ctx, database, principal, request.params.name, ctx.now(), clientGoneSignal(reply));
       },
     );
 
@@ -256,7 +256,7 @@ export function analyticsEventRoutes(ctx: AppContext): FastifyPluginAsyncZod {
         const principal = await requireManagementPrincipal(ctx, request);
         const { database } = await requireAnalyticsDatabase(ctx.db, principal, request.params.databaseId, 'viewer');
         const { dimension, key, param, event } = request.query;
-        return filterValues(ctx, database, principal, dimension !== undefined ? { dimension, ...(key !== undefined ? { key } : {}) } : { param: param!, event: event! }, Date.now(), clientGoneSignal(reply));
+        return filterValues(ctx, database, principal, dimension !== undefined ? { dimension, ...(key !== undefined ? { key } : {}) } : { param: param!, event: event! }, ctx.now(), clientGoneSignal(reply));
       },
     );
 
@@ -288,7 +288,7 @@ export function analyticsEventRoutes(ctx: AppContext): FastifyPluginAsyncZod {
           throw parsed.success ? apiError('invalid_query', request.validationError.message) : invalidQuery(parsed.error.issues);
         }
         requireEventStore(ctx.eventStore);
-        const answer = await runTrend(ctx, database, principal, request.body, Date.now(), clientGoneSignal(reply));
+        const answer = await runTrend(ctx, database, principal, request.body, ctx.now(), clientGoneSignal(reply));
         const format = request.query.format;
         if (format === undefined) return answer;
         const base = `inlet-${database.id}-trend-${new Date().toISOString().slice(0, 10)}`;

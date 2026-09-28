@@ -290,7 +290,7 @@ export function analyticsFunnelRoutes(ctx: AppContext): FastifyPluginAsyncZod {
         const { database } = await requireAnalyticsDatabase(ctx.db, principal, request.params.databaseId, 'viewer');
         const run = parsed(analyticsFunnelRunSchema, request.body, request.validationError);
         requireEventStore(ctx.eventStore);
-        const answer = await runFunnel(ctx, database, principal, run, Date.now(), clientGoneSignal(reply));
+        const answer = await runFunnel(ctx, database, principal, run, ctx.now(), clientGoneSignal(reply));
         const format = request.query.format;
         if (format === undefined) return answer;
         const base = `inlet-${database.id}-funnel-${new Date().toISOString().slice(0, 10)}`;
