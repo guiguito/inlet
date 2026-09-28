@@ -526,7 +526,8 @@ describe('preview (RC-060)', () => {
 });
 
 describe('the cost of a fetch\'s evaluation (section 9.4)', () => {
-  it('measures evaluate at 100 conditions with percentage rules (logged, not asserted)', () => {
+  // 20,000 evaluations: seconds plain, over 30 under coverage instrumentation (npm run test:coverage).
+  it('measures evaluate at 100 conditions with percentage rules (logged, not asserted)', { timeout: 120_000 }, () => {
     const conditions = Array.from({ length: 100 }, (_, index) => match(`cnd_${index}`, [
       { attribute: 'platform', operator: 'in', value: ['ios', 'android'] },
       { attribute: 'appVersion', operator: 'versionGte', value: '1.0.0' },
